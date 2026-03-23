@@ -34,7 +34,7 @@ Voice Type is available as a Flatpak for maximum compatibility across all Linux 
 Publishing to flathub is on the way. for now, clone the repo and build the flatpak manually.
 
 ```bash
-git clone https://E-nkv/voice-type
+git clone https://github.com/E-nkv/voice-type.git
 cd voice-type
 chmod +x ./flatpak/build.sh && ./flatpak/build.sh
 ```

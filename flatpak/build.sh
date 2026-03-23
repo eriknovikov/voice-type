@@ -12,7 +12,7 @@ if ! command -v flatpak &> /dev/null; then
 fi
 
 if ! command -v flatpak-builder &> /dev/null; then
-    echo "Error: flatpak-builder is not installed."
+    echo "Error: flatpak-builder is not installed. Please install it using your distro's package manager"
     exit 1
 fi
 
