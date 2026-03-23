@@ -11,3 +11,4 @@ flatpak/build/
 flatpak/repo/
 flatpak/*.flatpak
 flatpak/*.flatpak.ref
+.flatpak-builder

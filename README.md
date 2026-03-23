@@ -1,106 +1,135 @@
-# Voice Type
+# What's Voice Type?
 
-System-wide Speech-to-Text for Linux. Press a key, speak, done — text lands wherever you're focused. Free, fast, private.
+A system-wide Speech-to-Text for Linux. Press a key, speak, done — text lands wherever you're focused. Totally free, with unmatched speed and accuracy.
 
 **How it works:** Chrome runs quietly in the background using its built-in Web Speech API. No local models, no paid services, no startup lag.
 
+# Features
+
+- **Instant Dictation**: Press a hotkey and start speaking. Text appears in real-time in whatever window you have focused in the system.
+- **Auto-Correction**: If the AI corrects a word mid-sentence, it automatically backspaces and types the corrected version.
+- **System-Wide**: Works in any application - text editors, browsers, terminals, messaging apps, etc.
+- **Visual & Audio Feedback**: Get instant confirmation when listening starts, stops, or if there's an error.
+- **Zero Latency**: Browser runs persistently in the background - no startup delay when you press the hotkey.
+- **Totally free**: Uses Chrome's built-in Web Speech API - so no paid services required.
+- **No local models required**: The browser Web Speech API handles the transcription process entirely, so there's no need to install and setup models locally (like vosk or whisper).
+
 ---
 
-## Install
+# Installation
 
-### Flatpak (Recommended)
+## Prerequisites
 
-Requires `flatpak-builder` on your system. The build script installs the required SDKs automatically.
+Before installing Voice Type, make sure you have:
+
+- **Linux** - any distribution
+- **A desktop environment** - GNOME preferred, but any DE works
+- **Google Chrome** - required for the Web Speech API
+- **A working microphone**
+
+## Via Flatpak (Universal Compatibility)
+
+Voice Type is available as a Flatpak for maximum compatibility across all Linux distributions and Desktop Environments. Due to the self-contained and isolated nature of flatpaks, it is the most compatible and easiest installation method, so no need to manually install system dependencies like dotool !
+
+THIS DOESNT WORK FOR NOW, GOTTA PUBLISH FIRST!
 
 ```bash
-git clone https://github.com/E-nkv/voice-type.git
-cd voice-type
-chmod +x ./flatpak/build.sh && ./flatpak/build.sh
+flatpak install flathub.voice-type.VoiceType
 ```
 
-### Binary
+---
 
-Requires: **Google Chrome**, **dotool**, **libnotify**, **pulseaudio-utils**
+## Via npm
+
+THIS DOESNT WORK FOR NOW, GOTTA PUBLISH FIRST!
+
+```bash
+npm install --global voice-type@latest
+```
+
+## Binary Installation
+
+The script takes care of downloading and setting up everything for you, and will let you know which system dependencies are missing, including installation instructions for these deps depending on your distro.
 
 ```bash
 curl -fsSL https://github.com/E-nkv/voice-type/releases/latest/download/install.sh | bash
 ```
 
----
+### Required System Dependencies
 
-## Usage
+Whether you use the binary directly or via npm, VoiceType requires `google-chrome-stable`, `dotool`, and `paplay` installed in the system. Their installations depend on your distro, so install them manually.
 
-Start the daemon once — it runs in the background and logs to the console.
-
-```bash
-flatpak run org.voice_type.VoiceType &  # Flatpak
-voice-type &                             # Binary
-```
-
-Click into any text field, then use F9/F10 (or your bound shortcuts) to start and stop dictation.
-
-```bash
-curl http://127.0.0.1:3232/start  # start listening
-curl http://127.0.0.1:3232/stop   # stop listening
-```
-
-Force kill if needed:
-
-```bash
-sh -c "flatpak kill org.voice_type.VoiceType 2>/dev/null; rm -rf /tmp/voice-type-browser"  # Flatpak
-sh -c "pkill -f voice-type 2>/dev/null; rm -rf /tmp/voice-type-browser"                     # Binary
-```
+**Note about dotool:** On some distributions, `dotool` is available in community or third-party repositories (COPR for Fedora, AUR for Arch, etc.). If not available in your distro's repos (like Ubuntu-Debian), you'll need to build it from source. See [dotool source](https://sr.ht/~geb/dotool/) for instructions. If this sounds like too much of a hassle, just use the flatpak.
 
 ---
 
-## Keyboard Shortcuts
-
-Bind in your system settings: **F7** launch/restart, **F8** force close, **F9** start dictation, **F10** stop.
-
-```bash
-# F7 — launch or restart clean (Flatpak)
-sh -c "flatpak kill org.voice_type.VoiceType 2>/dev/null; rm -rf /tmp/voice-type-browser; flatpak run org.voice_type.VoiceType"
-
-# F7 — launch or restart clean (Binary)
-sh -c "pkill -f voice-type 2>/dev/null; rm -rf /tmp/voice-type-browser; sleep 1; voice-type"
-
-# F8 — force close (Flatpak)
-sh -c "flatpak kill org.voice_type.VoiceType 2>/dev/null; rm -rf /tmp/voice-type-browser"
-
-# F8 — force close (Binary)
-sh -c "pkill -f voice-type 2>/dev/null; rm -rf /tmp/voice-type-browser"
-
-curl http://127.0.0.1:3232/start  # F9 — start dictation
-curl http://127.0.0.1:3232/stop   # F10 — stop dictation
-```
-
----
-
-## Uninstall
+## Uninstalling
 
 ### Flatpak
 
-```bash
-flatpak uninstall --user org.voice_type.VoiceType
-rm -rf ~/.var/app/org.voice_type.VoiceType .flatpak-builder flatpak/build flatpak/repo
+MISSING DOC FOR NOW
 
-# Optional — remove SDKs pulled in by Voice Type (flatpak will clean up dependencies)
-flatpak uninstall --user org.electronjs.Electron2.BaseApp//24.08 org.freedesktop.Sdk.Extension.golang//24.08
-```
+### npm
+
+MISSING DOC FOR NOW
 
 ### Binary
 
 ```bash
-sudo rm /usr/local/bin/voice-type
-sudo rm -rf /usr/local/share/voice-type
+sudo rm -rf /usr/local/share/voice-type /usr/local/bin/voice-type
 ```
 
----
+## Troubleshooting
 
-## Development
+**Problem:** `dotool: command not found`
+
+- **Solution:** Install dotool using your package manager (see above)
+
+**Problem:** `voice-type: command not found`
+
+- **Solution:** Make sure `/usr/local/bin` is in your PATH. Add this to your `~/.bashrc` or `~/.zshrc`:
+    ```bash
+    export PATH="$PATH:/usr/local/bin"
+    ```
+
+**Problem:** Microphone not detected
+
+- **Solution:** Check your system audio settings and ensure your microphone is properly connected
+
+**Problem:** Chrome not found
+
+- **Solution:** Install Google Chrome (not Chromium). Voice Type requires Chrome for the Web Speech API. `google-chrome-stable`.
+
+# Usage
+
+## Set up Keyboard Shortcuts
+
+Voice Type uses HTTP endpoints to control dictation. You'll need to bind these to keyboard shortcuts for easy access.
+
+| Key | Action          | Command                            |
+| --- | --------------- | ---------------------------------- |
+| F9  | Start dictation | `curl http://127.0.0.1:3232/start` |
+| F10 | Stop dictation  | `curl http://127.0.0.1:3232/stop`  |
+
+If you use GNOME, go to Settings -> Keyboard -> View and Customize Shortucts -> Custom Shortcuts. Else, check manually how to set up keyboard shortcuts in your Desktop Environment.
+
+Then, run the daemon, depending on how you installed it.
 
 ```bash
-bun install && bun run ./src/index.ts
+#flatpak
+FLATPAK_COMAMND
+
+#npm
+NPM_COMMAND
+
+#binary
+BINARY_COMAND
 ```
 
-Contributions welcome — bugs, docs, features, PRs, all good.
+To see all the different options, pass --help to the command. You can customize the language, whether to use sounds and text notifications for when the daemon or mic starts / stops, and whether to run wraith-type in dettached mode.
+
+After starting the daemon, move your cursor to any textbox within your system where you want to VoiceType into. then hit F9, speak whatever you wish, and text results will be inserted in real time. to stop listening, press F10.
+
+## Contributing
+
+Voice Type is totally free and open source, and you can contribute in many ways! Feel free to report/fix a bug or issue, improve documentation, and suggest or add a new feature.
