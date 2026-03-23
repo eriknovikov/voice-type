@@ -3,7 +3,31 @@ import { parseArgs, type ParseArgsOptionsConfig } from "node:util"
 import { WORKING_WSA_LANGUAGES } from "./constants.js"
 import type { CliFlags } from "./types.js"
 
-process.title = "voice-type"
+const options = {
+    "no-sound": {
+        type: "boolean",
+        default: false,
+    },
+    "no-text": {
+        type: "boolean",
+        default: false,
+    },
+    lang: {
+        type: "string",
+        default: "en-US",
+        short: "l",
+    },
+    detached: {
+        type: "boolean",
+        short: "d",
+        default: false,
+    },
+    help: {
+        type: "boolean",
+        short: "h",
+        default: false,
+    },
+} as const
 
 const HELP_TEXT = `
 VOICE TYPE - Real-Time Dictation Daemon
@@ -27,70 +51,16 @@ function isValidLanguage(lang: string): boolean {
     return Object.values(WORKING_WSA_LANGUAGES).includes(lang as any)
 }
 
-function parseFlags(): CliFlags {
-    // Check for --no-text and --no-sound flags manually
-    const args = process.argv.slice(2)
-    const hasNoText = args.includes("--no-text")
-    const hasNoSound = args.includes("--no-sound")
-
-    // Filter out --no-text and --no-sound from args before parsing
-    const filteredArgs = args.filter((arg) => arg !== "--no-text" && arg !== "--no-sound")
-
-    const options = {
-        lang: {
-            type: "string",
-            default: "en-US", // Default language
-            short: "l",
-        },
-        detached: {
-            type: "boolean",
-            short: "d",
-            default: false,
-        },
-        help: {
-            type: "boolean",
-            short: "h",
-            default: false,
-        },
-    }
-
-    // Parse the arguments
-    const { values } = parseArgs({
-        args: filteredArgs,
-        options: options as ParseArgsOptionsConfig,
-        strict: true, // Throws an error if the user passes an unknown flag
-    })
-
-    // Validate language
-    const lang = values.lang as string
-    if (!isValidLanguage(lang)) {
-        console.error(`Error: Invalid language '${lang}'`)
-        console.error(`Supported languages: ${Object.values(WORKING_WSA_LANGUAGES).join(", ")}`)
-        process.exit(1)
-    }
-
-    return {
-        lang: lang as any,
-        textNotifs: !hasNoText,
-        soundNotifs: !hasNoSound,
-        detached: values.detached as boolean,
-        help: values.help as boolean,
-    }
+function pruneFlags(flags: string[]) {
+    return flags.filter((flag) => flag !== "--detached" && flag !== "-d")
 }
 
-export const flags = parseFlags()
-
-if (flags.help) {
-    console.log(HELP_TEXT)
-    process.exit(0)
-}
-
-// Handle Detached Mode (Daemonization)
-if (flags.detached) {
-    const childArgs = process.argv.slice(1).filter((arg) => arg !== "--detached" && arg !== "-d")
-
+export function respawnDetached(args: string[]) {
     // Spawn the exact same binary, but detached from the current terminal
-    const child = spawn(process.argv[0], childArgs, {
+
+    const bin = args[0]
+    const prunedFlags = pruneFlags(args.slice(2))
+    const child = spawn(bin, [args[1], ...prunedFlags], {
         detached: true,
         stdio: "ignore", // Disconnect standard I/O so the terminal can be closed
     })
@@ -98,6 +68,33 @@ if (flags.detached) {
     // Unreference the child so the parent process can exit immediately
     child.unref()
 
-    console.log(`Voice Type daemon started in detached mode. PID: ${child.pid}`)
-    process.exit(0)
+    console.log(`Voice Type daemon started in detached mode with PID: ${child.pid}`)
+    console.log(`you can stop it via "kill ${child.pid}"`)
+}
+export function parseFlags(args: string[]): CliFlags {
+    const { values } = parseArgs({
+        args,
+        options,
+        strict: true,
+        allowPositionals: false,
+    })
+
+    const lang = values.lang
+    if (!isValidLanguage(lang)) {
+        console.error(`Error: Invalid language '${lang}'`)
+        console.error(`Supported languages: ${Object.values(WORKING_WSA_LANGUAGES).join(", ")}`)
+        process.exit(1)
+    }
+
+    return {
+        lang,
+        textNotifs: !values["no-text"],
+        soundNotifs: !values["no-sound"],
+        detached: values.detached,
+        help: values.help,
+    }
+}
+
+export function showHelp() {
+    console.log(HELP_TEXT)
 }

@@ -31,17 +31,19 @@ Before installing Voice Type, make sure you have:
 
 Voice Type is available as a Flatpak for maximum compatibility across all Linux distributions and Desktop Environments. Due to the self-contained and isolated nature of flatpaks, it is the most compatible and easiest installation method, so no need to manually install system dependencies like dotool !
 
-THIS DOESNT WORK FOR NOW, GOTTA PUBLISH FIRST!
+Publishing to flathub is on the way. for now, clone the repo and build the flatpak manually.
 
 ```bash
-flatpak install flathub.voice-type.VoiceType
+git clone https://E-nkv/voice-type
+cd voice-type
+chmod +x ./flatpak/build.sh && ./flatpak/build.sh
 ```
 
 ---
 
 ## Via npm
 
-THIS DOESNT WORK FOR NOW, GOTTA PUBLISH FIRST!
+THIS DOESNT WORK FOR NOW, GOTTA PUBLISH FIRST TO NPM!
 
 ```bash
 npm install --global voice-type@latest
@@ -117,18 +119,20 @@ Then, run the daemon, depending on how you installed it.
 
 ```bash
 #flatpak
-FLATPAK_COMAMND
+flatpak run org.voice_type.VoiceType
 
 #npm
 NPM_COMMAND
 
 #binary
-BINARY_COMAND
+voice-type
 ```
 
-To see all the different options, pass --help to the command. You can customize the language, whether to use sounds and text notifications for when the daemon or mic starts / stops, and whether to run wraith-type in dettached mode.
+To see all the different options, pass --help or -h to the command. You can customize the language, whether to disable sounds and text notifications for when the daemon or mic starts / stops, and whether to run wraith-type in dettached mode.
 
 After starting the daemon, move your cursor to any textbox within your system where you want to VoiceType into. then hit F9, speak whatever you wish, and text results will be inserted in real time. to stop listening, press F10.
+
+You might also find useful to have keyboard shortcuts for starting or stopping the daemon, but these are optional and totally up to you.
 
 ## Contributing
 

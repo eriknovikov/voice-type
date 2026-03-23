@@ -21,8 +21,6 @@ const SOUNDS = {
     ERROR: join(getSoundsDir(), "stop.oga"),
 }
 
-console.log("[SoundNotifier] Sounds directory:", getSoundsDir())
-
 /**
  * Handles sound notifications via paplay
  */
