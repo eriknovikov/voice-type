@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Voice Type
+Comment=System-wide Speech To Text for Linux
+Exec=voice-type
+Icon=org.voice_type.VoiceType
+Type=Application
+Categories=Utility;Accessibility;
+Keywords=speech;dictation;voice;stt;
+Terminal=true
+StartupNotify=false

@@ -5,3 +5,9 @@ plans
 voice-type
 TODO.md
 releases
+
+# Flatpak build artifacts
+flatpak/build/
+flatpak/repo/
+flatpak/*.flatpak
+flatpak/*.flatpak.ref
