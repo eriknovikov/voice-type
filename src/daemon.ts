@@ -4,7 +4,6 @@ import TypingController from "./typingController.js"
 import { log } from "./logger.js"
 import express, { type Express } from "express"
 import Notifier from "./notifier.js"
-import { sleep } from "bun"
 
 export default class Daemon {
     private wsaLanguage: string = "en-US"
@@ -58,7 +57,6 @@ export default class Daemon {
             await this.notifier.notifyDaemonStop()
             res.send("Stopped daemon")
             await this.destroy()
-            await sleep(100)
             process.exit(0)
         })
     }
