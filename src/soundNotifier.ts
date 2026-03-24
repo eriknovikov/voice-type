@@ -4,14 +4,20 @@ import { join } from "path"
 // Get the sounds directory
 function getSoundsDir(): string {
     const execPath = process.execPath
-    const isDevMode = execPath.endsWith("bun") || execPath.endsWith("node")
 
+    // Flatpak detection
+    if (process.env.FLATPAK_ID === "org.voice_type.VoiceType") {
+        return "/app/share/sounds/voice-type"
+    }
+
+    // Development mode detection
+    const isDevMode = execPath.endsWith("bun") || execPath.endsWith("node")
     if (isDevMode) {
-        // In development, use local assets
+        //use local assets
         return join(process.cwd(), "assets/sounds")
     }
 
-    // In production, use system-wide assets
+    // use system-wide assets
     return "/usr/local/share/voice-type/sounds"
 }
 

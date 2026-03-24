@@ -73,7 +73,6 @@
                 ]
             },
             "build-commands": [
-                "sed -i 's|/usr/local/share/voice-type/sounds|/app/share/sounds/voice-type|g' src/soundNotifier.ts",
                 "sed -i 's|/usr/bin/google-chrome-stable|/app/bin/host-chrome|g' src/daemon.ts",
                 "bun install",
                 "bun build src/index.ts --compile --outfile /app/bin/voice-type-bin",

@@ -2,6 +2,23 @@
     "name": "voice-type",
     "version": "1.0.0",
     "main": "src/index.ts",
+    "os": [
+        "linux"
+    ],
+    "bin": {
+        "voice-type": "bin/voice-type"
+    },
+    "files": [
+        "bin/voice-type",
+        "assets"
+    ],
+    "scripts": {
+        "dev": "bun --watch src/index.ts",
+        "start": "bun run src/index.ts",
+        "build": "bun build src/index.ts --outdir dist --target node",
+        "compile": "bun build src/index.ts --compile --outfile bin/voice-type",
+        "prepublishOnly": "bun run compile"
+    },
     "dependencies": {
         "bun": "^1.3.11",
         "dbus-next": "^0.10.2",
@@ -10,12 +27,6 @@
         "x11": "^2.3.0"
     },
     "description": "system-wide Speech To Text (STT)",
-    "scripts": {
-        "dev": "bun --watch src/index.ts",
-        "start": "bun run src/index.ts",
-        "build": "bun build src/index.ts --outdir dist --target node",
-        "compile": "bun build src/index.ts --compile --outfile transcribe-binary"
-    },
     "type": "module",
     "devDependencies": {
         "@types/express": "^5.0.6",

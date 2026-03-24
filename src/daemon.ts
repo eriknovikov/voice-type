@@ -6,7 +6,7 @@ import express, { type Express } from "express"
 import Notifier from "./notifier.js"
 
 export default class Daemon {
-    private wsaLanguage: string = "en-US"
+    private wsaLanguage: string
     private browser: Browser | null = null
     private page: Page | null = null
     private isWSAListening: boolean = false
@@ -15,13 +15,12 @@ export default class Daemon {
     private typingController: TypingController = new TypingController()
     private notifier: Notifier
     private stopCooldown: boolean = false
-    private stopCooldownTimeout: NodeJS.Timeout | null = null
 
     constructor(textNotifsEnabled: boolean, soundsNotifsEnabled: boolean, wsaLanguage?: string) {
         this.app = express()
         this.setupRoutes()
         this.notifier = new Notifier({ textNotifsEnabled, soundsNotifsEnabled })
-        if (wsaLanguage !== undefined) this.wsaLanguage = wsaLanguage
+        this.wsaLanguage = wsaLanguage || "en-US"
     }
 
     private setupRoutes() {
@@ -86,12 +85,8 @@ export default class Daemon {
             this.notifier.notifyOffline()
         }
 
-        // Set cooldown to prevent rapid successive stop requests
         this.stopCooldown = true
-        if (this.stopCooldownTimeout) {
-            clearTimeout(this.stopCooldownTimeout)
-        }
-        this.stopCooldownTimeout = setTimeout(() => {
+        setTimeout(() => {
             this.stopCooldown = false
         }, 100)
 
@@ -168,7 +163,6 @@ export default class Daemon {
         console.log("\n[DAEMON] Shutting down daemon...")
         this.notifier.destroy()
         this.typingController.destroy()
-        clearTimeout(this.stopCooldownTimeout ?? undefined)
 
         await this.page?.close()
         await this.browser?.close()
