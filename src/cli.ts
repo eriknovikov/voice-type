@@ -42,10 +42,15 @@ Options:
   -d, --detached           Run the daemon in the background (detached mode)
   -h, --help               Show this help message
 
-Supported Languages:
-  English: en-US, en-GB, en-AU, en-CA, en-IN
-  Spanish: es-ES, es-MX, es-AR, es-CO
+Supported Languages (most common):
+  English: en-US
+  Spanish: es-ES
   Russian: ru-RU
+  Chinese: zh-CN
+  French: fr-FR
+
+To see the exhaustive list of languages, visit:
+  https://github.com/E-nkv/voice-type/tree/master/src/constants.ts
 `
 
 function isValidLanguage(lang: string): boolean {
