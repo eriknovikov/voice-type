@@ -1,6 +1,6 @@
 import { spawn } from "child_process"
 import { parseArgs, type ParseArgsOptionsConfig } from "node:util"
-import { WORKING_WSA_LANGUAGES } from "./constants.js"
+import { WSA_LANGUAGES } from "./constants.js"
 import type { CliFlags } from "./types.js"
 
 const options = {
@@ -49,7 +49,7 @@ Supported Languages:
 `
 
 function isValidLanguage(lang: string): boolean {
-    return Object.values(WORKING_WSA_LANGUAGES).includes(lang as any)
+    return Object.values(WSA_LANGUAGES).includes(lang as any)
 }
 
 function pruneFlags(flags: string[]) {
@@ -83,7 +83,7 @@ export function parseFlags(args: string[]): CliFlags {
     const lang = values.lang
     if (!isValidLanguage(lang)) {
         console.error(`Error: Invalid language '${lang}'`)
-        console.error(`Supported languages: ${Object.values(WORKING_WSA_LANGUAGES).join(", ")}`)
+        console.error(`Supported languages: ${Object.values(WSA_LANGUAGES).join(", ")}`)
         process.exit(1)
     }
 

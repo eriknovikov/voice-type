@@ -41,11 +41,11 @@ export class SoundNotifier {
         })
     }
 
-    async notifyMicStart() {
+    async notifyStart() {
         this.notify(SOUNDS.START)
     }
 
-    async notifyMicStop() {
+    async notifyStop() {
         this.notify(SOUNDS.STOP)
     }
 

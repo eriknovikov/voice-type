@@ -5,7 +5,7 @@ const PORT = 3232
 
 const flags = process.argv.slice(2)
 const parsedFlags = cli.parseFlags(flags)
-
+console.log(`launching daemon with args: \n`, parsedFlags)
 if (parsedFlags.help) {
     cli.showHelp()
     process.exit(0)

@@ -14,6 +14,7 @@ export function initWSA(lang) {
 
     rec.onstart = () => {
         console.log("Listening...")
+        rec.isRunning = true
     }
 
     rec.onresult = (event) => {
@@ -37,6 +38,7 @@ export function initWSA(lang) {
 
     rec.onend = () => {
         console.log("Stopped listening")
+        rec.isRunning = false
     }
 
     window.recognition = rec

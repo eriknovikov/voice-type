@@ -14,14 +14,22 @@ export default class Notifier {
         this.soundNotifier = new SoundNotifier(opts.soundsNotifsEnabled ?? true)
     }
 
+    async notifyDaemonStart(hotkey: string) {
+        await this.textNotifier.notifyDaemonStart(hotkey)
+        await this.soundNotifier.notifyStart()
+    }
+    async notifyDaemonStop() {
+        await this.textNotifier.notifyDaemonStop()
+        await this.soundNotifier.notifyStop()
+    }
     async notifyMicStart() {
         await this.textNotifier.notifyMicStart()
-        this.soundNotifier.notifyMicStart()
+        this.soundNotifier.notifyStart()
     }
 
     async notifyMicStop() {
         await this.textNotifier.notifyMicStop()
-        this.soundNotifier.notifyMicStop()
+        this.soundNotifier.notifyStop()
     }
 
     async notifyOffline() {

@@ -91,6 +91,15 @@ export class TextNotifier {
         )
     }
 
+    async notifyDaemonStop() {
+        await this.notify(
+            "Voice Type daemon stopped",
+            "All resources have been released",
+            "microphone-sensitivity-high",
+            "normal",
+        )
+    }
+
     async notifyMicStop() {
         await this.notify(
             "🛑 Voice Type Stopped",
