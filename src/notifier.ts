@@ -15,7 +15,7 @@ export default class Notifier {
     }
 
     async notifyDaemonStart(hotkey: string) {
-        await this.textNotifier.notifyDaemonStart(hotkey)
+        await this.textNotifier.notifyDaemonStarted(hotkey)
         await this.soundNotifier.notifyStart()
     }
     async notifyDaemonStop() {
@@ -24,12 +24,12 @@ export default class Notifier {
     }
     async notifyMicStart() {
         await this.textNotifier.notifyMicStart()
-        this.soundNotifier.notifyStart()
+        await this.soundNotifier.notifyStart()
     }
 
     async notifyMicStop() {
         await this.textNotifier.notifyMicStop()
-        this.soundNotifier.notifyStop()
+        await this.soundNotifier.notifyStop()
     }
 
     async notifyOffline() {

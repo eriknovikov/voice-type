@@ -1,5 +1,5 @@
 import { spawn } from "child_process"
-import { parseArgs, type ParseArgsOptionsConfig } from "node:util"
+import { parseArgs } from "node:util"
 import { WSA_LANGUAGES } from "./constants.js"
 import type { CliFlags } from "./types.js"
 
@@ -75,7 +75,8 @@ export function respawnDetached(args: string[]) {
     child.unref()
 
     console.log(`Voice Type daemon started in detached mode with PID: ${child.pid}`)
-    console.log(`you can stop it via "kill ${child.pid}"`)
+    console.log(`you can stop it by running:`)
+    console.log(`curl http://localhost:3232/exit`)
 }
 export function parseFlags(args: string[]): CliFlags {
     const { values } = parseArgs({

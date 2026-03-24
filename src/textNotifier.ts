@@ -83,12 +83,7 @@ export class TextNotifier {
     }
 
     async notifyDaemonStopped(hotkey: string = "F10") {
-        await this.notify(
-            "⏹️ Voice Type Daemon Stopped",
-            "Daemon has been shut down.",
-            "process-stop",
-            "normal",
-        )
+        await this.notify("⏹️ Voice Type Daemon Stopped", "Daemon has been shut down.", "process-stop", "normal")
     }
 
     async notifyMicStart() {
