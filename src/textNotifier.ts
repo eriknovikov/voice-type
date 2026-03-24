@@ -5,6 +5,7 @@ import { log } from "./logger"
 /**
  * Handles text notifications via D-Bus (org.freedesktop.Notifications)
  * Maintains a single connection and manages notification replacement
+ * Includes retry mechanism and connection health checks
  */
 export class TextNotifier {
     private enabled: boolean
@@ -12,6 +13,10 @@ export class TextNotifier {
     private notifyInterface: any = null
     private lastNotificationId: number = 0
     private readonly SYNC_ID = "voice-type-dictation"
+    private initPromise: Promise<void> | null = null
+    private isInitializing: boolean = false
+    private maxRetries: number = 3
+    private retryDelay: number = 1000 // 1 second initial delay
 
     constructor(enabled: boolean = true) {
         this.enabled = enabled
@@ -20,10 +25,71 @@ export class TextNotifier {
         }
     }
 
-    private async initDBus() {
-        this.bus = sessionBus()
-        const obj = await this.bus.getProxyObject("org.freedesktop.Notifications", "/org/freedesktop/Notifications")
-        this.notifyInterface = obj.getInterface("org.freedesktop.Notifications")
+    /**
+     * Initialize D-Bus connection with retry mechanism
+     */
+    private async initDBus(retryCount: number = 0): Promise<void> {
+        // If already initializing, return the existing promise
+        if (this.isInitializing && this.initPromise) {
+            return this.initPromise
+        }
+
+        this.isInitializing = true
+        this.initPromise = this._initDBusWithRetry(retryCount)
+
+        try {
+            await this.initPromise
+        } finally {
+            this.isInitializing = false
+            this.initPromise = null
+        }
+    }
+
+    /**
+     * Internal method to initialize D-Bus with retry logic
+     */
+    private async _initDBusWithRetry(retryCount: number): Promise<void> {
+        try {
+            // Clean up existing connection if any
+            if (this.bus) {
+                try {
+                    this.bus.disconnect()
+                } catch (err) {
+                    log("Error disconnecting existing D-Bus connection: " + JSON.stringify(err))
+                }
+                this.bus = null
+            }
+
+            this.bus = sessionBus()
+            const obj = await this.bus.getProxyObject("org.freedesktop.Notifications", "/org/freedesktop/Notifications")
+            this.notifyInterface = obj.getInterface("org.freedesktop.Notifications")
+        } catch (error) {
+            log(`D-Bus initialization failed (attempt ${retryCount + 1}/${this.maxRetries}):` + JSON.stringify(error))
+
+            if (retryCount < this.maxRetries - 1) {
+                const delay = this.retryDelay * Math.pow(2, retryCount) // Exponential backoff
+                await new Promise((resolve) => setTimeout(resolve, delay))
+                return this._initDBusWithRetry(retryCount + 1)
+            }
+
+            throw error
+        }
+    }
+
+    /**
+     * Check if D-Bus connection is healthy
+     */
+    private isConnectionHealthy(): boolean {
+        return this.bus !== null && this.notifyInterface !== null
+    }
+
+    /**
+     * Ensure D-Bus connection is established, reconnecting if necessary
+     */
+    private async ensureConnection(): Promise<void> {
+        if (!this.isConnectionHealthy()) {
+            await this.initDBus()
+        }
     }
 
     /**
@@ -42,11 +108,13 @@ export class TextNotifier {
     }
 
     async notify(title: string, message: string, icon: string, urgency: Urgency = "normal", durationMs: number = 3000) {
-        if (!this.enabled) return
+        if (!this.enabled) {
+            return
+        }
 
         try {
-            // Lazy-init if not ready
-            if (!this.notifyInterface) await this.initDBus()
+            // Ensure connection is healthy before sending notification
+            await this.ensureConnection()
 
             const hints = {
                 transient: new Variant("b", true),
@@ -68,6 +136,31 @@ export class TextNotifier {
             )
         } catch (error) {
             log("D-Bus Notification Error:" + JSON.stringify(error))
+
+            // If notification fails, try to reinitialize the connection
+            try {
+                await this.initDBus()
+                // Retry the notification once after reconnection
+                if (this.notifyInterface) {
+                    const retryHints = {
+                        transient: new Variant("b", true),
+                        urgency: new Variant("y", this.getUrgencyByte(urgency)),
+                        "x-canonical-private-synchronous": new Variant("s", this.SYNC_ID),
+                    }
+                    this.lastNotificationId = await this.notifyInterface.Notify(
+                        "Voice Type",
+                        this.lastNotificationId,
+                        icon,
+                        title,
+                        message,
+                        [],
+                        retryHints,
+                        durationMs,
+                    )
+                }
+            } catch (retryError) {
+                log("Failed to send notification after reconnection:" + JSON.stringify(retryError))
+            }
         }
     }
 
@@ -127,6 +220,10 @@ export class TextNotifier {
     }
 
     destroy() {
+        // Cancel any pending initialization
+        this.isInitializing = false
+        this.initPromise = null
+
         if (this.bus) {
             try {
                 this.bus.disconnect()
