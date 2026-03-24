@@ -1,4 +1,3 @@
-import { spawn } from "child_process"
 import { sessionBus, Variant, type MessageBus } from "dbus-next"
 import type { Urgency } from "./types"
 import { log } from "./logger"
@@ -69,8 +68,6 @@ export class TextNotifier {
             )
         } catch (error) {
             log("D-Bus Notification Error:" + JSON.stringify(error))
-            // Fallback to basic notify-send if D-Bus fails
-            spawn("notify-send", ["-a", "Voice Type", "-r", "42069", title, message])
         }
     }
 

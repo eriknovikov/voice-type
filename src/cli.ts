@@ -4,9 +4,10 @@ import { WORKING_WSA_LANGUAGES } from "./constants.js"
 import type { CliFlags } from "./types.js"
 
 const options = {
-    "no-sound": {
+    sound: {
         type: "boolean",
         default: false,
+        short: "s",
     },
     "no-text": {
         type: "boolean",
@@ -36,8 +37,8 @@ Usage: voice-type [options]
 
 Options:
   -l, --lang <lang>       Set Web Speech API language (e.g., en-US, es-ES). Default: en-US
-  --no-text                Disable text notifications
-  --no-sound               Disable sound notifications
+  --no-text                Disable text notifications (default: false)
+  --sound                  Enable sound notifications (default: false)
   -d, --detached           Run the daemon in the background (detached mode)
   -h, --help               Show this help message
 
@@ -89,7 +90,7 @@ export function parseFlags(args: string[]): CliFlags {
     return {
         lang,
         textNotifs: !values["no-text"],
-        soundNotifs: !values["no-sound"],
+        soundNotifs: values["sound"],
         detached: values.detached,
         help: values.help,
     }
