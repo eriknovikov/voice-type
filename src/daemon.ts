@@ -125,7 +125,6 @@ export default class Daemon {
                 "--no-first-run",
                 "--safebrowsing-disable-auto-update",
                 "--disable-features=IsolateOrigins,site-per-process",
-                "--user-data-dir=/tmp/voice-type-browser",
                 "--process-per-site",
             ],
             name: "Voice-Type-browser",
