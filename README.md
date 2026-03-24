@@ -106,12 +106,14 @@ sudo rm -rf /usr/local/share/voice-type /usr/local/bin/voice-type
 
 ## Set up Keyboard Shortcuts
 
-Voice Type uses HTTP endpoints to control dictation. You'll need to bind these to keyboard shortcuts for easy access.
+Voice Type uses HTTP endpoints to control dictation. You'll need to bind these to keyboard shortcuts for easy access. We suggest F9 and F10, but you can use whatever you want.
 
-| Key | Action          | Command                            |
-| --- | --------------- | ---------------------------------- |
-| F9  | Start dictation | `curl http://127.0.0.1:3232/start` |
-| F10 | Stop dictation  | `curl http://127.0.0.1:3232/stop`  |
+| Key        | Action                     | Command                            |
+| ---------- | -------------------------- | ---------------------------------- |
+| F9         | Start dictation [required] | `curl http://127.0.0.1:3232/start` |
+| F10        | Stop dictation [required]  | `curl http://127.0.0.1:3232/stop`  |
+| Ctrl + F9  | Start daemon [optional]    | depends on installation            |
+| Ctrl + F10 | Stop Daemon [optional]     | `curl http://127.0.0.1:3232/exit`  |
 
 If you use GNOME, go to Settings -> Keyboard -> View and Customize Shortucts -> Custom Shortcuts. Else, check manually how to set up keyboard shortcuts in your Desktop Environment.
 
