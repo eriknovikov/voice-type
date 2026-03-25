@@ -43,11 +43,13 @@ chmod +x ./flatpak/build.sh && ./flatpak/build.sh
 
 ## Via npm
 
-THIS DOESNT WORK FOR NOW, GOTTA PUBLISH FIRST TO NPM!
+Voice Type is available as an npm package for easy installation on any Linux system with Node.js installed.
 
 ```bash
 npm install --global voice-type@latest
 ```
+
+**Note:** This method requires you to manually install the system dependencies (`google-chrome-stable`, `dotool`, and `paplay`) as described in the "Required System Dependencies" section below.
 
 ## Binary Installation
 
@@ -69,17 +71,43 @@ Whether you use the binary directly or via npm, VoiceType requires `google-chrom
 
 ### Flatpak
 
-MISSING DOC FOR NOW
+To remove Voice Type installed via Flatpak:
+
+```bash
+flatpak uninstall org.github.eriknovikov.VoiceType
+```
+
+This will remove the application and all its associated data. If you also want to remove any leftover configuration files:
+
+```bash
+flatpak uninstall --unused
+```
 
 ### npm
 
-MISSING DOC FOR NOW
+To remove Voice Type installed via npm:
+
+```bash
+npm uninstall --global voice-type
+```
+
+This will remove the globally installed package from your system.
 
 ### Binary
+
+To remove Voice Type installed via the binary installation script:
 
 ```bash
 sudo rm -rf /usr/local/share/voice-type /usr/local/bin/voice-type
 ```
+
+This removes the application files and the executable symlink. If you also want to remove any user-specific configuration or cache files:
+
+```bash
+rm -rf ~/.config/voice-type ~/.cache/voice-type
+```
+
+**Note:** After uninstalling, you may also want to remove any keyboard shortcuts you set up for Voice Type from your desktop environment's keyboard settings.
 
 ## Troubleshooting
 
@@ -124,7 +152,7 @@ Then, run the daemon, depending on how you installed it.
 flatpak run org.voice_type.VoiceType
 
 #npm
-NPM_COMMAND
+voice-type
 
 #binary
 voice-type
