@@ -1,24 +1,27 @@
 import { spawn } from "child_process"
-import { join } from "path"
-
+import { dirname, join } from "path"
+import { fileURLToPath } from "url"
 // Get the sounds directory
 function getSoundsDir(): string {
     const execPath = process.execPath
 
     // Flatpak detection
-    if (process.env.FLATPAK_ID === "org.voice_type.VoiceType") {
+    if (process.env.FLATPAK_ID === "org.github.eriknovikov.VoiceType") {
         return "/app/share/sounds/voice-type"
     }
 
     // Development mode detection
-    const isDevMode = execPath.endsWith("bun") || execPath.endsWith("node")
-    if (isDevMode) {
-        //use local assets
-        return join(process.cwd(), "assets/sounds")
+    const isCompiledBinary = !process.execPath.endsWith("bun") && !process.execPath.endsWith("node")
+    if (isCompiledBinary) {
+        return "/usr/local/share/voice-type/sounds"
     }
 
-    // use system-wide assets
-    return "/usr/local/share/voice-type/sounds"
+    // 3. NPM Global Install & Local Dev Mode
+    // This works natively in both Node.js (NPM users) and Bun (You developing locally)
+    const currentFilePath = fileURLToPath(import.meta.url)
+    const currentDir = dirname(currentFilePath)
+
+    return join(currentDir, "../assets/sounds")
 }
 
 const SOUNDS = {

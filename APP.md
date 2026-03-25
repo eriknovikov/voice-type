@@ -1,311 +1,278 @@
-# VOICE TYPE - Persistent Real-Time Speech-to-Text Daemon
+# VOICE TYPE - Real-Time Speech-to-Text Daemon
 
 ## Overview
 
-Voice Type is a persistent, real-time speech-to-text (STT) dictation daemon designed specifically for Linux Wayland (Arch/GNOME). It runs silently in the background and allows you to inject highly accurate transcribed speech directly into any active application window instantly, bypassing the need for heavy local AI models or paid APIs.
+Voice Type is a system-wide speech-to-text dictation daemon for Linux that provides real-time transcription using Chrome's Web Speech API. It runs as a background service, allowing instant dictation into any focused application window with zero startup latency.
 
-## What It Does (Core Workflow)
+## Core Architecture
 
-1. **Trigger**: You press a global shortcut (e.g., F9), which sends an HTTP request to the local daemon via `curl`.
+### System Components
 
-2. **Listen**: A persistent, hidden browser tab activates your microphone and starts streaming audio to the Web Speech API.
+#### 1. **CLI Interface (`src/cli.ts`)**
+- **Purpose**: Command-line argument parsing and daemon control
+- **Key Features**:
+  - Language selection via `-l, --lang` (default: `en-US`)
+  - Notification toggles: `--no-text`, `--sound`
+  - Detached mode: `-d, --detached` for background operation
+  - Help system with language support documentation
+- **Language Support**: 40+ BCP47 language tags defined in `src/constants.ts`
 
-3. **Process & Diff**: As interim text streams back in milliseconds, Voice Type calculates the difference between the new text and what was already typed.
+#### 2. **Daemon Core (`src/daemon.ts`)**
+- **Purpose**: Central orchestrator managing all system components
+- **Key Responsibilities**:
+  - HTTP server on port 3232 with endpoints:
+    - `/start` - Begin transcription
+    - `/stop` - Stop transcription
+    - `/exit` - Shutdown daemon
+  - Browser lifecycle management (persistent Chrome instance)
+  - Speech update routing to typing controller
+  - State management with cooldown protection
+  - Notification coordination
 
-4. **Phantom Backspace**: If the AI corrects a word mid-sentence, the daemon instantly fires virtual "Backspace" keys to erase the mistake.
+#### 3. **Browser Integration (`src/browser.js`)**
+- **Purpose**: Web Speech API wrapper injected into Chrome
+- **Key Functions**:
+  - `initWSA(lang)` - Initialize speech recognition with language
+  - `startListening()` - Activate microphone
+  - `stopListening()` - Deactivate microphone
+- **Configuration**: Continuous mode, interim results, error handling
 
-5. **Inject**: It types the final, corrected text directly into whatever text box you currently have focused.
+#### 4. **Typing Controller (`src/typingController.ts`)**
+- **Purpose**: Real-time text injection with diff-based correction
+- **Core Algorithm**:
+  - Maintains previous text state
+  - Calculates diff between speech updates
+  - Applies "phantom backspace" for corrections
+  - Types new text via `dotool` process
+- **Diff States**:
+  - `NoChange` - No action needed
+  - `ChangeRes` - Partial update with backspace/type
+  - `ChangeResAndClear` - Reset state (empty input)
 
-6. **Feedback**: It provides instantaneous, real-time visual and audio feedback (popups and sounds) so you know exactly what the daemon is doing without looking away from your cursor.
+#### 5. **Notification System**
+- **Main Notifier (`src/notifier.ts`)**: Unified API for text and sound notifications
+- **Text Notifier (`src/textNotifier.ts`)**: D-Bus notifications with:
+  - Persistent session connection
+  - Notification replacement via `replaces_id`
+  - Advanced hints for real-time updates
+  - Urgency levels: low, normal, critical
+- **Sound Notifier (`src/soundNotifier.ts`)**: Audio feedback via `paplay`
+  - Sound files: `start.oga`, `stop.oga`
+  - Development/production mode detection
 
-## Architecture
+#### 6. **Supporting Components**
+- **Logger (`src/logger.ts`)**: In-memory rotating logger with configurable buffer
+- **Types (`src/types.ts`)**: Shared type definitions (DiffEnum, Urgency, CliFlags)
+- **Constants (`src/constants.ts`)**: Language definitions and configuration
 
-### Component Breakdown
+## Critical Design Patterns
 
-#### Entry Point: `src/index.ts`
-- Sets process title to `voice-type-daemon`
-- Initializes the Daemon instance
-- Starts the daemon on the configured port (default: 3232)
+### 1. **Zero-Latency Architecture**
+- Persistent browser instance eliminates 2-3 second startup delay
+- HTTP endpoints provide instant hotkey response
+- Pre-initialized Web Speech API ready for immediate use
 
-#### Core Orchestrator: `src/daemon.ts`
-The `Daemon` class is the central coordinator that manages all components:
+### 2. **Real-Time Text Correction**
+- Diff algorithm compares current vs previous transcription
+- Calculates common prefix to minimize keystrokes
+- "Phantom backspace" allows AI self-correction mid-sentence
 
-**Responsibilities:**
-- Browser lifecycle management (persistent Chrome instance)
-- HTTP server for receiving hotkey triggers
-- Speech update handling and routing
-- State management (listening status, cooldown)
-- Notification coordination
+### 3. **Notification Replacement System**
+- Uses D-Bus `replaces_id` to update existing notifications
+- `transient` hint prevents history logging
+- `x-canonical-private-synchronous` forces instant updates
+- Creates real-time status indicator feel
 
-**Key Methods:**
-- `start(port)`: Initializes browser and starts HTTP server
-- `stopTranscription(reason)`: Handles intentional and offline stops with cooldown
-- `handleSpeechUpdate(payload)`: Processes incoming speech text
-- `handleOffline(payload)`: Handles network disconnection events
-- `destroy()`: Cleanup on shutdown
+### 4. **Modular Component Design**
+- Separation of concerns: CLI, Daemon, Browser, Typing, Notifications
+- Independent enable/disable of notification types
+- Clean API boundaries between components
 
-**Browser Configuration:**
-- Uses `puppeteer-core` with Google Chrome Stable
-- Headless mode with extensive optimization flags
-- Custom user data directory at `/tmp/voice-type-browser`
-- Exposes functions to browser context: `onSpeechUpdate`, `onOffline`
-
-#### Browser Integration: `src/browser.js`
-JavaScript code injected into the browser context:
-
-**Functions:**
-- `initWSA()`: Initializes Web Speech API with continuous mode and interim results
-- `startListening()`: Starts the speech recognition
-- `stopListening()`: Stops the speech recognition
-
-**Configuration:**
-- Language: `es-ES` (Spanish)
-- Continuous mode: enabled
-- Interim results: enabled
-- Error handling: triggers `onOffline` callback on errors
-
-#### Text Injection: `src/typingController.ts`
-The `TypingController` class manages virtual keyboard input:
-
-**Responsibilities:**
-- Maintains persistent `dotool` process
-- Calculates text diffs between speech updates
-- Sends backspaces to correct mistakes
-- Types new text into focused window
-
-**Diff Algorithm:**
-- `NoChange`: Text unchanged, no action
-- `ChangeRes`: Calculate common prefix, delete differing characters, type new text
-- `ChangeResAndClear`: Reset state (empty text)
-
-**Key Methods:**
-- `calculateAndApplyDiff(str)`: Main entry point for text updates
-- `sendBackspaces(count)`: Sends virtual backspace keys
-- `typeText(text)`: Types text via dotool
-- `reset()`: Clears previous text state
-
-#### Notification System
-
-##### Main Notifier: `src/notifier.ts`
-Composes `TextNotifier` and `SoundNotifier` for unified notification API:
-
-**Notification Types:**
-- `notifyDaemonStart(hotkey)`: Daemon ready notification
-- `notifyMicStart()`: Listening started
-- `notifyMicStop()`: Listening stopped
-- `notifyOffline()`: Network error
-- `notifyError(msg)`: General error
-
-##### Text Notifications: `src/textNotifier.ts`
-Handles D-Bus notifications via `org.freedesktop.Notifications`:
-
-**Features:**
-- Persistent D-Bus session bus connection
-- Notification replacement using `replaces_id`
-- Advanced hints for real-time updates:
-  - `transient`: Don't save to notification history
-  - `x-canonical-private-synchronous`: Force instant replacement
-  - `urgency`: Low/normal/critical priority
-- Fallback to `notify-send` if D-Bus fails
-
-**Urgency Levels:**
-- `low` (0): Informational
-- `normal` (1): Default
-- `critical` (2): Errors and offline states
-
-##### Sound Notifications: `src/soundNotifier.ts`
-Handles audio feedback via `paplay`:
-
-**Sound Files:**
-- `dialog-warning.oga`: Mic start
-- `message-new-instant.oga`: Daemon start
-- `message.oga`: Mic stop, error, offline
-
-**Features:**
-- Non-blocking spawn for sound playback
-- Works in both development and production modes
-- Respects executable directory for asset resolution
-
-#### Logging: `src/logger.ts`
-In-memory rotating logger with configurable buffer size:
-
-**Features:**
-- Configurable max size (default: 10MB)
-- Automatic buffer rotation when size exceeded
-- Prefixes all messages with `[DAEMON]`
-- Outputs to console
-
-#### Types: `src/types.ts`
-Shared type definitions:
-
-**Exports:**
-- `DiffEnum`: Enum for diff operation types
-- `Urgency`: Type for notification urgency levels
-
-## Technology Stack
-
-### Runtime & Architecture
-- **Bun / Node.js (TypeScript)**: Core orchestrator managing state, text diffing, and routing
-- **Express.js**: Lightweight local HTTP server listening for GET /start and /stop commands
-- **systemd (--user)**: Keeps the daemon persistently alive in the background
-
-### Transcription Engine
-- **Headless Google Chrome**: Run continuously in the background to eliminate startup latency
-- **puppeteer-core**: Manages browser lifecycle and bridges communication via `exposeFunction` and DevTools Protocol
-- **Web Speech API**: Chrome's built-in, highly optimized cloud transcription service
-
-### System Integration & Input Injection
-- **dotool**: Wayland-compatible virtual input utility that talks directly to the kernel via `/dev/uinput` to simulate physical keyboard strokes
-- **PulseAudio/PipeWire (paplay)**: Spawns lightweight child processes to play native .oga UI sound effects
-
-### Real-Time UI (Notifications)
-- **dbus-next**: Maintains a persistent session connection to `org.freedesktop.Notifications`
-- **Advanced D-Bus Hints**: Uses `x-canonical-private-synchronous` and `transient` hints to force GNOME to instantly swap active notification popups without queuing, history logging, or anti-spam throttling
-
-## Design Considerations
-
-### 1. Persistent Browser for Zero Latency
-The browser is launched once at startup and kept alive, eliminating the ~2-3 second startup delay that would occur if a new browser instance were created on each transcription request.
-
-### 2. Real-Time Diff Algorithm
-The text diffing algorithm enables "phantom backspace" functionality:
-- Calculates common prefix between current and previous text
-- Only deletes characters that differ
-- Types only new characters
-- This allows the AI to correct itself mid-sentence without user intervention
-
-### 3. D-Bus Notification Replacement
-GNOME's notification system has built-in throttling and queuing. Voice Type bypasses this by:
-- Using `replaces_id` to replace the previous notification
-- Setting `transient` hint to prevent history logging
-- Using `x-canonical-private-synchronous` for instant updates
-- This creates a real-time status indicator feel
-
-### 4. Stop Cooldown Mechanism
-A 1-second cooldown prevents rapid successive stop requests that could cause race conditions or unexpected behavior.
-
-### 5. Modular Notification System
-Text and sound notifications are separated into distinct classes:
-- Allows independent enable/disable
-- Clean separation of concerns
-- Easy to extend with additional notification types
-
-### 6. In-Memory Rotating Logger
-The logger maintains a fixed-size buffer in memory:
-- Prevents unbounded memory growth
-- Provides recent history for debugging
-- No file I/O overhead during operation
-
-### 7. Wayland Compatibility
-The entire stack is designed for Wayland:
-- Uses `dotool` instead of X11-based input methods
+### 5. **Wayland Compatibility**
+- Uses `dotool` for Wayland-compatible virtual input
+- No X11 dependencies
 - Works with GNOME on Wayland out of the box
-- No XWayland dependencies
 
-## Configuration
+## Data Flow
 
-### Environment Variables
-- `PORT`: HTTP server port (default: 3232)
-
-### GNOME Custom Shortcuts Setup
-To set up global hotkeys, create GNOME custom shortcuts:
-
-**Start Transcription (F9):**
-```bash
-curl http://127.0.0.1:3232/start
+```
+Hotkey (F9) → curl /start → Daemon HTTP Server → Browser startListening()
+           ↓
+Microphone → Web Speech API → Interim Results → handleSpeechUpdate()
+           ↓
+Text Diff Calculation → TypingController → dotool → System Input
+           ↓
+Notification Updates → D-Bus/paplay → User Feedback
 ```
 
-**Stop Transcription (F10):**
-```bash
-curl http://127.0.0.1:3232/stop
-```
+## Key Technical Decisions
 
-### systemd Service
-Create a user systemd service for persistent operation:
-
-```ini
-[Unit]
-Description=Voice Type Speech-to-Text Daemon
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/path/to/voice-type-daemon
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-```
-
-## Development
-
-### Scripts
-- `bun run dev`: Development mode with watch
-- `bun run start`: Production mode
-- `bun run build`: Build to dist directory
-- `bun run compile`: Compile to standalone binary
-
-### Code Style
-- 4-space indentation
-- 120 character line width
-- No semicolons
-- Prettier for formatting
-
-### Testing
-Manual test files are provided in `src/tests/`:
-- `dbus.manual.ts`: Test D-Bus notifications
-- `notifier.manual.ts`: Test notification system
-- `typingController.manual.ts`: Test text injection
-
-## Dependencies
-
-### Runtime
-- `bun`: JavaScript runtime
-- `express`: HTTP server
-- `puppeteer-core`: Browser automation
-- `dbus-next`: D-Bus bindings
-- `x11`: X11 utilities (legacy support)
-
-### Development
-- `@types/express`: TypeScript types for Express
-- `bun-types`: TypeScript types for Bun
-- `prettier`: Code formatting
-- `typescript`: TypeScript compiler
+1. **Web Speech API over Local Models**: Leverages Chrome's optimized cloud transcription for accuracy and speed
+2. **Persistent Browser**: Trade memory for zero-latency response
+3. **HTTP over IPC**: Simple, debuggable, works with any hotkey system
+4. **dotool for Input**: Wayland-compatible, kernel-level input simulation
+5. **D-Bus Notifications**: Native system integration with real-time updates
 
 ## System Requirements
 
-### Required
-- Linux with Wayland (tested on Arch/GNOME)
-- Google Chrome Stable
-- dotool (for virtual keyboard input)
-- paplay (for sound playback)
-- D-Bus session bus
+- **Linux** with desktop environment (GNOME preferred)
+- **Google Chrome Stable** (`google-chrome-stable`)
+- **dotool** for virtual keyboard input
+- **paplay** for sound playback (PulseAudio/PipeWire)
+- **D-Bus session bus** for notifications
 
-### Optional
-- systemd user service (for persistent operation)
-- GNOME Custom Shortcuts (for global hotkeys)
+## Configuration Points
 
-## File Structure
+- **Language**: 40+ supported via `-l` flag (see `src/constants.ts`)
+- **Notifications**: Text (`--no-text`), Sound (`--sound`)
+- **Operation Mode**: Foreground vs detached (`-d`)
+- **HTTP Port**: Fixed at 3232 (localhost only)
 
-- src/
-  - index.ts: Entry point
-  - daemon.ts: Core orchestrator
-  - browser.js: Web Speech API wrapper
-  - typingController.ts: Text injection via dotool
-  - notifier.ts: Main notification composer
-  - textNotifier.ts: D-Bus notifications
-  - soundNotifier.ts: Sound notifications
-  - logger.ts: In-memory rotating logger
-  - types.ts: Shared type definitions
-  - tests/: Manual test files
-- assets/
-  - sounds/: OGA sound files
-- package.json
-- tsconfig.json
-- .prettierrc
-- bun.lock
+## Technology Stack
 
-## License
+### Core Runtime
+- **Bun**: JavaScript runtime for TypeScript execution
+- **Express.js**: HTTP server for hotkey endpoints (`/start`, `/stop`, `/exit`)
+- **TypeScript**: Type-safe development with modern JavaScript features
 
-Version 1.0.0
+### Transcription Engine
+- **Google Chrome Stable**: Required for Web Speech API access
+- **puppeteer-core**: Browser automation and communication bridge
+- **Web Speech API**: Chrome's cloud-based speech recognition service
+
+### System Integration
+- **dotool**: Wayland-compatible virtual input via `/dev/uinput`
+- **paplay**: Audio playback for sound notifications
+- **D-Bus**: System notifications via `org.freedesktop.Notifications`
+- **dbus-next**: Node.js D-Bus bindings for notification management
+
+## Critical Implementation Details
+
+### 1. **HTTP Server Design**
+- **Port**: Fixed at 3232, localhost only for security
+- **Endpoints**:
+  - `GET /start` - Begin transcription with cooldown protection
+  - `GET /stop` - Stop transcription with state cleanup
+  - `GET /exit` - Graceful daemon shutdown
+- **Error Handling**: HTTP status codes for operational states (503, 429, etc.)
+
+### 2. **Browser Management**
+- **Persistent Instance**: Single Chrome process for zero latency
+- **Headless Mode**: `--headless=new` with optimized flags
+- **Resource Isolation**: Dedicated user data directory
+- **Communication**: `exposeFunction` for browser↔Node.js IPC
+
+### 3. **Input Injection Strategy**
+- **dotool Process**: Persistent child process for keyboard simulation
+- **Layout Enforcement**: `DOTOOL_XKB_LAYOUT=us` for consistent key mapping
+- **Unicode Support**: Hex input sequences for non-ASCII characters
+- **Error Resilience**: Writable stream checks and fallback handling
+
+### 4. **Notification Architecture**
+- **Connection Pooling**: Single D-Bus session bus connection
+- **Retry Logic**: Exponential backoff for connection failures
+- **Health Checks**: Connection validation before notification attempts
+- **Resource Cleanup**: Proper disconnection on shutdown
+
+### 5. **State Management**
+- **Cooldown Mechanism**: 100ms cooldown prevents rapid state transitions
+- **Text State Tracking**: Previous text buffer for diff calculations
+- **Browser Readiness**: Validation before transcription operations
+- **Graceful Shutdown**: Signal handlers for SIGTERM/SIGINT
+
+## Configuration & Deployment
+
+### CLI Options
+```
+voice-type [options]
+  -l, --lang <lang>       Web Speech API language (default: en-US)
+  --no-text               Disable text notifications
+  --sound                 Enable sound notifications
+  -d, --detached          Run in background (detached mode)
+  -h, --help              Show help message
+```
+
+### Hotkey Setup
+```bash
+# Start transcription (F9)
+curl http://127.0.0.1:3232/start
+
+# Stop transcription (F10)
+curl http://127.0.0.1:3232/stop
+
+# Shutdown daemon
+curl http://127.0.0.1:3232/exit
+```
+
+### Installation Methods
+1. **Flatpak**: Self-contained, includes all dependencies
+2. **Binary**: System-wide installation via install script
+3. **npm**: Global package installation (when published)
+
+## Development Context
+
+### Build System
+- **Entry Point**: `src/index.ts` → compiled to `bin/voice-type`
+- **TypeScript Config**: ES modules, strict type checking
+- **Bundling**: `bun build --compile` for standalone binary
+
+### Project Structure
+```
+voice-type/
+├── src/
+│   ├── index.ts          # Main entry point
+│   ├── cli.ts            # Command-line interface
+│   ├── daemon.ts         # Core orchestrator
+│   ├── browser.js        # Web Speech API wrapper
+│   ├── typingController.ts # Text injection engine
+│   ├── notifier.ts       # Notification coordinator
+│   ├── textNotifier.ts   # D-Bus notifications
+│   ├── soundNotifier.ts  # Audio notifications
+│   ├── logger.ts         # Rotating logger
+│   ├── types.ts          # Type definitions
+│   ├── constants.ts      # Language constants
+│   └── tests/            # Manual test files
+├── assets/
+│   └── sounds/           # Notification sounds
+├── flatpak/              # Flatpak packaging
+└── package.json          # Dependencies and scripts
+```
+
+### Key Dependencies
+- **Runtime**: bun, express, puppeteer-core, dbus-next
+- **Development**: @types/express, bun-types, prettier, typescript
+- **System**: google-chrome-stable, dotool, paplay
+
+## Operational Characteristics
+
+### Performance Profile
+- **Startup Time**: ~2-3 seconds (browser initialization)
+- **Transcription Latency**: <100ms for interim results
+- **Memory Usage**: ~200MB (Chrome) + ~50MB (Node.js)
+- **CPU Usage**: Minimal when idle, spikes during transcription
+
+### Reliability Features
+- **Auto-reconnection**: D-Bus and browser recovery on failure
+- **Error Isolation**: Component failures don't crash entire daemon
+- **Resource Cleanup**: Proper shutdown of all child processes
+- **State Validation**: Prevents invalid operations (stop before start)
+
+### Security Considerations
+- **Localhost Only**: HTTP server binds to 127.0.0.1 only
+- **No Authentication**: Intended for single-user desktop use
+- **Microphone Access**: Requires user permission via Chrome
+- **Input Simulation**: dotool requires appropriate permissions
+
+## Integration Points
+
+### External Systems
+1. **Desktop Environments**: GNOME shortcuts, D-Bus notifications
+2. **Audio Systems**: PulseAudio/PipeWire for sound playback
+3. **Input Systems**: Linux kernel uinput via dotool
+4. **Browser Ecosystem**: Chrome Web Speech API
+
+### Extension Points
+1. **Language Support**: Add new languages to `src/constants.ts`
+2. **Notification Types**: Extend `Notifier` class with new methods
+3. **Input Methods**: Alternative to dotool for different platforms
+4. **Transcription Engines**: Swap Web Speech API for other services

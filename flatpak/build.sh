@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-APP_ID="org.voice_type.VoiceType"
+APP_ID="org.github.eriknovikov.VoiceType"
 MANIFEST="flatpak/${APP_ID}.json"
 
 echo "Building Voice Type Flatpak package..."

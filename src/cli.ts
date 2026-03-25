@@ -50,7 +50,7 @@ Supported Languages (most common):
   French: fr-FR
 
 To see the exhaustive list of languages, visit:
-  https://github.com/E-nkv/voice-type/tree/master/src/constants.ts
+  https://github.com/eriknovikov/voice-type/tree/master/src/constants.ts
 `
 
 function isValidLanguage(lang: string): boolean {

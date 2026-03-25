@@ -102,7 +102,7 @@ esac
 
 # Download latest binary
 echo -e "${BLUE}Downloading Voice Type binary ($ARCH)...${NC}"
-LATEST_URL="https://github.com/E-nkv/voice-type/releases/latest/download/$BINARY_NAME"
+LATEST_URL="https://github.com/eriknovikov/voice-type/releases/latest/download/$BINARY_NAME"
 if ! curl -L -o /tmp/voice-type "$LATEST_URL"; then
     echo -e "${RED}ERROR: Failed to download binary${NC}"
     echo "Please check your internet connection and try again."
@@ -114,7 +114,7 @@ echo -e "${GREEN}✓ Binary downloaded${NC}"
 # Download assets (sounds)
 echo -e "${BLUE}Downloading sound assets...${NC}"
 ASSETS_DIR="/usr/local/share/voice-type"
-if ! curl -L -o /tmp/sounds.tar.gz "https://github.com/E-nkv/voice-type/releases/latest/download/sounds.tar.gz"; then
+if ! curl -L -o /tmp/sounds.tar.gz "https://github.com/eriknovikov/voice-type/releases/latest/download/sounds.tar.gz"; then
     echo -e "${YELLOW}WARNING: Failed to download sound assets${NC}"
     echo "Voice Type will work without sound notifications."
 else
@@ -149,4 +149,4 @@ echo -e "     ${GREEN}curl http://127.0.0.1:3232/start${NC} #or F9"
 echo ""
 echo ""
 echo -e "${BLUE}For more information, see:${NC}"
-echo "https://github.com/E-nkv/voice-type"
+echo "https://github.com/eriknovikov/voice-type"

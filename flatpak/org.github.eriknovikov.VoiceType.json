@@ -1,5 +1,5 @@
 {
-    "app-id": "org.voice_type.VoiceType",
+    "app-id": "org.github.eriknovikov.VoiceType",
     "runtime": "org.freedesktop.Platform",
     "runtime-version": "24.08",
     "sdk": "org.freedesktop.Sdk",
@@ -84,9 +84,9 @@
                 "chmod +x /app/bin/host-chrome",
                 "install -Dm644 assets/sounds/start.oga /app/share/sounds/voice-type/start.oga",
                 "install -Dm644 assets/sounds/stop.oga /app/share/sounds/voice-type/stop.oga",
-                "install -Dm644 flatpak/org.voice_type.VoiceType.metainfo.xml /app/share/metainfo/org.voice_type.VoiceType.metainfo.xml",
-                "install -Dm644 flatpak/org.voice_type.VoiceType.desktop /app/share/applications/org.voice_type.VoiceType.desktop",
-                "install -Dm644 flatpak/voice-type.svg /app/share/icons/hicolor/scalable/apps/org.voice_type.VoiceType.svg"
+                "install -Dm644 flatpak/org.github.eriknovikov.VoiceType.metainfo.xml /app/share/metainfo/org.github.eriknovikov.VoiceType.metainfo.xml",
+                "install -Dm644 flatpak/org.github.eriknovikov.VoiceType.desktop /app/share/applications/org.github.eriknovikov.VoiceType.desktop",
+                "install -Dm644 flatpak/org.github.eriknovikov.VoiceType.svg /app/share/icons/hicolor/scalable/apps/org.github.eriknovikov.VoiceType.svg"
             ],
             "sources": [
                 {

@@ -34,7 +34,7 @@ Voice Type is available as a Flatpak for maximum compatibility across all Linux 
 Publishing to flathub is on the way. for now, clone the repo and build the flatpak manually.
 
 ```bash
-git clone https://github.com/E-nkv/voice-type.git
+git clone https://github.com/eriknovikov/voice-type.git
 cd voice-type
 chmod +x ./flatpak/build.sh && ./flatpak/build.sh
 ```
@@ -54,7 +54,7 @@ npm install --global voice-type@latest
 The script takes care of downloading and setting up everything for you, and will let you know which system dependencies are missing, including installation instructions for these deps depending on your distro.
 
 ```bash
-curl -fsSL https://github.com/E-nkv/voice-type/releases/latest/download/install.sh | bash
+curl -fsSL https://github.com/eriknovikov/voice-type/releases/latest/download/install.sh | bash
 ```
 
 ### Required System Dependencies
