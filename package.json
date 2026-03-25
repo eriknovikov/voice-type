@@ -1,6 +1,6 @@
 {
     "name": "voice-type",
-    "version": "1.0.0",
+    "version": "0.1",
     "description": "system-wide Speech To Text (STT)",
     "main": "dist/index.js",
     "type": "module",
