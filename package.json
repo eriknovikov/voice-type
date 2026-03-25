@@ -1,7 +1,7 @@
 {
     "name": "voice-type",
     "version": "0.1",
-    "description": "system-wide Speech To Text (STT)",
+    "description": "System-wide Speech To Text dictation tool",
     "main": "dist/index.js",
     "type": "module",
     "os": [

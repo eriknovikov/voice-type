@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Voice Type
-Comment=System-wide Speech To Text for Linux
+Comment=System-wide Speech To Text dictation tool for Linux
 Exec=voice-type
 Icon=org.github.eriknovikov.VoiceType
 Type=Application
