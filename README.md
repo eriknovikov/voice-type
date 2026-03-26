@@ -74,7 +74,7 @@ Whether you use the binary directly or via npm, VoiceType requires `google-chrom
 To remove Voice Type installed via Flatpak:
 
 ```bash
-flatpak uninstall org.github.eriknovikov.VoiceType
+flatpak uninstall io.github.eriknovikov.VoiceType
 ```
 
 This will remove the application and all its associated data. If you also want to remove any leftover configuration files:

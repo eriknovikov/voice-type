@@ -6,7 +6,7 @@ function getSoundsDir(): string {
     const execPath = process.execPath
 
     // Flatpak detection
-    if (process.env.FLATPAK_ID === "org.github.eriknovikov.VoiceType") {
+    if (process.env.FLATPAK_ID === "io.github.eriknovikov.VoiceType") {
         return "/app/share/sounds/voice-type"
     }
 

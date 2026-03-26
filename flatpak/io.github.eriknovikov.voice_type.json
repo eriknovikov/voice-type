@@ -1,5 +1,5 @@
 {
-    "app-id": "org.github.eriknovikov.VoiceType",
+    "app-id": "io.github.eriknovikov.voice_type",
     "runtime": "org.freedesktop.Platform",
     "runtime-version": "24.08",
     "sdk": "org.freedesktop.Sdk",
@@ -11,25 +11,20 @@
     "command": "voice-type",
     "finish-args": [
         "--share=ipc",
-        "--socket=x11",
+        "--socket=fallback-x11",
         "--socket=wayland",
         "--device=dri",
         "--share=network",
         "--socket=pulseaudio",
         "--talk-name=org.freedesktop.Notifications",
         "--talk-name=org.freedesktop.Flatpak",
-        "--device=all",
-        "--filesystem=xdg-config",
-        "--filesystem=xdg-cache"
+        "--device=all"
     ],
     "modules": [
         {
             "name": "dotool",
             "buildsystem": "simple",
             "build-options": {
-                "build-args": [
-                    "--share=network"
-                ],
                 "append-path": "/usr/lib/sdk/golang/bin",
                 "env": {
                     "GOPATH": "/run/build/dotool/go",
@@ -37,7 +32,7 @@
                 }
             },
             "build-commands": [
-                "go build -v -o /app/bin/dotool .",
+                "go build -mod=vendor -v -o /app/bin/dotool .",
                 "ln -s dotool /app/bin/dotoolc",
                 "ln -s dotool /app/bin/dotoold"
             ],
@@ -48,7 +43,13 @@
                 {
                     "type": "git",
                     "url": "https://git.sr.ht/~geb/dotool",
-                    "tag": "1.6"
+                    "tag": "1.6",
+                    "commit": "180af21c46dcc848d93dbec2644c011f4eea1592"
+                },
+                {
+                    "type": "archive",
+                    "url": "https://github.com/eriknovikov/voice-type/releases/download/v1.0.0/vendor.tar.gz",
+                    "sha256": "36e95acf45c893a581a8d43cce11c9c34789b568ef511411e045cf3d619e0dac"
                 }
             ]
         },
@@ -83,14 +84,8 @@
         {
             "name": "voice-type",
             "buildsystem": "simple",
-            "build-options": {
-                "build-args": [
-                    "--share=network"
-                ]
-            },
             "build-commands": [
                 "sed -i 's|/usr/bin/google-chrome-stable|/app/bin/host-chrome|g' src/daemon.ts",
-                "bun install",
                 "bun build src/index.ts --compile --outfile /app/bin/voice-type-bin",
                 "echo '#!/bin/bash' > /app/bin/voice-type",
                 "echo 'exec /app/bin/voice-type-bin \"$@\"' >> /app/bin/voice-type",
@@ -100,15 +95,21 @@
                 "chmod +x /app/bin/host-chrome",
                 "install -Dm644 assets/sounds/start.oga /app/share/sounds/voice-type/start.oga",
                 "install -Dm644 assets/sounds/stop.oga /app/share/sounds/voice-type/stop.oga",
-                "install -Dm644 flatpak/org.github.eriknovikov.VoiceType.metainfo.xml /app/share/metainfo/org.github.eriknovikov.VoiceType.metainfo.xml",
-                "install -Dm644 flatpak/org.github.eriknovikov.VoiceType.desktop /app/share/applications/org.github.eriknovikov.VoiceType.desktop",
-                "install -Dm644 flatpak/org.github.eriknovikov.VoiceType.svg /app/share/icons/hicolor/scalable/apps/org.github.eriknovikov.VoiceType.svg"
+                "install -Dm644 flatpak/io.github.eriknovikov.VoiceType.metainfo.xml /app/share/metainfo/io.github.eriknovikov.VoiceType.metainfo.xml",
+                "install -Dm644 flatpak/io.github.eriknovikov.VoiceType.desktop /app/share/applications/io.github.eriknovikov.VoiceType.desktop",
+                "install -Dm644 flatpak/io.github.eriknovikov.VoiceType.svg /app/share/icons/hicolor/scalable/apps/io.github.eriknovikov.VoiceType.svg"
             ],
             "sources": [
                 {
                     "type": "git",
                     "url": "https://github.com/eriknovikov/voice-type.git",
-                    "tag": "v1.0.0"
+                    "tag": "v1.0.0",
+                    "commit": "23687116611a3fd63004ee5e7c2fd1beecd58e81"
+                },
+                {
+                    "type": "archive",
+                    "url": "https://github.com/eriknovikov/voice-type/releases/download/v1.0.0/node_modules.tar.gz",
+                    "sha256": "8ab3ac7ae1ab2af9e29f773bdbbe4252b767fd06bf490672678b72cf160d3ae1"
                 }
             ]
         }
