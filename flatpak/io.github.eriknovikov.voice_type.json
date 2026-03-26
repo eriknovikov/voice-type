@@ -49,7 +49,8 @@
                 {
                     "type": "archive",
                     "url": "https://github.com/eriknovikov/voice-type/releases/download/v1.0.0/vendor.tar.gz",
-                    "sha256": "36e95acf45c893a581a8d43cce11c9c34789b568ef511411e045cf3d619e0dac"
+                    "sha256": "36e95acf45c893a581a8d43cce11c9c34789b568ef511411e045cf3d619e0dac",
+                    "dest": "vendor"
                 }
             ]
         },
@@ -95,9 +96,9 @@
                 "chmod +x /app/bin/host-chrome",
                 "install -Dm644 assets/sounds/start.oga /app/share/sounds/voice-type/start.oga",
                 "install -Dm644 assets/sounds/stop.oga /app/share/sounds/voice-type/stop.oga",
-                "install -Dm644 flatpak/io.github.eriknovikov.VoiceType.metainfo.xml /app/share/metainfo/io.github.eriknovikov.VoiceType.metainfo.xml",
-                "install -Dm644 flatpak/io.github.eriknovikov.VoiceType.desktop /app/share/applications/io.github.eriknovikov.VoiceType.desktop",
-                "install -Dm644 flatpak/io.github.eriknovikov.VoiceType.svg /app/share/icons/hicolor/scalable/apps/io.github.eriknovikov.VoiceType.svg"
+                "install -Dm644 flatpak/io.github.eriknovikov.voice_type.metainfo.xml /app/share/metainfo/io.github.eriknovikov.voice_type.metainfo.xml",
+                "install -Dm644 flatpak/io.github.eriknovikov.voice_type.desktop /app/share/applications/io.github.eriknovikov.voice_type.desktop",
+                "install -Dm644 flatpak/io.github.eriknovikov.voice_type.svg /app/share/icons/hicolor/scalable/apps/io.github.eriknovikov.voice_type.svg"
             ],
             "sources": [
                 {
@@ -109,7 +110,8 @@
                 {
                     "type": "archive",
                     "url": "https://github.com/eriknovikov/voice-type/releases/download/v1.0.0/node_modules.tar.gz",
-                    "sha256": "8ab3ac7ae1ab2af9e29f773bdbbe4252b767fd06bf490672678b72cf160d3ae1"
+                    "sha256": "8ab3ac7ae1ab2af9e29f773bdbbe4252b767fd06bf490672678b72cf160d3ae1",
+                    "dest": "node_modules"
                 }
             ]
         }
