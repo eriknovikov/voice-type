@@ -1,7 +1,10 @@
 #!/bin/bash
 set -e
 
-APP_ID="io.github.eriknovikov.voice_type"
+# Ensure script runs from project root
+cd "$(dirname "$0")/.."
+
+APP_ID="org.github.eriknovikov.VoiceType"
 MANIFEST="flatpak/${APP_ID}.json"
 
 echo "Building Voice Type Flatpak package..."
@@ -28,6 +31,9 @@ flatpak install --user -y flathub org.electronjs.Electron2.BaseApp//24.08
 BUILD_DIR="flatpak/build"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
+
+# Ensure flatpak directory exists for source references
+mkdir -p flatpak
 
 echo "Building Flatpak..."
 flatpak-builder --force-clean --install --user \

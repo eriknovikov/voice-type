@@ -29,9 +29,7 @@ Before installing Voice Type, make sure you have:
 
 ## Via Flatpak (Universal Compatibility)
 
-Voice Type is available as a Flatpak for maximum compatibility across all Linux distributions and Desktop Environments. Due to the self-contained and isolated nature of flatpaks, it is the most compatible and easiest installation method, so no need to manually install system dependencies like dotool !
-
-Publishing to flathub is on the way. for now, clone the repo and build the flatpak manually.
+Voice Type is available as a Flatpak for maximum compatibility across all Linux distributions and Desktop Environments. Due to the self-contained and isolated nature of flatpaks, it is the most compatible and easiest installation method, so no need to manually install system dependencies.
 
 ```bash
 git clone https://github.com/eriknovikov/voice-type.git
@@ -41,6 +39,14 @@ chmod +x ./flatpak/build.sh && ./flatpak/build.sh
 
 ---
 
+## Binary Installation
+
+The script takes care of downloading and setting up everything for you, and will let you know which system dependencies are missing.
+
+```bash
+curl -fsSL https://github.com/eriknovikov/voice-type/releases/latest/download/install.sh | bash
+```
+
 ## Via npm
 
 Voice Type is available as an npm package for easy installation on any Linux system with Node.js installed.
@@ -49,15 +55,7 @@ Voice Type is available as an npm package for easy installation on any Linux sys
 npm install --global voice-type@latest
 ```
 
-**Note:** This method requires you to manually install the system dependencies (`google-chrome-stable`, `dotool`, and `paplay`) as described in the "Required System Dependencies" section below.
-
-## Binary Installation
-
-The script takes care of downloading and setting up everything for you, and will let you know which system dependencies are missing, including installation instructions for these deps depending on your distro.
-
-```bash
-curl -fsSL https://github.com/eriknovikov/voice-type/releases/latest/download/install.sh | bash
-```
+---
 
 ### Required System Dependencies
 
@@ -74,7 +72,7 @@ Whether you use the binary directly or via npm, VoiceType requires `google-chrom
 To remove Voice Type installed via Flatpak:
 
 ```bash
-flatpak uninstall io.github.eriknovikov.VoiceType
+flatpak uninstall org.github.eriknovikov.VoiceType
 ```
 
 This will remove the application and all its associated data. If you also want to remove any leftover configuration files:
@@ -149,7 +147,7 @@ Then, run the daemon, depending on how you installed it.
 
 ```bash
 #flatpak
-flatpak run org.voice_type.VoiceType
+flatpak run org.github.eriknovikov.VoiceType
 
 #npm
 voice-type

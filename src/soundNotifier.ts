@@ -6,18 +6,17 @@ function getSoundsDir(): string {
     const execPath = process.execPath
 
     // Flatpak detection
-    if (process.env.FLATPAK_ID === "io.github.eriknovikov.VoiceType") {
+    if (process.env.FLATPAK_ID === "org.github.eriknovikov.VoiceType") {
         return "/app/share/sounds/voice-type"
     }
 
-    // Development mode detection
+    // if not ran via bun nor node, then its the binary
     const isCompiledBinary = !process.execPath.endsWith("bun") && !process.execPath.endsWith("node")
     if (isCompiledBinary) {
         return "/usr/local/share/voice-type/sounds"
     }
 
     // 3. NPM Global Install & Local Dev Mode
-    // This works natively in both Node.js (NPM users) and Bun (You developing locally)
     const currentFilePath = fileURLToPath(import.meta.url)
     const currentDir = dirname(currentFilePath)
 

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.github.eriknovikov.VoiceType</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <name>Voice Type</name>
+  <summary>System-wide Speech To Text for Linux</summary>
+  <description>
+    <p>Press a hotkey and speak — text appears in real time in whatever window you have focused. Free, fast, and private. Uses Chrome's built-in Web Speech API, no local models or paid services required.</p>
+  </description>
+  <launchable type="desktop-id">org.github.eriknovikov.VoiceType.desktop</launchable>
+  <url type="homepage">https://github.com/E-nkv/voice-type</url>
+  <url type="bugtracker">https://github.com/E-nkv/voice-type/issues</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.0.0" date="2026-03-22"/>
+  </releases>
+  <developer id="io.github.E-nkv">
+    <name>E-nkv</name>
+    <url>https://github.com/E-nkv</url>
+  </developer>
+</component>
