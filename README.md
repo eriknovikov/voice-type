@@ -52,7 +52,7 @@ curl -fsSL https://github.com/eriknovikov/voice-type/releases/latest/download/in
 Voice Type is available as an npm package for easy installation on any Linux system with Node.js installed.
 
 ```bash
-npm install --global voice-type@latest
+npm install --global voice-type-cli@latest
 ```
 
 ---
@@ -86,7 +86,7 @@ flatpak uninstall --unused
 To remove Voice Type installed via npm:
 
 ```bash
-npm uninstall --global voice-type
+npm uninstall --global voice-type-cli
 ```
 
 This will remove the globally installed package from your system.
@@ -149,10 +149,7 @@ Then, run the daemon, depending on how you installed it.
 #flatpak
 flatpak run org.github.eriknovikov.VoiceType
 
-#npm
-voice-type
-
-#binary
+#npm or binary
 voice-type
 ```
 

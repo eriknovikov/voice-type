@@ -1,5 +1,5 @@
 {
-    "name": "voice-type",
+    "name": "voice-type-cli",
     "version": "1.0.0",
     "description": "System-wide Speech To Text dictation tool",
     "main": "dist/index.js",
