@@ -153,7 +153,7 @@ flatpak run org.github.eriknovikov.VoiceType
 voice-type
 ```
 
-To see all the different options, pass --help or -h to the command. You can customize the language, whether to disable sounds and text notifications for when the daemon or mic starts / stops, and whether to run wraith-type in dettached mode.
+To see all the different options, pass --help or -h to the command. You can customize the language, whether to disable sounds and text notifications for when the daemon or mic starts / stops, and whether to run voice-type in dettached mode.
 
 After starting the daemon, move your cursor to any textbox within your system where you want to VoiceType into. then hit F9, speak whatever you wish, and text results will be inserted in real time. to stop listening, press F10.
 
