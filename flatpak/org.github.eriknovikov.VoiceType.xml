@@ -13,7 +13,7 @@
   <url type="bugtracker">https://github.com/E-nkv/voice-type/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="1.0.0" date="2026-03-22"/>
+    <release version="1.1.0" date="2026-03-29"/>
   </releases>
   <developer id="io.github.E-nkv">
     <name>E-nkv</name>
