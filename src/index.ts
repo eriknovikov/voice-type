@@ -28,4 +28,4 @@ async function destroyDaemon() {
 process.on("SIGTERM", destroyDaemon)
 process.on("SIGINT", destroyDaemon)
 
-daemon.start(PORT).catch(console.error)
+daemon.start(PORT, parsedFlags.browser, parsedFlags.browserPath).catch(console.error)

@@ -4,6 +4,7 @@ import TypingController from "./typingController.js"
 import { log } from "./logger.js"
 import express, { type Express } from "express"
 import Notifier from "./notifier.js"
+import { type BrowserType, launchBrowser } from "./browserLauncher.js"
 
 export default class Daemon {
     private wsaLanguage: string
@@ -97,32 +98,8 @@ export default class Daemon {
         return this.page !== null && this.browser !== null
     }
 
-    private async initBrowser() {
-        this.browser = await puppeteer.launch({
-            executablePath: "/usr/bin/google-chrome-stable",
-            // @ts-ignore
-            headless: "new",
-            args: [
-                "--use-fake-ui-for-media-stream",
-                "--disable-background-timer-throttling",
-                "--log-level=0",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-software-rasterizer",
-                "--disable-background-networking",
-                "--disable-default-apps",
-                "--disable-extensions",
-                "--disable-sync",
-                "--disable-translate",
-                "--metrics-recording-only",
-                "--no-first-run",
-                "--safebrowsing-disable-auto-update",
-                "--disable-features=IsolateOrigins,site-per-process",
-                "--process-per-site",
-            ],
-            name: "Voice-Type-browser",
-        })
-
+    private async initBrowser(browserType: BrowserType, customBrowserPath?: string) {
+        this.browser = await launchBrowser(browserType, customBrowserPath)
         this.page = await this.browser.newPage()
         this.page.on("console", (msg) => console.log("[BROWSER]", msg.text()))
 
@@ -142,16 +119,17 @@ export default class Daemon {
     }
 
     //start spawns browser and server listener
-    public async start(port: number) {
+    public async start(port: number, browserType: BrowserType, customBrowserPath?: string) {
         try {
             this.app.listen(port, "127.0.0.1", () => {
                 log(`server started on port: ${port}`)
             })
-            await this.initBrowser()
+            await this.initBrowser(browserType, customBrowserPath)
             await this.notifier.notifyDaemonStart("F9")
         } catch (e) {
             await this.notifier.notifyError("Failed to initialize Voice Type daemon.")
-            log(`Startup error: ${e}`)
+            console.error(e)
+
             process.exit(0)
         }
     }

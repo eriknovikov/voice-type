@@ -2,7 +2,7 @@
 
 ## Overview
 
-Voice Type is a system-wide speech-to-text dictation daemon for Linux that provides real-time transcription using Chrome's Web Speech API. It runs as a background service, allowing instant dictation into any focused application window with zero startup latency.
+Voice Type is a system-wide speech-to-text dictation daemon for Linux that provides real-time transcription using Chrome or Chromium's Web Speech API. It runs as a background service, allowing instant dictation into any focused application window with zero startup latency.
 
 ## Core Architecture
 
@@ -12,6 +12,8 @@ Voice Type is a system-wide speech-to-text dictation daemon for Linux that provi
 - **Purpose**: Command-line argument parsing and daemon control
 - **Key Features**:
   - Language selection via `-l, --lang` (default: `en-US`)
+  - Browser selection via `-b, --browser` (default: `chrome`, supports `chromium`)
+  - Custom browser path via `-p, --browser_path` for non-standard installations
   - Notification toggles: `--no-text`, `--sound`
   - Detached mode: `-d, --detached` for background operation
   - Help system with language support documentation
@@ -24,13 +26,13 @@ Voice Type is a system-wide speech-to-text dictation daemon for Linux that provi
     - `/start` - Begin transcription
     - `/stop` - Stop transcription
     - `/exit` - Shutdown daemon
-  - Browser lifecycle management (persistent Chrome instance)
+  - Browser lifecycle management (persistent Chrome or Chromium instance)
   - Speech update routing to typing controller
   - State management with cooldown protection
   - Notification coordination
 
 #### 3. **Browser Integration (`src/browser.js`)**
-- **Purpose**: Web Speech API wrapper injected into Chrome
+- **Purpose**: Web Speech API wrapper injected into Chrome or Chromium
 - **Key Functions**:
   - `initWSA(lang)` - Initialize speech recognition with language
   - `startListening()` - Activate microphone
@@ -107,7 +109,7 @@ Notification Updates → D-Bus/paplay → User Feedback
 
 ## Key Technical Decisions
 
-1. **Web Speech API over Local Models**: Leverages Chrome's optimized cloud transcription for accuracy and speed
+1. **Web Speech API over Local Models**: Leverages Chrome or Chromium's optimized cloud transcription for accuracy and speed
 2. **Persistent Browser**: Trade memory for zero-latency response
 3. **HTTP over IPC**: Simple, debuggable, works with any hotkey system
 4. **dotool for Input**: Wayland-compatible, kernel-level input simulation
@@ -116,7 +118,7 @@ Notification Updates → D-Bus/paplay → User Feedback
 ## System Requirements
 
 - **Linux** with desktop environment (GNOME preferred)
-- **Google Chrome Stable** (`google-chrome-stable`)
+- **Google Chrome Stable** or **Chromium** (`google-chrome-stable` or `chromium`)
 - **dotool** for virtual keyboard input
 - **paplay** for sound playback (PulseAudio/PipeWire)
 - **D-Bus session bus** for notifications
@@ -124,6 +126,8 @@ Notification Updates → D-Bus/paplay → User Feedback
 ## Configuration Points
 
 - **Language**: 40+ supported via `-l` flag (see `src/constants.ts`)
+- **Browser**: Chrome (default) or Chromium via `-b` flag
+- **Browser Path**: Custom path via `-p` flag for non-standard installations
 - **Notifications**: Text (`--no-text`), Sound (`--sound`)
 - **Operation Mode**: Foreground vs detached (`-d`)
 - **HTTP Port**: Fixed at 3232 (localhost only)
@@ -136,7 +140,7 @@ Notification Updates → D-Bus/paplay → User Feedback
 - **TypeScript**: Type-safe development with modern JavaScript features
 
 ### Transcription Engine
-- **Google Chrome Stable**: Required for Web Speech API access
+- **Google Chrome Stable** or **Chromium**: Required for Web Speech API access
 - **puppeteer-core**: Browser automation and communication bridge
 - **Web Speech API**: Chrome's cloud-based speech recognition service
 
@@ -186,6 +190,8 @@ Notification Updates → D-Bus/paplay → User Feedback
 ```
 voice-type [options]
   -l, --lang <lang>       Web Speech API language (default: en-US)
+  -b, --browser <browser> Browser type: chrome or chromium (default: chrome)
+  -p, --browser_path <path> Custom path to browser executable
   --no-text               Disable text notifications
   --sound                 Enable sound notifications
   -d, --detached          Run in background (detached mode)
@@ -205,9 +211,9 @@ curl http://127.0.0.1:3232/exit
 ```
 
 ### Installation Methods
-1. **Flatpak**: Self-contained, includes all dependencies
-2. **Binary**: System-wide installation via install script
-3. **npm**: Global package installation (when published)
+1. **Flatpak**: Self-contained, includes all dependencies. Supports Chrome and Chromium via `--browser` flag, but does not support custom browser paths via `--browser_path`.
+2. **Binary**: System-wide installation via install script. Full browser customization support including custom paths.
+3. **npm**: Global package installation (when published). Full browser customization support including custom paths.
 
 ## Development Context
 
@@ -241,7 +247,7 @@ voice-type/
 ### Key Dependencies
 - **Runtime**: bun, express, puppeteer-core, dbus-next
 - **Development**: @types/express, bun-types, prettier, typescript
-- **System**: google-chrome-stable, dotool, paplay
+- **System**: google-chrome-stable or chromium, dotool, paplay
 
 ## Operational Characteristics
 
@@ -262,6 +268,22 @@ voice-type/
 - **No Authentication**: Intended for single-user desktop use
 - **Microphone Access**: Requires user permission via Chrome
 - **Input Simulation**: dotool requires appropriate permissions
+
+## Flatpak-Specific Considerations
+
+### Browser Path Limitations
+Due to the sandboxed nature of Flatpak, the `--browser_path` flag is **not supported** in the Flatpak version. Users can only use:
+- `--browser chrome` (default) - Uses host's `google-chrome-stable`
+- `--browser chromium` - Uses host's `chromium`
+
+For custom browser paths (e.g., Chrome Beta, Dev, or non-standard installations), use the binary or npm installation instead.
+
+### Browser Wrappers
+The Flatpak build creates wrapper scripts that bridge the sandbox to host browsers:
+- `/app/bin/host-chrome` - Wraps `flatpak-spawn --host google-chrome-stable`
+- `/app/bin/host-chromium` - Wraps `flatpak-spawn --host chromium`
+
+These wrappers are automatically configured during the build process via `sed` substitution in [`src/browserLauncher.ts`](src/browserLauncher.ts:5-6), replacing the default browser paths with the wrapper paths.
 
 ## Integration Points
 

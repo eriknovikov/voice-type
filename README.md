@@ -2,7 +2,7 @@
 
 A system-wide Speech-to-Text for Linux. Press a key, speak, done — text lands wherever you're focused. Totally free, with unmatched speed and accuracy.
 
-**How it works:** Chrome runs quietly in the background using its built-in Web Speech API. No local models, no paid services, no startup lag.
+**How it works:** Chrome or Chromium runs quietly in the background using its built-in Web Speech API. No local models, no paid services, no startup lag.
 
 # Features
 
@@ -24,12 +24,14 @@ Before installing Voice Type, make sure you have:
 
 - **Linux** - any distribution
 - **A desktop environment** - GNOME preferred, but any DE works
-- **Google Chrome** - required for the Web Speech API
+- **Google Chrome or Chromium** - required for the Web Speech API (Chrome is used by default)
 - **A working microphone**
 
 ## Via Flatpak (Universal Compatibility)
 
 Voice Type is available as a Flatpak for maximum compatibility across all Linux distributions and Desktop Environments. Due to the self-contained and isolated nature of flatpaks, it is the most compatible and easiest installation method, so no need to manually install system dependencies.
+
+**Flatpak Limitations:** The Flatpak version supports Chrome and Chromium via the `--browser` flag, but does **not** support custom browser paths via `--browser_path`. If you need to use a custom browser path (e.g., Chrome Beta, Dev, or a non-standard installation), use the binary or npm installation instead.
 
 ```bash
 git clone https://github.com/eriknovikov/voice-type.git
@@ -59,7 +61,7 @@ npm install --global voice-type-cli@latest
 
 ### Required System Dependencies
 
-Whether you use the binary directly or via npm, VoiceType requires `google-chrome-stable`, `dotool`, and `paplay` installed in the system. Their installations depend on your distro, so install them manually.
+Whether you use the binary directly or via npm, VoiceType requires `google-chrome-stable` (or `chromium`), `dotool`, and `paplay` installed in the system. Their installations depend on your distro, so install them manually.
 
 **Note about dotool:** On some distributions, `dotool` is available in community or third-party repositories (COPR for Fedora, AUR for Arch, etc.). If not available in your distro's repos (like Ubuntu-Debian), you'll need to build it from source. See [dotool source](https://sr.ht/~geb/dotool/) for instructions. If this sounds like too much of a hassle, just use the flatpak.
 
@@ -126,7 +128,7 @@ rm -rf ~/.config/voice-type ~/.cache/voice-type
 
 **Problem:** Chrome not found
 
-- **Solution:** Install Google Chrome (not Chromium). Voice Type requires Chrome for the Web Speech API. `google-chrome-stable`.
+- **Solution:** Install Google Chrome or Chromium. Voice Type uses Chrome by default, but you can specify Chromium with `--browser chromium`. For custom browser paths, use the binary or npm installation (Flatpak does not support `--browser_path`).
 
 # Usage
 
@@ -153,7 +155,7 @@ flatpak run org.github.eriknovikov.VoiceType
 voice-type
 ```
 
-To see all the different options, pass --help or -h to the command. You can customize the language, whether to disable sounds and text notifications for when the daemon or mic starts / stops, and whether to run voice-type in dettached mode.
+To see all the different options, pass --help or -h to the command. You can customize the language, browser type (Chrome or Chromium), custom browser path, whether to disable sounds and text notifications for when the daemon or mic starts / stops, and whether to run voice-type in dettached mode.
 
 After starting the daemon, move your cursor to any textbox within your system where you want to VoiceType into. then hit F9, speak whatever you wish, and text results will be inserted in real time. to stop listening, press F10.
 
