@@ -18,20 +18,9 @@ A system-wide Speech-to-Text for Linux. Press a key, speak, done — text lands 
 
 # Installation
 
-## Prerequisites
+Before installing, make sure you have Linux (any distro), a desktop environment, a working mic, and either Chrome or Chromium installed. You can install voice-type via flatpak, npm, or the binary. Both via npm and the binary require you to manually install external system dependencies used by voice-type, namely `dotool` for typing into the system, and `paplay` for audio notifications. Flatpak installation is easier and more compatible across distros, and it automatically installs the mentioned system dependencies for you. Pick whichever method you prefer:
 
-Before installing Voice Type, make sure you have:
-
-- **Linux** - any distribution
-- **A desktop environment** - GNOME preferred, but any DE works
-- **Google Chrome or Chromium** - required for the Web Speech API (Chrome is used by default)
-- **A working microphone**
-
-## Via Flatpak (Universal Compatibility)
-
-Voice Type is available as a Flatpak for maximum compatibility across all Linux distributions and Desktop Environments. Due to the self-contained and isolated nature of flatpaks, it is the most compatible and easiest installation method, so no need to manually install system dependencies.
-
-**Flatpak Limitations:** The Flatpak version supports Chrome and Chromium via the `--browser` flag, but does **not** support custom browser paths via `--browser_path`. If you need to use a custom browser path (e.g., Chrome Beta, Dev, or a non-standard installation), use the binary or npm installation instead.
+## Flatpak
 
 ```bash
 git clone https://github.com/eriknovikov/voice-type.git
@@ -43,15 +32,11 @@ chmod +x ./flatpak/build.sh && ./flatpak/build.sh
 
 ## Binary Installation
 
-The script takes care of downloading and setting up everything for you, and will let you know which system dependencies are missing.
-
 ```bash
 curl -fsSL https://github.com/eriknovikov/voice-type/releases/latest/download/install.sh | bash
 ```
 
 ## Via npm
-
-Voice Type is available as an npm package for easy installation on any Linux system with Node.js installed.
 
 ```bash
 npm install --global voice-type-cli@latest
@@ -59,61 +44,39 @@ npm install --global voice-type-cli@latest
 
 ---
 
-### Required System Dependencies
+## System dependencies
 
-Whether you use the binary directly or via npm, VoiceType requires `google-chrome-stable` (or `chromium`), `dotool`, and `paplay` installed in the system. Their installations depend on your distro, so install them manually.
+Only install these manually if you installed `voice-type` via npm or the binary:
 
-**Note about dotool:** On some distributions, `dotool` is available in community or third-party repositories (COPR for Fedora, AUR for Arch, etc.). If not available in your distro's repos (like Ubuntu-Debian), you'll need to build it from source. See [dotool source](https://sr.ht/~geb/dotool/) for instructions. If this sounds like too much of a hassle, just use the flatpak.
+- `dotool`: Used for typing into the system. On some distros, dotool is available on community repos: AUR for arch, COPR for fedora, etc. You can also install it from [dotool's source](https://git.sr.ht/~geb/dotool/). Installing from source is a bit complicated, only do this if your distro's community repo doesn't provide dotool (like ubuntu-debian).
+- `paplay`: Used for audio notifications. Most distros have this pre-installed. If missing, install `pulseaudio-utils` (Ubuntu/Debian/Fedora) or `libpulse` (Arch).
 
----
+# Uninstalling
 
-## Uninstalling
-
-### Flatpak
-
-To remove Voice Type installed via Flatpak:
+## Flatpak
 
 ```bash
-flatpak uninstall org.github.eriknovikov.VoiceType
-```
-
-This will remove the application and all its associated data. If you also want to remove any leftover configuration files:
-
-```bash
+flatpak uninstall org.github.eriknovikov.voice-type
 flatpak uninstall --unused
 ```
 
-### npm
-
-To remove Voice Type installed via npm:
+## npm
 
 ```bash
 npm uninstall --global voice-type-cli
 ```
 
-This will remove the globally installed package from your system.
-
-### Binary
-
-To remove Voice Type installed via the binary installation script:
+## Binary
 
 ```bash
 sudo rm -rf /usr/local/share/voice-type /usr/local/bin/voice-type
 ```
 
-This removes the application files and the executable symlink. If you also want to remove any user-specific configuration or cache files:
-
-```bash
-rm -rf ~/.config/voice-type ~/.cache/voice-type
-```
-
-**Note:** After uninstalling, you may also want to remove any keyboard shortcuts you set up for Voice Type from your desktop environment's keyboard settings.
-
-## Troubleshooting
+# Troubleshooting
 
 **Problem:** `dotool: command not found`
 
-- **Solution:** Install dotool using your package manager (see above)
+- **Solution:** Install dotool (see above)
 
 **Problem:** `voice-type: command not found`
 
@@ -126,10 +89,6 @@ rm -rf ~/.config/voice-type ~/.cache/voice-type
 
 - **Solution:** Check your system audio settings and ensure your microphone is properly connected
 
-**Problem:** Chrome not found
-
-- **Solution:** Install Google Chrome or Chromium. Voice Type uses Chrome by default, but you can specify Chromium with `--browser chromium`. For custom browser paths, use the binary or npm installation (Flatpak does not support `--browser_path`).
-
 # Usage
 
 ## Set up Keyboard Shortcuts
@@ -140,26 +99,35 @@ Voice Type uses HTTP endpoints to control dictation. You'll need to bind these t
 | ---------- | -------------------------- | ---------------------------------- |
 | F9         | Start dictation [required] | `curl http://127.0.0.1:3232/start` |
 | F10        | Stop dictation [required]  | `curl http://127.0.0.1:3232/stop`  |
-| Ctrl + F9  | Start daemon [optional]    | depends on installation            |
-| Ctrl + F10 | Stop Daemon [optional]     | `curl http://127.0.0.1:3232/exit`  |
+| Ctrl + F9  | Start daemon [recommended] | depends on installation            |
+| Ctrl + F10 | Stop daemon [recommended]  | `curl http://127.0.0.1:3232/exit`  |
 
 If you use GNOME, go to Settings -> Keyboard -> View and Customize Shortucts -> Custom Shortcuts. Else, check manually how to set up keyboard shortcuts in your Desktop Environment.
 
-Then, run the daemon, depending on how you installed it.
+Then, run the daemon in a terminal:
 
 ```bash
-#flatpak
-flatpak run org.github.eriknovikov.VoiceType
+# flatpak
+flatpak run org.github.eriknovikov.voice-type
 
 #npm or binary
 voice-type
 ```
 
-To see all the different options, pass --help or -h to the command. You can customize the language, browser type (Chrome or Chromium), custom browser path, whether to disable sounds and text notifications for when the daemon or mic starts / stops, and whether to run voice-type in dettached mode.
+After starting the daemon, move your cursor to any textbox within your system where you want to voice-type into. Press F9 (or your selected `START` key), speak whatever you wish, and text results will be inserted in real time. To stop listening, press F10 (or your selected `STOP` key).
 
-After starting the daemon, move your cursor to any textbox within your system where you want to VoiceType into. then hit F9, speak whatever you wish, and text results will be inserted in real time. to stop listening, press F10.
+## Customizable options
 
-You might also find useful to have keyboard shortcuts for starting or stopping the daemon, but these are optional and totally up to you.
+To see all the different options, pass `--help` or `-h` to the command. You can customize the following:
+
+| Description | CLI Commands | Notes |
+| --- | --- | --- |
+| Language for speech recognition | `--language` \| `-l` | Default `en-US`. See [supported languages](https://github.com/eriknovikov/voice-type/blob/main/src/constants.ts) |
+| Browser type to use | `--browser` \| `-b` | `chrome` or `chromium` |
+| Custom browser path | `--browser_path` \| `-p` | For custom installations like `google-chrome-beta` or `google-chrome-dev` |
+| Enable sound notifications | `--sound` \| `-s` |  |
+| Disable text notifications | `--no-text` |  |
+| Run in detached mode | `--detached` \| `-d` |  |
 
 ## Contributing
 
