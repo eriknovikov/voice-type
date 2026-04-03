@@ -99,12 +99,12 @@ Voice Type uses HTTP endpoints to control dictation. You'll need to bind these t
 | ---------- | -------------------------- | ---------------------------------- |
 | F9         | Start dictation [required] | `curl http://127.0.0.1:3232/start` |
 | F10        | Stop dictation [required]  | `curl http://127.0.0.1:3232/stop`  |
-| Ctrl + F9  | Start daemon [recommended] | depends on installation            |
+| Ctrl + F9  | Start daemon [recommended] | depends on installation. See below |
 | Ctrl + F10 | Stop daemon [recommended]  | `curl http://127.0.0.1:3232/exit`  |
 
 If you use GNOME, go to Settings -> Keyboard -> View and Customize Shortucts -> Custom Shortcuts. Else, check manually how to set up keyboard shortcuts in your Desktop Environment.
 
-Then, run the daemon in a terminal:
+The start command to use is the same as the run command below.
 
 ```bash
 # flatpak
@@ -114,7 +114,7 @@ flatpak run org.github.eriknovikov.voice-type
 voice-type
 ```
 
-After starting the daemon, move your cursor to any textbox within your system where you want to voice-type into. Press F9 (or your selected `START` key), speak whatever you wish, and text results will be inserted in real time. To stop listening, press F10 (or your selected `STOP` key).
+Then, start the daemon (F9 or via the terminal manually), move your cursor to any textbox within your system where you want to voice-type into. Press F9 (or your selected `START` key), speak whatever you wish, and text results will be inserted in real time. To stop listening, press F10 (or your selected `STOP` key).
 
 ## Customizable options
 
