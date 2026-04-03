@@ -5,6 +5,30 @@ import { log } from "./logger.js"
 import express, { type Express } from "express"
 import Notifier from "./notifier.js"
 import { type BrowserType, launchBrowser } from "./browserLauncher.js"
+import { createServer } from "net"
+
+const DAEMON_PORT = 3232
+
+function isPortInUse(port: number): Promise<boolean> {
+    return new Promise((resolve) => {
+        const server = createServer()
+        server.once("error", () => {
+            resolve(true)
+        })
+        server.once("listening", () => {
+            server.close()
+            resolve(false)
+        })
+        server.listen(port, "127.0.0.1")
+    })
+}
+
+export async function acquireLock(): Promise<void> {
+    if (await isPortInUse(DAEMON_PORT)) {
+        log("Daemon already running on port " + DAEMON_PORT)
+        process.exit(0)
+    }
+}
 
 export default class Daemon {
     private wsaLanguage: string
@@ -120,6 +144,9 @@ export default class Daemon {
 
     //start spawns browser and server listener
     public async start(port: number, browserType: BrowserType, customBrowserPath?: string) {
+        // Check for existing instance (silently takes over if another daemon is running)
+        await acquireLock()
+
         try {
             this.app.listen(port, "127.0.0.1", () => {
                 log(`server started on port: ${port}`)
