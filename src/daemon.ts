@@ -6,8 +6,7 @@ import express, { type Express } from "express"
 import Notifier from "./notifier.js"
 import { type BrowserType, launchBrowser } from "./browserLauncher.js"
 import { createServer } from "net"
-
-const DAEMON_PORT = 3232
+import { PORT } from "./index.js"
 
 function isPortInUse(port: number): Promise<boolean> {
     return new Promise((resolve) => {
@@ -16,8 +15,10 @@ function isPortInUse(port: number): Promise<boolean> {
             resolve(true)
         })
         server.once("listening", () => {
+            server.once("close", () => {
+                resolve(false)
+            })
             server.close()
-            resolve(false)
         })
         server.listen(port, "127.0.0.1")
     })
@@ -138,40 +139,41 @@ export default class Daemon {
 
     private async handleError(payload: { type: string; message: string }) {
         const { type, message } = payload
-        
+
         // Map error types to user-friendly messages
         let userMessage = message
         switch (type) {
-            case 'not-allowed':
+            case "not-allowed":
                 userMessage = "Microphone permission denied. Please allow microphone access in your browser settings."
                 break
-            case 'no-speech':
+            case "no-speech":
                 userMessage = "No speech detected. Please check your microphone and try again."
                 break
-            case 'audio-capture':
+            case "audio-capture":
                 userMessage = "No microphone found. Please connect a microphone and try again."
                 break
-            case 'network':
+            case "network":
                 userMessage = "Network error. Please check your internet connection."
                 break
-            case 'not-supported':
+            case "not-supported":
                 userMessage = "Web Speech API not supported. Try using Chrome or Chromium-based browsers."
                 break
-            case 'service-not-allowed':
-                userMessage = "Speech recognition service not allowed. This browser may have compatibility issues. Try Chrome or Chromium."
+            case "service-not-allowed":
+                userMessage =
+                    "Speech recognition service not allowed. This browser may have compatibility issues. Try Chrome or Chromium."
                 break
-            case 'aborted':
+            case "aborted":
                 userMessage = "Speech recognition was aborted."
                 break
             default:
                 userMessage = message || `Speech recognition error: ${type}`
         }
-        
+
         log(`Speech recognition error (${type}): ${userMessage}`)
         await this.notifier.notifyError(userMessage)
-        
+
         // Stop transcription on most errors, but not on 'no-speech' or 'aborted'
-        if (type !== 'no-speech' && type !== 'aborted') {
+        if (type !== "no-speech" && type !== "aborted") {
             await this.stopTranscription("offline")
         }
     }
@@ -179,9 +181,9 @@ export default class Daemon {
     //start spawns browser and server listener
     public async start(port: number, browserType: BrowserType, customBrowserPath?: string) {
         //silently drop start requests when server is already running
-        if (await isPortInUse(DAEMON_PORT)) {
-            log("Daemon already running on port " + DAEMON_PORT)
+        if (await isPortInUse(PORT)) {
             await this.notifier.notifyAlreadyRunning()
+            log("Daemon already running on port " + PORT)
             process.exit(0)
         }
 
@@ -190,9 +192,9 @@ export default class Daemon {
                 log(`server started on port: ${port}`)
             })
             await this.initBrowser(browserType, customBrowserPath)
-            await this.notifier.notifyDaemonStart("F9")
+            this.notifier.notifyDaemonStart("F9")
         } catch (e) {
-            await this.notifier.notifyError("Failed to initialize Voice Type daemon.")
+            this.notifier.notifyError("Failed to initialize Voice Type daemon.")
             console.error(e)
 
             process.exit(0)

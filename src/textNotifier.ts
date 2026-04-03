@@ -166,8 +166,8 @@ export class TextNotifier {
 
     // --- Specialized Text Notifiers ---
 
-    async notifyDaemonStarted(hotkey: string = "F9") {
-        await this.notify(
+    notifyDaemonStarted(hotkey: string = "F9") {
+        this.notify(
             "🎤 Voice Type Daemon Active",
             "Ready to transcribe, start recording.",
             "microphone-sensitivity-high",
@@ -175,12 +175,12 @@ export class TextNotifier {
         )
     }
 
-    async notifyDaemonStopped(hotkey: string = "F10") {
-        await this.notify("⏹️ Voice Type Daemon Stopped", "Daemon has been shut down.", "process-stop", "normal")
+    notifyDaemonStopped(hotkey: string = "F10") {
+        this.notify("⏹️ Voice Type Daemon Stopped", "Daemon has been shut down.", "process-stop", "normal")
     }
 
-    async notifyMicStart() {
-        await this.notify(
+    notifyMicStart() {
+        this.notify(
             "🟢 Voice Type Listening...",
             "Typing into the focused window.",
             "microphone-sensitivity-high",
@@ -188,8 +188,8 @@ export class TextNotifier {
         )
     }
 
-    async notifyDaemonStop() {
-        await this.notify(
+    notifyDaemonStop() {
+        this.notify(
             "Voice Type daemon stopped",
             "All resources have been released",
             "microphone-sensitivity-high",
@@ -197,8 +197,8 @@ export class TextNotifier {
         )
     }
 
-    async notifyMicStop() {
-        await this.notify(
+    notifyMicStop() {
+        this.notify(
             "🛑 Voice Type Stopped",
             "Microphone closed. Text finalized.",
             "microphone-sensitivity-muted",
@@ -206,17 +206,12 @@ export class TextNotifier {
         )
     }
 
-    async notifyOffline() {
-        await this.notify(
-            "📡 Connection Error",
-            "WSA requires internet to transcribe speech.",
-            "network-error",
-            "critical",
-        )
+    notifyOffline() {
+        this.notify("📡 Connection Error", "WSA requires internet to transcribe speech.", "network-error", "critical")
     }
 
-    async notifyError(msg: string) {
-        await this.notify("⚠️ Voice Type Error", msg, "dialog-error", "critical")
+    notifyError(msg: string) {
+        this.notify("⚠️ Voice Type Error", msg, "dialog-error", "critical")
     }
 
     async notifyAlreadyRunning() {

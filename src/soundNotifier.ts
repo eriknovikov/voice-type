@@ -3,8 +3,6 @@ import { dirname, join } from "path"
 import { fileURLToPath } from "url"
 // Get the sounds directory
 function getSoundsDir(): string {
-    const execPath = process.execPath
-
     // Flatpak detection
     if (process.env.FLATPAK_ID === "org.github.eriknovikov.VoiceType") {
         return "/app/share/sounds/voice-type"
@@ -49,19 +47,19 @@ export class SoundNotifier {
         })
     }
 
-    async notifyStart() {
+    notifyStart() {
         this.notify(SOUNDS.START)
     }
 
-    async notifyStop() {
+    notifyStop() {
         this.notify(SOUNDS.STOP)
     }
 
-    async notifyOffline() {
+    notifyOffline() {
         this.notify(SOUNDS.ERROR)
     }
 
-    async notifyError() {
+    notifyError() {
         this.notify(SOUNDS.ERROR)
     }
 }

@@ -14,45 +14,45 @@ export default class Notifier {
         this.soundNotifier = new SoundNotifier(opts.soundsNotifsEnabled ?? true)
     }
 
-    async notifyDaemonStart(hotkey: string) {
-        await this.textNotifier.notifyDaemonStarted(hotkey)
-        await this.soundNotifier.notifyStart()
+    notifyDaemonStart(hotkey: string) {
+        this.textNotifier.notifyDaemonStarted(hotkey)
+        this.soundNotifier.notifyStart()
     }
-    async notifyDaemonStop() {
-        await this.textNotifier.notifyDaemonStop()
-        await this.soundNotifier.notifyStop()
+    notifyDaemonStop() {
+        this.textNotifier.notifyDaemonStop()
+        this.soundNotifier.notifyStop()
     }
-    async notifyMicStart() {
-        await this.textNotifier.notifyMicStart()
-        await this.soundNotifier.notifyStart()
-    }
-
-    async notifyMicStop() {
-        await this.textNotifier.notifyMicStop()
-        await this.soundNotifier.notifyStop()
+    notifyMicStart() {
+        this.textNotifier.notifyMicStart()
+        this.soundNotifier.notifyStart()
     }
 
-    async notifyOffline() {
-        await this.textNotifier.notifyOffline()
+    notifyMicStop() {
+        this.textNotifier.notifyMicStop()
+        this.soundNotifier.notifyStop()
+    }
+
+    notifyOffline() {
+        this.textNotifier.notifyOffline()
         this.soundNotifier.notifyOffline()
     }
 
-    async notifyError(msg: string) {
-        await this.textNotifier.notifyError(msg)
+    notifyError(msg: string) {
+        this.textNotifier.notifyError(msg)
         this.soundNotifier.notifyError()
     }
 
     async notifyAlreadyRunning() {
         await this.textNotifier.notifyAlreadyRunning()
-        this.soundNotifier.notifyError()
+        await this.soundNotifier.notifyError()
     }
 
-    async notifyDaemonStarted() {
-        await this.textNotifier.notifyDaemonStarted()
+    notifyDaemonStarted() {
+        this.textNotifier.notifyDaemonStarted()
     }
 
-    async notifyDaemonStopped() {
-        await this.textNotifier.notifyDaemonStopped()
+    notifyDaemonStopped() {
+        this.textNotifier.notifyDaemonStopped()
     }
 
     destroy() {
