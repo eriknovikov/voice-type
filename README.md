@@ -110,8 +110,12 @@ The start command to use is the same as the run command below.
 # flatpak
 flatpak run org.github.eriknovikov.voice-type
 
-#npm or binary
+#binary
 voice-type
+
+#for npm, it depends on your node installation. copy-paste the output of this command:
+echo "$(which node) $(which voice-type)"
+
 ```
 
 Then, start the daemon (F9 or via the terminal manually), move your cursor to any textbox within your system where you want to voice-type into. Press F9 (or your selected `START` key), speak whatever you wish, and text results will be inserted in real time. To stop listening, press F10 (or your selected `STOP` key).
