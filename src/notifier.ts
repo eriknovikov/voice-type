@@ -14,21 +14,24 @@ export default class Notifier {
         this.soundNotifier = new SoundNotifier(opts.soundsNotifsEnabled ?? true)
     }
 
-    notifyDaemonStart(hotkey: string) {
-        this.textNotifier.notifyDaemonStarted(hotkey)
-        this.soundNotifier.notifyStart()
-    }
-    notifyDaemonStop() {
-        this.textNotifier.notifyDaemonStop()
-        this.soundNotifier.notifyStop()
-    }
-    notifyMicStart() {
-        this.textNotifier.notifyMicStart()
+    // All methods async - await text for D-Bus, await sound for safety before exit
+    async notifyDaemonStart(hotkey: string) {
+        await this.textNotifier.notifyDaemonStart(hotkey)
         this.soundNotifier.notifyStart()
     }
 
-    notifyMicStop() {
-        this.textNotifier.notifyMicStop()
+    async notifyDaemonStop() {
+        await this.textNotifier.notifyDaemonStop()
+        await this.soundNotifier.notifyStop()
+    }
+
+    async notifyMicStart() {
+        await this.textNotifier.notifyMicStart()
+        this.soundNotifier.notifyStart()
+    }
+
+    async notifyMicStop() {
+        await this.textNotifier.notifyMicStop()
         this.soundNotifier.notifyStop()
     }
 
@@ -37,22 +40,14 @@ export default class Notifier {
         this.soundNotifier.notifyOffline()
     }
 
-    notifyError(msg: string) {
-        this.textNotifier.notifyError(msg)
-        this.soundNotifier.notifyError()
+    async notifyError(msg: string) {
+        await this.textNotifier.notifyError(msg)
+        await this.soundNotifier.notifyError()
     }
 
     async notifyAlreadyRunning() {
         await this.textNotifier.notifyAlreadyRunning()
         await this.soundNotifier.notifyError()
-    }
-
-    notifyDaemonStarted() {
-        this.textNotifier.notifyDaemonStarted()
-    }
-
-    notifyDaemonStopped() {
-        this.textNotifier.notifyDaemonStopped()
     }
 
     destroy() {

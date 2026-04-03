@@ -170,7 +170,7 @@ export default class Daemon {
         }
 
         log(`Speech recognition error (${type}): ${userMessage}`)
-        await this.notifier.notifyError(userMessage)
+        this.notifier.notifyError(userMessage)
 
         // Stop transcription on most errors, but not on 'no-speech' or 'aborted'
         if (type !== "no-speech" && type !== "aborted") {
