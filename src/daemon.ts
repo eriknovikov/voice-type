@@ -1,4 +1,4 @@
-import puppeteer, { Browser, Page } from "puppeteer-core"
+import { Browser, Page } from "puppeteer-core"
 import { startListening, stopListening, initWSA } from "./browser.js"
 import TypingController from "./typingController.js"
 import { log } from "./logger.js"
@@ -21,13 +21,6 @@ function isPortInUse(port: number): Promise<boolean> {
         })
         server.listen(port, "127.0.0.1")
     })
-}
-
-export async function acquireLock(): Promise<void> {
-    if (await isPortInUse(DAEMON_PORT)) {
-        log("Daemon already running on port " + DAEMON_PORT)
-        process.exit(0)
-    }
 }
 
 export default class Daemon {
@@ -144,8 +137,11 @@ export default class Daemon {
 
     //start spawns browser and server listener
     public async start(port: number, browserType: BrowserType, customBrowserPath?: string) {
-        // Check for existing instance (silently takes over if another daemon is running)
-        await acquireLock()
+        //silently drop start requests when server is already running
+        if (await isPortInUse(DAEMON_PORT)) {
+            log("Daemon already running on port " + DAEMON_PORT)
+            process.exit(0)
+        }
 
         try {
             this.app.listen(port, "127.0.0.1", () => {
