@@ -4,6 +4,12 @@ export function initWSA(lang) {
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition
     if (!SpeechRec) {
         console.error("FATAL: Web Speech API is not supported in this browser context.")
+        if (window.onError) {
+            window.onError({
+                type: 'not-supported',
+                message: 'Web Speech API is not supported in this browser. Try using Chrome or Chromium-based browsers.'
+            })
+        }
         return
     }
 
@@ -41,7 +47,19 @@ export function initWSA(lang) {
             target: event.target ? event.target.constructor.name : "unknown"
         }
         console.error("rec error:", JSON.stringify(errorDetails, null, 2))
-        if (window.onOffline) window.onOffline()
+        
+        // Handle different error types appropriately
+        if (window.onError) {
+            window.onError({
+                type: event.error,
+                message: event.message || `Speech recognition error: ${event.error}`
+            })
+        }
+        
+        // Only call onOffline for actual network errors
+        if (event.error === 'network' && window.onOffline) {
+            window.onOffline()
+        }
     }
 
     rec.onend = () => {

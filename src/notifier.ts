@@ -42,6 +42,11 @@ export default class Notifier {
         this.soundNotifier.notifyError()
     }
 
+    async notifyAlreadyRunning() {
+        await this.textNotifier.notifyAlreadyRunning()
+        this.soundNotifier.notifyError()
+    }
+
     async notifyDaemonStarted() {
         await this.textNotifier.notifyDaemonStarted()
     }

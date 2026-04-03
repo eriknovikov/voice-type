@@ -219,6 +219,15 @@ export class TextNotifier {
         await this.notify("⚠️ Voice Type Error", msg, "dialog-error", "critical")
     }
 
+    async notifyAlreadyRunning() {
+        await this.notify(
+            "⚠️ Voice Type Already Running",
+            "Only one instance is allowed. Close the old one first.",
+            "dialog-warning",
+            "normal",
+        )
+    }
+
     destroy() {
         // Cancel any pending initialization
         this.isInitializing = false
