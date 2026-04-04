@@ -2,7 +2,7 @@ import { Browser, Page } from "puppeteer-core"
 import { startListening, stopListening, initWSA } from "./browser.js"
 import TypingController from "./typingController.js"
 import { log } from "./logger.js"
-import express, { type Express } from "express"
+import express, { type Express, type Response } from "express"
 import Notifier from "./notifier.js"
 import { type BrowserType, launchBrowser } from "./browserLauncher.js"
 import { createServer } from "net"
@@ -44,31 +44,19 @@ export default class Daemon {
 
     private setupRoutes() {
         this.app.get("/start", async (req, res) => {
-            if (!this.isBrowserReady()) {
-                log("Browser not ready - cannot start transcription")
-                this.notifier.notifyError("Browser not ready yet.")
-                res.status(503).send("Wait for browser")
-                return
-            }
-            if (this.stopCooldown) {
-                log("Start request ignored - still in cooldown period after stop")
-                res.status(429).send("Cooldown active - wait before starting")
-                return
-            }
-            if (this.isWSAListening) {
-                log("Already listening.")
-                return
-            }
-            log("Starting transcription...")
-            this.isWSAListening = true
-            this.notifier.notifyMicStart()
-            await this.page!.evaluate(startListening)
-            res.send("Listening")
+            await this.startTranscription(res)
         })
 
         this.app.get("/stop", async (req, res) => {
-            await this.stopTranscription("intentional")
-            res.send("Stopped")
+            await this.stopTranscription("intentional", res)
+        })
+
+        this.app.get("/toggle", async (req, res) => {
+            if (this.isWSAListening) {
+                await this.stopTranscription("intentional", res)
+            } else {
+                await this.startTranscription(res)
+            }
         })
 
         this.app.get("/exit", async (req, res) => {
@@ -79,18 +67,45 @@ export default class Daemon {
         })
     }
 
-    private async stopTranscription(reason: "intentional" | "offline") {
+    private async startTranscription(res: Response) {
+        if (!this.isBrowserReady()) {
+            log("Browser not ready - cannot start transcription")
+            this.notifier.notifyError("Browser not ready yet.")
+            res.status(503).send("Wait for browser")
+            return
+        }
+        if (this.stopCooldown) {
+            log("Start request ignored - still in cooldown period after stop")
+            res.status(429).send("Cooldown active - wait before starting")
+            return
+        }
+        if (this.isWSAListening) {
+            log("Listener already active.")
+            res.send("Listener already active")
+            return
+        }
+        log("Starting transcription...")
+        this.isWSAListening = true
+        this.notifier.notifyMicStart()
+        await this.page!.evaluate(startListening)
+        res.send("Listening")
+    }
+
+    private async stopTranscription(reason: "intentional" | "offline", res?: Response) {
         if (this.stopCooldown) {
             log(`Stop request ignored - still in cooldown period (reason: ${reason})`)
+            res?.status(429).send("Cooldown active")
             return
         }
 
         if (!this.isBrowserReady()) {
             log("Browser not ready - cannot stop transcription")
+            res?.status(503).send("Browser not ready")
             return
         }
         if (!this.isWSAListening) {
-            log(`Cannot call stop before start (reason: ${reason})`)
+            log("No active listener.")
+            res?.send("No active listener")
             return
         }
         log(`Stopping transcription... Reason: ${reason}`)
@@ -110,6 +125,7 @@ export default class Daemon {
         }, 100)
 
         await this.page!.evaluate(stopListening)
+        res?.send("Stopped")
     }
 
     private isBrowserReady(): boolean {
