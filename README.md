@@ -102,6 +102,16 @@ Voice Type uses HTTP endpoints to control dictation. You'll need to bind these t
 | Ctrl + F9  | Start daemon [recommended] | depends on installation. See below |
 | Ctrl + F10 | Stop daemon [recommended]  | `curl http://127.0.0.1:3232/exit`  |
 
+### Alternative: Single Toggle Hotkey
+
+If you prefer using a single hotkey for both starting and stopping dictation, you can use the toggle endpoint instead:
+
+| Key   | Action                              | Command                              |
+| ----- | ----------------------------------- | ------------------------------------ |
+| F8    | Toggle dictation (start/stop)      | `curl http://127.0.0.1:3232/toggle`  |
+
+Press once to start listening, press again to stop. This is a convenient alternative to using separate F9/F10 hotkeys.
+
 If you use GNOME, go to Settings -> Keyboard -> View and Customize Shortucts -> Custom Shortcuts. Else, check manually how to set up keyboard shortcuts in your Desktop Environment.
 
 The start command to use is the same as the run command below.
