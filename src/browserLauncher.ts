@@ -2,7 +2,7 @@ import puppeteer from "puppeteer-core"
 import { spawn } from "child_process"
 import { log } from "./logger"
 
-const CHROME_PATH = "/usr/bin/google-chrome-stable"
+const CHROME_PATH = "/usr/bin/google-chrome"
 const CHROMIUM_PATH = "/usr/bin/chromium"
 
 // arguments shared by all browsers

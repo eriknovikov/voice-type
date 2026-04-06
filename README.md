@@ -43,6 +43,11 @@ npm install --global voice-type-cli@latest
 
 # Start
 
+> [!IMPORTANT]
+> Ensure these symlinks exist:
+> - `google-chrome` → your Chrome variant (e.g., `sudo ln -s /usr/bin/google-chrome-stable /usr/bin/google-chrome`)
+> - `chromium` → your Chromium variant (e.g., `sudo ln -s /usr/bin/chromium-stable /usr/bin/chromium`)
+
 | Installation | Command |
 |---|---|
 | Flatpak | `flatpak run org.github.eriknovikov.VoiceType` |
