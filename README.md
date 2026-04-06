@@ -1,8 +1,8 @@
 # Voice Type
 
-System-wide speech-to-text for Linux. Press a key, speak — text appears wherever you're focused.
+System-wide speech-to-text for Linux. Press a key, speak, and text appears wherever the cursor is.
 
-Uses Chrome's built-in Web Speech API running silently in the background. No local models, no paid services, no startup delay. It works in any application — editors, terminals, browsers, wherever your cursor is — and if the transcription corrects a word mid-sentence, it automatically backspaces and retypes it. Audio and visual feedback confirm when it's listening or stops.
+It runs Chrome's built-in Web Speech API quietly in the background. No local models, no paid service, no startup delay. It works in editors, terminals, browsers, and most other apps. If the transcript changes mid-sentence, Voice Type backspaces and retypes the corrected text.
 
 **Requirements:** Linux with a desktop environment, a working microphone, and Chrome or Chromium installed system-wide (required to expose the Web Speech API).
 
@@ -12,7 +12,7 @@ Uses Chrome's built-in Web Speech API running silently in the background. No loc
 
 ## Flatpak
 
-Installs system dependencies automatically.
+Installs system dependencies automatically. Requires `flatpak-builder`.
 
 ```bash
 git clone https://github.com/eriknovikov/voice-type.git
@@ -41,21 +41,44 @@ npm install --global voice-type-cli@latest
 
 ---
 
-# Running
-
-To start the daemon manually from a terminal, or to test your setup before binding hotkeys:
+# Start
 
 | Installation | Command |
 |---|---|
 | Flatpak | `flatpak run org.github.eriknovikov.VoiceType` |
 | Binary | `voice-type` |
-| npm | run `which node; which voice-type` in your terminal and use the full paths: `/path/to/node /path/to/voice-type` |
+| npm | find the path with `which node; which voice-type`, then run: `/path/to/node /path/to/voice-type` |
+
+# Usage
+
+| Action | Command |
+|---|---|
+| Start listening | `curl http://127.0.0.1:3232/start` |
+| Stop listening | `curl http://127.0.0.1:3232/stop` |
+| Toggle listening | `curl http://127.0.0.1:3232/toggle` |
+| Stop daemon | `curl http://127.0.0.1:3232/exit` |
 
 ---
 
-# Keyboard Shortcuts
+# Options
 
-Bind these in your desktop environment's shortcut settings (GNOME: Settings → Keyboard → Custom Shortcuts).
+| Flag | Description | Default |
+|---|---|---|
+| `--lang`, `-l` | Language for recognition, [supported languages](https://github.com/eriknovikov/voice-type/blob/main/src/constants.ts) | `en-US` |
+| `--browser`, `-b` | Browser to use | `chrome` or `chromium` |
+| `--browser_path`, `-p` | Path for custom installs (e.g. `google-chrome-beta`) | - |
+| `--sound`, `-s` | Enable sound notifications | off |
+| `--no-text` | Disable text notifications | on |
+| `--detached`, `-d` | Run in detached mode | - |
+
+---
+
+# Keyboard Shortcuts (optional)
+
+Bind these in your desktop environment's shortcut settings.
+
+> [!TIP]
+> To pass flags, wrap commands with `sh -c "command --flag"`. Example: `sh -c "voice-type --lang es"`
 
 ## Flatpak
 
@@ -64,40 +87,19 @@ Bind these in your desktop environment's shortcut settings (GNOME: Settings → 
 | F9 | Toggle daemon | `sh -c "flatpak ps \| grep -q VoiceType && curl -sf http://127.0.0.1:3232/exit \|\| flatpak run org.github.eriknovikov.VoiceType"` |
 | F10 | Toggle dictation | `curl http://127.0.0.1:3232/toggle` |
 
-## Binary, npm
+## Binary and npm
 
 | Key | Action | Command |
 |---|---|---|
-| F8 | Start daemon | `sh -c "voice-type"` |
-| F9 | Start dictation | `sh -c "curl http://127.0.0.1:3232/start"` |
-| F10 | Stop dictation | `sh -c "curl http://127.0.0.1:3232/stop"` |
+| F8 | Start daemon | `voice-type` |
+| F9 | Toggle dictation | `curl http://127.0.0.1:3232/toggle` |
+| F10 | Stop daemon | `curl http://127.0.0.1:3232/exit` |
 
-For npm, the F8 command needs the full paths. Run `which node; which voice-type` in your terminal first, then set F8 to:
-```
-sh -c "/path/to/node /path/to/voice-type"
-```
-
-## Endpoints
-
-| Endpoint | Action |
-|---|---|
-| `/start` | Start listening |
-| `/stop` | Stop listening |
-| `/toggle` | Toggle listening on/off |
-| `/exit` | Stop the daemon |
-
----
-
-# Options
-
-| Flag | Description | Default |
-|---|---|---|
-| `--language`, `-l` | Language for recognition, [supported languages](https://github.com/eriknovikov/voice-type/blob/main/src/constants.ts) | `en-US` |
-| `--browser`, `-b` | Browser to use | `chrome` or `chromium` |
-| `--browser_path`, `-p` | Path for custom installs (e.g. `google-chrome-beta`) | - |
-| `--sound`, `-s` | Enable sound notifications | off |
-| `--no-text` | Disable text notifications | on |
-| `--detached`, `-d` | Run in detached mode | - |
+> [!TIP]
+> For npm, the F8 command needs the full paths. Run `which node; which voice-type` in your terminal first, then set F8 to:
+> ```
+> /path/to/node /path/to/voice-type
+> ```
 
 ---
 

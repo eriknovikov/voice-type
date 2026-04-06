@@ -32,18 +32,18 @@ The daemon communicates with the Chrome page via [Chrome DevTools Protocol (CDP)
 
 ---
 
-## HTTP Control Server
+## Usage
 
 The daemon exposes four endpoints on localhost:
 
-| Endpoint | What it does |
+| Action | Command |
 |---|---|
-| `POST /start` | Tells the Chrome page to start `SpeechRecognition` |
-| `POST /stop` | Stops recognition and flushes any remaining transcript |
-| `POST /toggle` | Starts if idle, stops if listening |
-| `POST /exit` | Stops recognition, closes Chrome, shuts down the daemon |
+| Start listening | `curl http://127.0.0.1:3232/start` |
+| Stop listening | `curl http://127.0.0.1:3232/stop` |
+| Toggle listening | `curl http://127.0.0.1:3232/toggle` |
+| Stop daemon | `curl http://127.0.0.1:3232/exit` |
 
-These are plain HTTP — no auth, localhost only. `curl` calls them from your keyboard shortcut.
+These are plain HTTP — no auth, localhost only.
 
 ---
 
