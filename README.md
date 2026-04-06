@@ -32,6 +32,20 @@ curl -fsSL https://github.com/eriknovikov/voice-type/releases/latest/download/in
 npm install --global voice-type-cli@latest
 ```
 
+### Sound Assets (npm only)
+
+When installing via npm, sound files are not included. If you want audio notifications, download them manually:
+
+```bash
+sudo mkdir -p /usr/local/share/voice-type/sounds
+curl -L -o /usr/local/share/voice-type/sounds/start.oga \
+  https://github.com/eriknovikov/voice-type/raw/main/assets/sounds/start.oga
+curl -L -o /usr/local/share/voice-type/sounds/stop.oga \
+  https://github.com/eriknovikov/voice-type/raw/main/assets/sounds/stop.oga
+```
+
+This places sounds in the same location the binary installer uses, so the `--sound` flag will work.
+
 ### System dependencies (binary and npm only)
 
 | Package | Purpose | Install |
