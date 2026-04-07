@@ -32,26 +32,22 @@ curl -fsSL https://github.com/eriknovikov/voice-type/releases/latest/download/in
 npm install --global voice-type-cli@latest
 ```
 
-### Sound Assets (npm only)
-
-When installing via npm, sound files are not included. If you want audio notifications, download them manually:
-
-```bash
-sudo mkdir -p /usr/local/share/voice-type/sounds
-curl -L -o /usr/local/share/voice-type/sounds/start.oga \
-  https://github.com/eriknovikov/voice-type/raw/main/assets/sounds/start.oga
-curl -L -o /usr/local/share/voice-type/sounds/stop.oga \
-  https://github.com/eriknovikov/voice-type/raw/main/assets/sounds/stop.oga
-```
-
-This places sounds in the same location the binary installer uses, so the `--sound` flag will work.
-
 ### System dependencies (binary and npm only)
 
 | Package | Purpose | Install |
 |---|---|---|
 | `dotool` | Types text into the system | AUR (Arch), COPR (Fedora), or [from source](https://git.sr.ht/~geb/dotool/) |
 | `paplay` | Audio notifications | Usually pre-installed. If missing: `pulseaudio-utils` (Ubuntu/Debian/Fedora) or `libpulse` (Arch) |
+
+### Sound Assets (optional, npm only)
+
+Download to `/usr/local/share/voice-type/sounds/` for `--sound` to work:
+
+```bash
+sudo mkdir -p /usr/local/share/voice-type/sounds
+curl -L -o /usr/local/share/voice-type/sounds/start.oga https://github.com/eriknovikov/voice-type/raw/main/assets/sounds/start.oga
+curl -L -o /usr/local/share/voice-type/sounds/stop.oga https://github.com/eriknovikov/voice-type/raw/main/assets/sounds/stop.oga
+```
 
 ---
 
@@ -110,15 +106,11 @@ Bind these in your desktop environment's shortcut settings.
 
 | Key | Action | Command |
 |---|---|---|
-| F8 | Start daemon | `voice-type` |
-| F9 | Toggle dictation | `curl http://127.0.0.1:3232/toggle` |
-| F10 | Stop daemon | `curl http://127.0.0.1:3232/exit` |
+| F9 | Toggle daemon | `sh -c "pgrep -f 'voice-type' >/dev/null && curl -sf http://127.0.0.1:3232/exit \|\| voice-type"` |
+| F10 | Toggle dictation | `curl http://127.0.0.1:3232/toggle` |
 
-> [!TIP]
-> For npm, the F8 command needs the full paths. Run `which node; which voice-type` in your terminal first, then set F8 to:
-> ```
-> /path/to/node /path/to/voice-type
-> ```
+> [!NOTE]
+> `voice-type` should already be in your PATH with both installation methods.
 
 ---
 
