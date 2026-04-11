@@ -75,27 +75,19 @@ You start the daemon once (F9). It sits idle in the background without consuming
 
 # Keyboard Shortcuts (recommended)
 
-Bind these in your desktop environment's shortcut settings. If you're in GNOME, go to Settings -> Keyboard -> View and Customize Shortcuts
+Bind these in your desktop environment's shortcut settings. If you're in GNOME, go to Settings -> Keyboard -> View and Customize Shortcuts.
 
-> [!TIP]
-> To pass flags, wrap commands with `sh -c "command --flag"`. Example: `sh -c "voice-type --lang es-ES"`
-
-## Flatpak
 
 | Key | Action | Command |
 |---|---|---|
-| F9 | Toggle daemon | `sh -c "curl http://127.0.0.1:3232/exit 2>/dev/null \|\| flatpak run org.github.eriknovikov.VoiceType"` |
+| F9 | Toggle daemon | `sh -c "curl http://127.0.0.1:3232/exit 2>/dev/null \|\| START_COMMAND"` |
 | F10 | Toggle dictation | `curl http://127.0.0.1:3232/toggle` |
 
 ## npm
+Replace START_COMMAND with the output of `echo "$(which node) $(which voice-type)"`. For example, in my case, START_COMMAND would be `/home/nkv/.nvm/versions/node/v25.9.0/bin/node /home/nkv/.nvm/versions/node/v25.9.0/bin/voice-type` 
 
-| Key | Action | Command |
-|---|---|---|
-| F9 | Toggle daemon | `sh -c "curl http://127.0.0.1:3232/exit 2>/dev/null \|\| voice-type"` |
-| F10 | Toggle dictation | `curl http://127.0.0.1:3232/toggle` |
-
-> [!NOTE]
-> `voice-type` should already be in your PATH with both installation methods.
+## Flatpak
+Replace START_COMMAND with `flatpak run org.github.eriknovikov.VoiceType`
 
 ---
 
@@ -117,6 +109,8 @@ Bind these in your desktop environment's shortcut settings. If you're in GNOME, 
 ```bash
 export PATH="$PATH:/usr/local/bin"
 ```
+
+**npm installation works properly via cli but not via shortcut**: GNOME (or Desktop Environments in general) don't know about your PATH defined in .bashrc or .zshrc; to fix it, make sure you are sending the full paths in your system of both `node` and `voice-type`. So, the command should be the result of running this `$(which node) $(which voice-type)`, and CANNOT be just `voice-type`.
 
 **Microphone not detected or no results in dictation** — Check your system audio settings. Make sure you have configured your mic as the system's default mic. In most distros, you should use `pavucontrol`(in your package manager).
 
