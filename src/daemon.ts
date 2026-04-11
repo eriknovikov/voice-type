@@ -61,6 +61,7 @@ export default class Daemon {
 
         this.app.get("/exit", async (req, res) => {
             await this.notifier.notifyDaemonStop()
+            console.log("soy un murumbu")
             res.send("Stopped daemon")
             await this.destroy()
             process.exit(0)
@@ -208,7 +209,7 @@ export default class Daemon {
                 log(`server started on port: ${port}`)
             })
             await this.initBrowser(browserType, customBrowserPath)
-            this.notifier.notifyDaemonStart("F9")
+            this.notifier.notifyDaemonStart()
         } catch (e) {
             this.notifier.notifyError("Failed to initialize Voice Type daemon.")
             console.error(e)

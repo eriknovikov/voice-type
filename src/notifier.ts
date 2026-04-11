@@ -15,8 +15,8 @@ export default class Notifier {
     }
 
     // All methods async - await text for D-Bus, await sound for safety before exit
-    async notifyDaemonStart(hotkey: string) {
-        await this.textNotifier.notifyDaemonStart(hotkey)
+    async notifyDaemonStart() {
+        await this.textNotifier.notifyDaemonStart()
         this.soundNotifier.notifyStart()
     }
 

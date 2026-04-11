@@ -1,10 +1,10 @@
 # Voice Type
 
-System-wide speech-to-text for Linux. Press a key, speak, and text appears wherever the cursor is.
+System-wide speech-to-text for Linux. Press a key, speak, and text appears wherever your cursor is.
 
-It runs Chrome's built-in Web Speech API quietly in the background. No local models, no paid service, no startup delay. It works in editors, terminals, browsers, and most other apps. If the transcript changes mid-sentence, Voice Type backspaces and retypes the corrected text.
+Runs Chrome's Web Speech API quietly in the background — no local models, no paid service, no startup delay. Works in editors, terminals, browsers, and most other apps. If the transcript changes mid-sentence, Voice Type backspaces and retypes the corrected text.
 
-**Requirements:** Linux with a desktop environment, a working microphone, and Chrome or Chromium installed system-wide (required to expose the Web Speech API).
+Requirements: Linux with a desktop environment, a working microphone, and Chrome or Chromium installed system-wide.
 
 ---
 
@@ -20,11 +20,6 @@ cd voice-type
 chmod +x ./flatpak/build.sh && ./flatpak/build.sh
 ```
 
-## Binary
-
-```bash
-curl -fsSL https://github.com/eriknovikov/voice-type/releases/latest/download/install.sh | bash
-```
 
 ## npm
 
@@ -32,16 +27,16 @@ curl -fsSL https://github.com/eriknovikov/voice-type/releases/latest/download/in
 npm install --global voice-type-cli@latest
 ```
 
-### System dependencies (binary and npm only)
+### System dependencies (npm only)
 
 | Package | Purpose | Install |
 |---|---|---|
-| `dotool` | Types text into the system | AUR (Arch), COPR (Fedora), or [from source](https://git.sr.ht/~geb/dotool/) |
+| `dotool` | Types text into the system. | [See dotool docs](https://git.sr.ht/~geb/dotool/) 
 | `paplay` | Audio notifications | Usually pre-installed. If missing: `pulseaudio-utils` (Ubuntu/Debian/Fedora) or `libpulse` (Arch) |
 
-### Sound Assets (optional, npm only)
+### Sound Assets (optional)
 
-Download to `/usr/local/share/voice-type/sounds/` for `--sound` to work:
+To use sound notifications (`--sound` flag) when transcription starts or stops: 
 
 ```bash
 sudo mkdir -p /usr/local/share/voice-type/sounds
@@ -49,31 +44,21 @@ curl -L -o /usr/local/share/voice-type/sounds/start.oga https://github.com/erikn
 curl -L -o /usr/local/share/voice-type/sounds/stop.oga https://github.com/eriknovikov/voice-type/raw/main/assets/sounds/stop.oga
 ```
 
+
+### Browser symlink (required)
+
+Voice Type expects browser binaries named `google-chrome` and `chromium` respectively. If your browser uses a different name (e.g. `google-chrome-stable`), add a symlink:
+
+```bash
+sudo ln -s /usr/bin/google-chrome-stable /usr/bin/google-chrome #similar for chromium
+```
+
 ---
-
-# Start
-
-> [!IMPORTANT]
-> Ensure these symlinks exist:
-> - `google-chrome` → your Chrome variant (e.g., `sudo ln -s /usr/bin/google-chrome-stable /usr/bin/google-chrome`)
-> - `chromium` → your Chromium variant (e.g., `sudo ln -s /usr/bin/chromium-stable /usr/bin/chromium`)
-
-| Installation | Command |
-|---|---|
-| Flatpak | `flatpak run org.github.eriknovikov.VoiceType` |
-| Binary | `voice-type` |
-| npm | find the path with `which node; which voice-type`, then run: `/path/to/node /path/to/voice-type` |
 
 # Usage
 
-| Action | Command |
-|---|---|
-| Start listening | `curl http://127.0.0.1:3232/start` |
-| Stop listening | `curl http://127.0.0.1:3232/stop` |
-| Toggle listening | `curl http://127.0.0.1:3232/toggle` |
-| Stop daemon | `curl http://127.0.0.1:3232/exit` |
+You start the daemon once (F9). It sits idle in the background without consuming resources nor listening through the mic. When you want to dictate something, press F10, and whatever you speak gets transcribed into the currently active window in the system. Once you are done, press F10 again to stop listening. If for some reason you no longer want the daemon running idly in the background, kill it via F9.
 
----
 
 # Options
 
@@ -88,25 +73,25 @@ curl -L -o /usr/local/share/voice-type/sounds/stop.oga https://github.com/erikno
 
 ---
 
-# Keyboard Shortcuts (optional)
+# Keyboard Shortcuts (recommended)
 
-Bind these in your desktop environment's shortcut settings.
+Bind these in your desktop environment's shortcut settings. If you're in GNOME, go to Settings -> Keyboard -> View and Customize Shortcuts
 
 > [!TIP]
-> To pass flags, wrap commands with `sh -c "command --flag"`. Example: `sh -c "voice-type --lang es"`
+> To pass flags, wrap commands with `sh -c "command --flag"`. Example: `sh -c "voice-type --lang es-ES"`
 
 ## Flatpak
 
 | Key | Action | Command |
 |---|---|---|
-| F9 | Toggle daemon | `sh -c "flatpak ps \| grep -q VoiceType && curl -sf http://127.0.0.1:3232/exit \|\| flatpak run org.github.eriknovikov.VoiceType"` |
+| F9 | Toggle daemon | `sh -c "curl http://127.0.0.1:3232/exit 2>/dev/null \|\| flatpak run org.github.eriknovikov.VoiceType"` |
 | F10 | Toggle dictation | `curl http://127.0.0.1:3232/toggle` |
 
-## Binary and npm
+## npm
 
 | Key | Action | Command |
 |---|---|---|
-| F9 | Toggle daemon | `sh -c "pgrep -f 'voice-type' >/dev/null && curl -sf http://127.0.0.1:3232/exit \|\| voice-type"` |
+| F9 | Toggle daemon | `sh -c "curl http://127.0.0.1:3232/exit 2>/dev/null \|\| voice-type"` |
 | F10 | Toggle dictation | `curl http://127.0.0.1:3232/toggle` |
 
 > [!NOTE]
@@ -118,23 +103,32 @@ Bind these in your desktop environment's shortcut settings.
 
 | Installation | Command |
 |---|---|
-| Flatpak | `flatpak uninstall org.github.eriknovikov.voice-type && flatpak uninstall --unused` |
+| Flatpak | `flatpak uninstall org.github.eriknovikov.VoiceType && flatpak uninstall --unused` |
 | npm | `npm uninstall --global voice-type-cli` |
-| Binary | `sudo rm -rf /usr/local/share/voice-type /usr/local/bin/voice-type` |
 
 ---
 
 # Troubleshooting
 
-**`dotool: command not found`** — Install dotool (see above).
+**`dotool issues`** — [Check the docs](https://git.sr.ht/~geb/dotool/). After its installation, make sure that you run `sudo udevadm control --reload && sudo udevadm trigger`. Also, dotool requires that your user is in the input group. Specifically, if your user does not appear in the output of running `groups`, make sure to add it via `sudo usermod -aG input $USER`. You have to reboot for the changes to take effect.
+
 
 **`voice-type: command not found`** — Add `/usr/local/bin` to your PATH in `~/.bashrc` or `~/.zshrc`:
 ```bash
 export PATH="$PATH:/usr/local/bin"
 ```
 
-**Microphone not detected** — Check system audio settings.
+**Microphone not detected or no results in dictation** — Check your system audio settings. Make sure you have configured your mic as the system's default mic. In most distros, you should use `pavucontrol`(in your package manager).
+
 
 ---
 
-Voice Type is free and open source. See [INTERNALS.md](./INTERNALS.md) for how it works and how to contribute.
+
+## Contributing
+
+Voice Type is totally free and open source. Bug reports, fixes, documentation improvements, and feature suggestions are all welcome. The codebase entry point is `src/index.ts`. The HTTP server, CDP communication, and dotool integration are each fairly self-contained, so it's not hard to find your way around.
+
+Open an issue first for anything non-trivial — good to align before putting work into a PR.
+
+## Final notes
+You can read [my blog about voice-type](https://dev.to/eriknovikov/how-i-built-voice-type-3i2p), or check [INTERNALS.md](./INTERNALS.md) to see in greater depth how voice-type works.

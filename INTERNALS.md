@@ -63,8 +63,3 @@ The toggle-daemon shortcut works by checking `flatpak ps` for a running `VoiceTy
 
 ---
 
-## Contributing
-
-Bug reports, fixes, documentation improvements, and feature suggestions are all welcome. The codebase entry point is `src/index.ts`. The HTTP server, CDP communication, and dotool integration are each fairly self-contained, so it's not hard to find your way around.
-
-Open an issue first for anything non-trivial — good to align before putting work into a PR.
