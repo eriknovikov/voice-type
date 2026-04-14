@@ -5,11 +5,11 @@ import { DiffEnum } from "./types.js"
 export default class TypingController {
     private prevText: string = ""
     private dotool: ChildProcessWithoutNullStreams
-
+    private hasStopped = false
     constructor() {
         this.dotool = this.initDotool()
     }
-
+    public setStopped(stopped: boolean){this.hasStopped = stopped}
     private initDotool() {
         const dotool = spawn("dotool", [], {
             // We force "us" layout so standard ASCII characters always map correctly.
@@ -98,6 +98,7 @@ export default class TypingController {
     }
 
     public applyDiff(currText: string, diffResult: DiffEnum) {
+        if (this.hasStopped) return
         switch (diffResult) {
             case DiffEnum.NoChange:
                 // Do nothing

@@ -87,6 +87,7 @@ export default class Daemon {
         }
         log("Starting transcription...")
         this.isWSAListening = true
+        this.typingController.setStopped(false)
         this.notifier.notifyMicStart()
         await this.page!.evaluate(startListening)
         res.send("Listening")
@@ -111,6 +112,7 @@ export default class Daemon {
         }
         log(`Stopping transcription... Reason: ${reason}`)
         this.isWSAListening = false
+        this.typingController.setStopped(true)
         this.typingController.reset()
 
         // Trigger corresponding notification
