@@ -1,6 +1,6 @@
 {
     "name": "voice-type-cli",
-    "version": "1.2.2",
+    "version": "1.2.3",
     "description": "System-wide Speech To Text dictation tool",
     "main": "dist/index.js",
     "type": "module",
