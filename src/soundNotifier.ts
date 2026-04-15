@@ -37,29 +37,36 @@ export class SoundNotifier {
         this.enabled = enabled
     }
 
-    private notify(audioPath: string) {
-        if (!this.enabled || !audioPath) return
+    private async notify(audioPath: string): Promise<void> {
+        if (!this.enabled || !audioPath) return Promise.resolve()
 
-        const proc = spawn("paplay", [audioPath])
+        return new Promise((resolve) => {
+            const proc = spawn("paplay", [audioPath])
 
-        proc.on("error", (err) => {
-            console.error("[SoundNotifier] paplay error:", err)
+            proc.on("error", (err) => {
+                console.error("[SoundNotifier] paplay error:", err)
+                resolve()
+            })
+
+            proc.on("close", () => {
+                resolve()
+            })
         })
     }
 
-    notifyStart() {
-        this.notify(SOUNDS.START)
+    async notifyStart() {
+        await this.notify(SOUNDS.START)
     }
 
-    notifyStop() {
-        this.notify(SOUNDS.STOP)
+    async notifyStop() {
+        await this.notify(SOUNDS.STOP)
     }
 
-    notifyOffline() {
-        this.notify(SOUNDS.ERROR)
+    async notifyOffline() {
+        await this.notify(SOUNDS.ERROR)
     }
 
-    notifyError() {
-        this.notify(SOUNDS.ERROR)
+    async notifyError() {
+        await this.notify(SOUNDS.ERROR)
     }
 }

@@ -1,5 +1,5 @@
 import { Browser, Page } from "puppeteer-core"
-import { startListening, stopListening, initWSA } from "./browser.js"
+import * as browser from "./browser.js"
 import TypingController from "./typingController.js"
 import { log } from "./logger.js"
 import express, { type Express, type Response } from "express"
@@ -61,7 +61,6 @@ export default class Daemon {
 
         this.app.get("/exit", async (req, res) => {
             await this.notifier.notifyDaemonStop()
-            console.log("soy un murumbu")
             res.send("Stopped daemon")
             await this.destroy()
             process.exit(0)
@@ -87,13 +86,13 @@ export default class Daemon {
         }
         log("Starting transcription...")
         this.isWSAListening = true
-        this.typingController.setStopped(false)
+        this.typingController.hasStopped = false
         this.notifier.notifyMicStart()
-        await this.page!.evaluate(startListening)
+        await this.page!.evaluate(browser.startListening)
         res.send("Listening")
     }
 
-    private async stopTranscription(reason: "intentional" | "offline", res?: Response) {
+    private async stopTranscription(reason: "intentional" | "offline" | "silence", res?: Response) {
         if (this.stopCooldown) {
             log(`Stop request ignored - still in cooldown period (reason: ${reason})`)
             res?.status(429).send("Cooldown active")
@@ -112,12 +111,14 @@ export default class Daemon {
         }
         log(`Stopping transcription... Reason: ${reason}`)
         this.isWSAListening = false
-        this.typingController.setStopped(true)
+        this.typingController.hasStopped = true
         this.typingController.reset()
 
         // Trigger corresponding notification
         if (reason === "intentional") {
-            this.notifier.notifyMicStop()
+            this.notifier.notifyMicStopIntentional()
+        } else if (reason == "silence") {
+            this.notifier.notifyMicStopSilence()
         } else if (reason === "offline") {
             this.notifier.notifyOffline()
         }
@@ -127,7 +128,7 @@ export default class Daemon {
             this.stopCooldown = false
         }, 100)
 
-        await this.page!.evaluate(stopListening)
+        await this.page!.evaluate(browser.stopRecognition)
         res?.send("Stopped")
     }
 
@@ -142,59 +143,15 @@ export default class Daemon {
 
         await this.page.goto("data:text/html,<html><body><h1>Voice Type</h1></body></html>")
         await this.page.exposeFunction("onSpeechUpdate", this.handleSpeechUpdate.bind(this))
-        await this.page.exposeFunction("onOffline", this.handleOffline.bind(this))
-        await this.page.exposeFunction("onError", this.handleError.bind(this))
-        await this.page.evaluate(initWSA, this.wsaLanguage)
+        await this.page.exposeFunction("onBrowserRecStop", this.handleBrowserRecStop.bind(this))
+        await this.page.evaluate(browser.initWSA, this.wsaLanguage)
     }
 
     private handleSpeechUpdate(payload: { text: string }) {
         this.typingController.calculateAndApplyDiff(payload.text)
     }
-
-    private async handleOffline(payload: {}) {
-        log("Offline. Please connect to network")
-        await this.stopTranscription("offline")
-    }
-
-    private async handleError(payload: { type: string; message: string }) {
-        const { type, message } = payload
-
-        // Map error types to user-friendly messages
-        let userMessage = message
-        switch (type) {
-            case "not-allowed":
-                userMessage = "Microphone permission denied. Please allow microphone access in your browser settings."
-                break
-            case "no-speech":
-                userMessage = "No speech detected. Please check your microphone and try again."
-                break
-            case "audio-capture":
-                userMessage = "No microphone found. Please connect a microphone and try again."
-                break
-            case "network":
-                userMessage = "Network error. Please check your internet connection."
-                break
-            case "not-supported":
-                userMessage = "Web Speech API not supported. Try using Chrome or Chromium-based browsers."
-                break
-            case "service-not-allowed":
-                userMessage =
-                    "Speech recognition service not allowed. This browser may have compatibility issues. Try Chrome or Chromium."
-                break
-            case "aborted":
-                userMessage = "Speech recognition was aborted."
-                break
-            default:
-                userMessage = message || `Speech recognition error: ${type}`
-        }
-
-        log(`Speech recognition error (${type}): ${userMessage}`)
-        this.notifier.notifyError(userMessage)
-
-        // Stop transcription on most errors, but not on 'no-speech' or 'aborted'
-        if (type !== "no-speech" && type !== "aborted") {
-            await this.stopTranscription("offline")
-        }
+    private async handleBrowserRecStop(payload: { reason: "silence" | "offline" | undefined }) {
+        if (this.isWSAListening) await this.stopTranscription(payload.reason ?? "intentional")
     }
 
     //start spawns browser and server listener

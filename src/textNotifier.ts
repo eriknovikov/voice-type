@@ -1,7 +1,7 @@
 import { sessionBus, Variant, type MessageBus } from "dbus-next"
 import type { Urgency } from "./types"
 import { log } from "./logger"
-
+const SYNC_ID = "voice-type-dictation"
 /**
  * Handles text notifications via D-Bus (org.freedesktop.Notifications)
  * Maintains a single connection and manages notification replacement
@@ -12,7 +12,7 @@ export class TextNotifier {
     private bus: MessageBus | null = null
     private notifyInterface: any = null
     private lastNotificationId: number = 0
-    private readonly SYNC_ID = "voice-type-dictation"
+
     private initPromise: Promise<void> | null = null
     private isInitializing: boolean = false
     private maxRetries: number = 3
@@ -119,7 +119,7 @@ export class TextNotifier {
             const hints = {
                 transient: new Variant("b", true),
                 urgency: new Variant("y", this.getUrgencyByte(urgency)),
-                "x-canonical-private-synchronous": new Variant("s", this.SYNC_ID),
+                "x-canonical-private-synchronous": new Variant("s", SYNC_ID),
             }
 
             // D-Bus Notify Signature:
@@ -145,7 +145,7 @@ export class TextNotifier {
                     const retryHints = {
                         transient: new Variant("b", true),
                         urgency: new Variant("y", this.getUrgencyByte(urgency)),
-                        "x-canonical-private-synchronous": new Variant("s", this.SYNC_ID),
+                        "x-canonical-private-synchronous": new Variant("s", SYNC_ID),
                     }
                     this.lastNotificationId = await this.notifyInterface.Notify(
                         "Voice Type",
@@ -179,30 +179,38 @@ export class TextNotifier {
         await this.notify("⏹️ Voice Type Daemon Stopped", "Daemon has been shut down.", "process-stop", "normal")
     }
 
-    notifyMicStart() {
-        this.notify(
-            "🟢 Voice Type Listening...",
+    async notifyMicStart() {
+        await this.notify(
+            "🟢 Voice Type listening...",
             "Typing into the focused window.",
             "microphone-sensitivity-high",
             "normal",
         )
     }
 
-    async notifyMicStop() {
+    async notifyMicStopIntentional() {
         await this.notify(
             "🛑 Voice Type Stopped",
-            "Microphone closed. Text finalized.",
+            "Microphone closed normally",
+            "microphone-sensitivity-muted",
+            "normal",
+        )
+    }
+    async notifyMicStopSilence() {
+        await this.notify(
+            "🛑 Voice Type Stopped",
+            "Microphone closed due to silence",
             "microphone-sensitivity-muted",
             "normal",
         )
     }
 
-    notifyOffline() {
-        this.notify("📡 Connection Error", "WSA requires internet to transcribe speech.", "network-error", "critical")
+    async notifyOffline() {
+        await this.notify("📡 Voice Type offline", "Check your internet connection", "network-error", "critical")
     }
 
-    notifyError(msg: string) {
-        this.notify("⚠️ Voice Type Error", msg, "dialog-error", "critical")
+    async notifyError(msg: string) {
+        await this.notify("⚠️ Voice Type Error", msg, "dialog-error", "critical")
     }
 
     async notifyAlreadyRunning() {

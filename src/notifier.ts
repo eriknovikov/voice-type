@@ -14,10 +14,9 @@ export default class Notifier {
         this.soundNotifier = new SoundNotifier(opts.soundsNotifsEnabled ?? true)
     }
 
-    // All methods async - await text for D-Bus, await sound for safety before exit
     async notifyDaemonStart() {
         await this.textNotifier.notifyDaemonStart()
-        this.soundNotifier.notifyStart()
+        await this.soundNotifier.notifyStart()
     }
 
     async notifyDaemonStop() {
@@ -27,17 +26,21 @@ export default class Notifier {
 
     async notifyMicStart() {
         await this.textNotifier.notifyMicStart()
-        this.soundNotifier.notifyStart()
+        await this.soundNotifier.notifyStart()
     }
 
-    async notifyMicStop() {
-        await this.textNotifier.notifyMicStop()
-        this.soundNotifier.notifyStop()
+    async notifyMicStopIntentional() {
+        await this.textNotifier.notifyMicStopIntentional()
+        await this.soundNotifier.notifyStop()
+    }
+    async notifyMicStopSilence() {
+        await this.textNotifier.notifyMicStopSilence()
+        await this.soundNotifier.notifyStop()
     }
 
-    notifyOffline() {
-        this.textNotifier.notifyOffline()
-        this.soundNotifier.notifyOffline()
+    async notifyOffline() {
+        await this.textNotifier.notifyOffline()
+        await this.soundNotifier.notifyOffline()
     }
 
     async notifyError(msg: string) {
