@@ -1,6 +1,5 @@
 import puppeteer from "puppeteer-core"
 import { spawn } from "child_process"
-import { log } from "./logger"
 
 const CHROME_PATH = "/usr/bin/google-chrome"
 const CHROMIUM_PATH = "/usr/bin/chromium"
@@ -61,20 +60,15 @@ async function checkBrowserExists(browserPath: string): Promise<boolean> {
     })
 }
 
-export async function launchBrowser(browserType: BrowserType, browserPath?: string) {
-    let defaultBrowserPath: string
-
-    switch (browserType) {
-        case "chrome":
-            defaultBrowserPath = CHROME_PATH
-            break
-        case "chromium":
-            defaultBrowserPath = CHROMIUM_PATH
-            break
+export async function launchBrowser() {
+    let browserType = process.env.BROWSER_TYPE as BrowserType | undefined
+    if (!browserType) {
+        browserType = (await detectBrowser()) as BrowserType
     }
-    if (!browserPath) browserPath = defaultBrowserPath
 
-    log(`launching browser at ${browserPath}`)
+    const defaultBrowserPath = browserType == "chrome" ? CHROME_PATH : CHROMIUM_PATH
+    const browserPath = process.env.BROWSER_PATH ? process.env.BROWSER_PATH : defaultBrowserPath
+
     return puppeteer.launch({
         executablePath: browserPath,
         // @ts-ignore

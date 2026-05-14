@@ -15,7 +15,7 @@ export interface CliFlags {
     lang: WSALanguage
     textNotifs: boolean
     soundNotifs: boolean
-    browser: BrowserType
+    browserType: BrowserType
     browserPath?: string
     detached: boolean
     help: boolean

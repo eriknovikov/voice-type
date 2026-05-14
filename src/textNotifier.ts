@@ -1,6 +1,6 @@
 import { sessionBus, Variant, type MessageBus } from "dbus-next"
 import type { Urgency } from "./types"
-import { log } from "./logger"
+import { log } from "./utils.js"
 const SYNC_ID = "voice-type-dictation"
 /**
  * Handles text notifications via D-Bus (org.freedesktop.Notifications)

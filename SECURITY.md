@@ -23,7 +23,7 @@ Voice Type requires the following permissions to function:
 
 ### Desktop Notifications
 - **Purpose**: Display transcription status (listening/stopped)
-- **Optional**: Can be disabled with `--no-text` flag
+- **Optional**: Can be enabled with `--text` flag
 
 ### Filesystem Access
 - **xdg-config**: User configuration storage

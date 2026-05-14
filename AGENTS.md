@@ -119,8 +119,8 @@ Voice Type is a system-wide speech-to-text daemon for Linux. It uses Chrome's We
 ### CLI Parsing: [`src/cli.ts`](src/cli.ts)
 - Uses `node:util.parseArgs` with strict mode
 - Options:
-  - `-s, --sound` - enable sound notifications
-  - `--no-text` - disable text notifications
+  - `-s, --sound` - enable sound notifications (default: disabled)
+  - `--text` - enable text notifications (default: disabled)
   - `-l, --lang <lang>` - WSA language (default: "en-US")
   - `-b, --browser <browser>` - "chrome" or "chromium" (default: "chrome")
   - `-p, --browser_path <path>` - custom browser executable path
@@ -228,7 +228,7 @@ User must be in `input` group: `sudo usermod -aG input $USER` (requires reboot)
 voice-type                    # Start daemon (F9 to toggle, F10 to dictate)
 voice-type -l es-ES          # Spanish dictation
 voice-type -s                # Enable sound notifications
-voice-type --no-text         # Disable text notifications
+voice-type --text            # Enable text notifications
 voice-type -d                # Run detached (background)
 voice-type -p /path/to/chrome # Custom browser path
 ```

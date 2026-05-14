@@ -5,7 +5,8 @@ export const PORT = 3232
 
 const flags = process.argv.slice(2)
 const parsedFlags = cli.parseFlags(flags)
-console.log(`launching daemon with args: \n`, parsedFlags)
+console.log("launch args:", JSON.stringify(parsedFlags))
+
 if (parsedFlags.help) {
     cli.showHelp()
     process.exit(0)
@@ -28,4 +29,9 @@ async function destroyDaemon() {
 process.on("SIGTERM", destroyDaemon)
 process.on("SIGINT", destroyDaemon)
 
-daemon.start(PORT, parsedFlags.browser, parsedFlags.browserPath).catch(console.error)
+if (parsedFlags.browserPath) {
+    process.env.BROWSER_PATH = parsedFlags.browserPath
+}
+process.env.BROWSER_TYPE = parsedFlags.browserType
+
+daemon.start(PORT).catch(console.error)

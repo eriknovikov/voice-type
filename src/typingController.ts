@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process"
-import { log } from "./logger.js"
+import { log } from "./utils.js"
 import { DiffEnum } from "./types.js"
 
 export default class TypingController {
@@ -9,7 +9,7 @@ export default class TypingController {
     constructor() {
         this.dotool = this.initDotool()
     }
-    
+
     private initDotool() {
         const dotool = spawn("dotool", [], {
             // We force "us" layout so standard ASCII characters always map correctly.

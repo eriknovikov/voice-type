@@ -14,7 +14,7 @@ Voice Type is a system-wide speech-to-text dictation daemon for Linux that provi
   - Language selection via `-l, --lang` (default: `en-US`)
   - Browser selection via `-b, --browser` (default: `chrome`, supports `chromium`)
   - Custom browser path via `-p, --browser_path` for non-standard installations
-  - Notification toggles: `--no-text`, `--sound`
+  - Notification toggles: `--text`, `--sound`
   - Detached mode: `-d, --detached` for background operation
   - Help system with language support documentation
 - **Language Support**: 40+ BCP47 language tags defined in `src/constants.ts`
@@ -128,7 +128,7 @@ Notification Updates → D-Bus/paplay → User Feedback
 - **Language**: 40+ supported via `-l` flag (see `src/constants.ts`)
 - **Browser**: Chrome (default) or Chromium via `-b` flag
 - **Browser Path**: Custom path via `-p` flag for non-standard installations
-- **Notifications**: Text (`--no-text`), Sound (`--sound`)
+- **Notifications**: Text (`--text`), Sound (`--sound`)
 - **Operation Mode**: Foreground vs detached (`-d`)
 - **HTTP Port**: Fixed at 3232 (localhost only)
 
@@ -192,9 +192,9 @@ voice-type [options]
   -l, --lang <lang>       Web Speech API language (default: en-US)
   -b, --browser <browser> Browser type: chrome or chromium (default: chrome)
   -p, --browser_path <path> Custom path to browser executable
-  --no-text               Disable text notifications
-  --sound                 Enable sound notifications
-  -d, --detached          Run in background (detached mode)
+  --text                   Enable text notifications (default: disabled)
+  --sound                  Enable sound notifications (default: disabled)
+  -d, --detached           Run in background (detached mode)
   -h, --help              Show help message
 ```
 

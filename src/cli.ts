@@ -10,19 +10,19 @@ const options = {
         default: false,
         short: "s",
     },
-    "no-text": {
+    text: {
         type: "boolean",
         default: false,
+        short: "t",
     },
     lang: {
         type: "string",
         default: "en-US",
         short: "l",
     },
-    browser: {
+    browser_type: {
         type: "string",
         default: "chrome",
-        short: "b",
     },
     browser_path: {
         type: "string",
@@ -49,7 +49,7 @@ Options:
   -l, --lang <lang>       Set Web Speech API language (e.g., en-US, es-ES). Default: en-US
   -b, --browser <browser> Set browser type (chrome, chromium). Default: chrome
   -p, --browser_path <path> Set custom path to browser executable
-  --no-text                Disable text notifications (default: false)
+  --text                   Enable text notifications (default: false)
   --sound                  Enable sound notifications (default: false)
   -d, --detached           Run the daemon in the background (detached mode)
   -h, --help               Show this help message
@@ -105,16 +105,16 @@ export function parseFlags(args: string[]): CliFlags {
         process.exit(1)
     }
 
-    if (values.browser != "chrome" && values.browser != "chromium") {
-        console.error(`Error: Invalid Browser '${values.browser}'`)
+    if (values.browser_type != "chrome" && values.browser_type != "chromium") {
+        console.error(`Error: Invalid browser_type '${values.browser_type}'`)
         console.error(`Supported Browsers: "chrome", "chromium"`)
         process.exit(1)
     }
     return {
         lang: lang as WSALanguage,
-        browser: values.browser as BrowserType,
+        browserType: values.browser_type as BrowserType,
         browserPath: values.browser_path,
-        textNotifs: !values["no-text"],
+        textNotifs: values["text"],
         soundNotifs: values["sound"],
         detached: values.detached,
         help: values.help,

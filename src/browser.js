@@ -1,5 +1,5 @@
 export function initWSA(lang) {
-    console.log("browser connected. intializing WSA...")
+    console.log("browser connected. initializing Web Speech API...")
 
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition
     if (!SpeechRec) {
@@ -28,7 +28,7 @@ export function initWSA(lang) {
             }
         }
 
-        console.log("FINAL TEXT: ", finalText)
+        //console.log("FINAL TEXT: ", finalText)
         window.onSpeechUpdate({ text: interimText })
     }
 
@@ -77,4 +77,8 @@ export function stopRecognition() {
         const message = `Error stopping rec: ${e.message || JSON.stringify(e)}`
         console.error(message)
     }
+}
+
+export function healthCheck() {
+    return "ok"
 }

@@ -68,7 +68,7 @@ You start the daemon once (F9). It sits idle in the background without consuming
 | `--browser`, `-b` | Browser to use | `chrome` or `chromium` |
 | `--browser_path`, `-p` | Path for custom installs (e.g. `google-chrome-beta`) | - |
 | `--sound`, `-s` | Enable sound notifications | off |
-| `--no-text` | Disable text notifications | on |
+| `--text` | Enable text notifications | off |
 | `--detached`, `-d` | Run in detached mode | - |
 
 ---

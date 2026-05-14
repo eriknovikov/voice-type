@@ -1,31 +1,14 @@
 import { Browser, Page } from "puppeteer-core"
 import * as browser from "./browser.js"
 import TypingController from "./typingController.js"
-import { log } from "./logger.js"
-import express, { type Express, type Response } from "express"
+import { isPortInUse, log } from "./utils.js"
+import express, { type Express, type Request, type Response, type NextFunction } from "express"
 import Notifier from "./notifier.js"
-import { type BrowserType, launchBrowser } from "./browserLauncher.js"
-import { createServer } from "net"
+import { launchBrowser } from "./browserLauncher.js"
 import { PORT } from "./index.js"
 
-function isPortInUse(port: number): Promise<boolean> {
-    return new Promise((resolve) => {
-        const server = createServer()
-        server.once("error", () => {
-            resolve(true)
-        })
-        server.once("listening", () => {
-            server.once("close", () => {
-                resolve(false)
-            })
-            server.close()
-        })
-        server.listen(port, "127.0.0.1")
-    })
-}
-
 export default class Daemon {
-    private wsaLanguage: string
+    private wsaLanguage: string = "en-US"
     private browser: Browser | null = null
     private page: Page | null = null
     private isWSAListening: boolean = false
@@ -39,19 +22,22 @@ export default class Daemon {
         this.app = express()
         this.setupRoutes()
         this.notifier = new Notifier({ textNotifsEnabled, soundsNotifsEnabled })
-        this.wsaLanguage = wsaLanguage || "en-US"
     }
 
     private setupRoutes() {
-        this.app.get("/start", async (req, res) => {
+        this.app.get("/health", (req, res) => {
+            res.json({ status: "ok" })
+        })
+
+        this.app.get("/start", this.browserHealthMiddleware.bind(this), async (req, res) => {
             await this.startTranscription(res)
         })
 
-        this.app.get("/stop", async (req, res) => {
+        this.app.get("/stop", this.browserHealthMiddleware.bind(this), async (req, res) => {
             await this.stopTranscription("intentional", res)
         })
 
-        this.app.get("/toggle", async (req, res) => {
+        this.app.get("/toggle", this.browserHealthMiddleware.bind(this), async (req, res) => {
             if (this.isWSAListening) {
                 await this.stopTranscription("intentional", res)
             } else {
@@ -68,40 +54,40 @@ export default class Daemon {
     }
 
     private async startTranscription(res: Response) {
-        if (!this.isBrowserReady()) {
-            log("Browser not ready - cannot start transcription")
-            this.notifier.notifyError("Browser not ready yet.")
-            res.status(503).send("Wait for browser")
-            return
-        }
         if (this.stopCooldown) {
-            log("Start request ignored - still in cooldown period after stop")
             res.status(429).send("Cooldown active - wait before starting")
             return
         }
         if (this.isWSAListening) {
-            log("Listener already active.")
             res.send("Listener already active")
             return
         }
+
         log("Starting transcription...")
         this.isWSAListening = true
         this.typingController.hasStopped = false
         this.notifier.notifyMicStart()
+
         await this.page!.evaluate(browser.startListening)
         res.send("Listening")
+    }
+
+    private async reinitBrowser() {
+        if (this.browser) {
+            try {
+                await this.browser.close()
+            } catch {}
+        }
+        this.browser = null
+        this.page = null
+        this.isWSAListening = false
+        await this.initBrowser()
     }
 
     private async stopTranscription(reason: "intentional" | "offline" | "silence", res?: Response) {
         if (this.stopCooldown) {
             log(`Stop request ignored - still in cooldown period (reason: ${reason})`)
             res?.status(429).send("Cooldown active")
-            return
-        }
-
-        if (!this.isBrowserReady()) {
-            log("Browser not ready - cannot stop transcription")
-            res?.status(503).send("Browser not ready")
             return
         }
         if (!this.isWSAListening) {
@@ -136,8 +122,28 @@ export default class Daemon {
         return this.page !== null && this.browser !== null
     }
 
-    private async initBrowser(browserType: BrowserType, customBrowserPath?: string) {
-        this.browser = await launchBrowser(browserType, customBrowserPath)
+    private async browserHealthMiddleware(req: Request, res: Response, next: NextFunction) {
+        if (!this.isBrowserReady()) {
+            log("Browser not ready - initializing...")
+            throw new Error("Unexpected path. browser should be ready already")
+        }
+
+        try {
+            await this.page!.evaluate(browser.healthCheck)
+            next()
+        } catch (e) {
+            log(`Browser health check failed: ${e} - reinitializing...`)
+            try {
+                await this.reinitBrowser()
+                next()
+            } catch (e) {
+                res.status(503).send("Browser reinitialization failed")
+            }
+        }
+    }
+
+    private async initBrowser() {
+        this.browser = await launchBrowser()
         this.page = await this.browser.newPage()
         this.page.on("console", (msg) => console.log("[BROWSER]", msg.text()))
 
@@ -155,8 +161,7 @@ export default class Daemon {
     }
 
     //start spawns browser and server listener
-    public async start(port: number, browserType: BrowserType, customBrowserPath?: string) {
-        //silently drop start requests when server is already running
+    public async start(port: number) {
         if (await isPortInUse(PORT)) {
             await this.notifier.notifyAlreadyRunning()
             log("Daemon already running on port " + PORT)
@@ -167,7 +172,7 @@ export default class Daemon {
             this.app.listen(port, "127.0.0.1", () => {
                 log(`server started on port: ${port}`)
             })
-            await this.initBrowser(browserType, customBrowserPath)
+            await this.initBrowser()
             this.notifier.notifyDaemonStart()
         } catch (e) {
             this.notifier.notifyError("Failed to initialize Voice Type daemon.")
