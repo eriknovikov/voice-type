@@ -14,6 +14,7 @@ export type WSALanguage = (typeof WSA_LANGUAGES)[keyof typeof WSA_LANGUAGES]
 export interface CliFlags {
     lang: WSALanguage
     textNotifs: boolean
+    stream: boolean
     soundNotifs: boolean
     browserType: BrowserType
     browserPath?: string

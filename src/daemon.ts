@@ -8,7 +8,8 @@ import { launchBrowser } from "./browserLauncher.js"
 import { PORT } from "./index.js"
 
 export default class Daemon {
-    private wsaLanguage: string = "en-US"
+    private wsaLanguage: string
+    private stream: boolean
     private browser: Browser | null = null
     private page: Page | null = null
     private isWSAListening: boolean = false
@@ -18,10 +19,12 @@ export default class Daemon {
     private notifier: Notifier
     private stopCooldown: boolean = false
 
-    constructor(textNotifsEnabled: boolean, soundsNotifsEnabled: boolean, wsaLanguage?: string) {
+    constructor(textNotifsEnabled: boolean, soundsNotifsEnabled: boolean, stream?: boolean, wsaLanguage?: string) {
         this.app = express()
         this.setupRoutes()
         this.notifier = new Notifier({ textNotifsEnabled, soundsNotifsEnabled })
+        this.wsaLanguage = wsaLanguage ?? "en-US"
+        this.stream = stream ?? false
     }
 
     private setupRoutes() {
@@ -150,7 +153,7 @@ export default class Daemon {
         await this.page.goto("data:text/html,<html><body><h1>Voice Type</h1></body></html>")
         await this.page.exposeFunction("onSpeechUpdate", this.handleSpeechUpdate.bind(this))
         await this.page.exposeFunction("onBrowserRecStop", this.handleBrowserRecStop.bind(this))
-        await this.page.evaluate(browser.initWSA, this.wsaLanguage)
+        await this.page.evaluate(browser.initWSA, this.stream, this.wsaLanguage)
     }
 
     private handleSpeechUpdate(payload: { text: string }) {

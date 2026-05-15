@@ -6,7 +6,6 @@ export const PORT = 3232
 const flags = process.argv.slice(2)
 const parsedFlags = cli.parseFlags(flags)
 console.log("launch args:", JSON.stringify(parsedFlags))
-
 if (parsedFlags.help) {
     cli.showHelp()
     process.exit(0)
@@ -20,7 +19,7 @@ if (parsedFlags.detached) {
 process.title = "voice-type"
 process.argv[0] = "voice-type"
 
-const daemon = new Daemon(parsedFlags.textNotifs, parsedFlags.soundNotifs, parsedFlags.lang)
+const daemon = new Daemon(parsedFlags.textNotifs, parsedFlags.soundNotifs, parsedFlags.stream, parsedFlags.lang)
 
 async function destroyDaemon() {
     await daemon.destroy()

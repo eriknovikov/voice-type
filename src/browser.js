@@ -1,4 +1,4 @@
-export function initWSA(lang) {
+export function initWSA(stream, lang) {
     console.log("browser connected. initializing Web Speech API...")
 
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition
@@ -9,7 +9,9 @@ export function initWSA(lang) {
 
     const rec = new SpeechRec()
     rec.continuous = true
-    rec.interimResults = true
+    if (stream) {
+        rec.interimResults = true
+    }
     rec.lang = lang !== undefined ? lang : "en-US"
 
     rec.onstart = () => {
@@ -27,9 +29,8 @@ export function initWSA(lang) {
                 finalText += event.results[i][0].transcript
             }
         }
-
-        //console.log("FINAL TEXT: ", finalText)
-        window.onSpeechUpdate({ text: interimText })
+        const resultText = stream ? interimText : finalText
+        window.onSpeechUpdate({ text: resultText })
     }
 
     //onerror happens always before onend.

@@ -10,6 +10,10 @@ const options = {
         default: false,
         short: "s",
     },
+    "no-stream": {
+        default: false,
+        type: "boolean",
+    },
     text: {
         type: "boolean",
         default: false,
@@ -115,6 +119,7 @@ export function parseFlags(args: string[]): CliFlags {
         browserType: values.browser_type as BrowserType,
         browserPath: values.browser_path,
         textNotifs: values["text"],
+        stream: !values["no-stream"],
         soundNotifs: values["sound"],
         detached: values.detached,
         help: values.help,
