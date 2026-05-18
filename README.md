@@ -10,44 +10,30 @@ Requirements: Linux with a desktop environment, a working microphone, and Chrome
 
 # Installation
 
-## Flatpak
-
-Installs system dependencies automatically. Requires `flatpak-builder`.
+## Binary (recommended)
 
 ```bash
-git clone https://github.com/eriknovikov/voice-type.git
-cd voice-type
-chmod +x ./flatpak/build.sh && ./flatpak/build.sh
+curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/install.sh | bash
 ```
 
+### Prerequisites
 
-## npm
+| Package | Purpose |
+|---|---|
+| `dotool` | Types text — [install from source](https://git.sr.ht/~geb/dotool/) |
+| `google-chrome` or `chromium` | Browser for Web Speech API |
+| `paplay` | Audio notifications (optional) |
 
-```bash
-npm install --global voice-type-cli@latest
-```
+### Manual installation
 
-### System dependencies (npm only)
-
-| Package | Purpose | Install |
-|---|---|---|
-| `dotool` | Types text into the system. | [See dotool docs](https://git.sr.ht/~geb/dotool/) 
-| `paplay` | Audio notifications | Usually pre-installed. If missing: `pulseaudio-utils` (Ubuntu/Debian/Fedora) or `libpulse` (Arch) |
-
-### Sound Assets (optional)
-
-To use sound notifications (`--sound` flag) when transcription starts or stops: 
-
-```bash
-sudo mkdir -p /usr/local/share/voice-type/sounds
-curl -L -o /usr/local/share/voice-type/sounds/start.oga https://github.com/eriknovikov/voice-type/raw/main/assets/sounds/start.oga
-curl -L -o /usr/local/share/voice-type/sounds/stop.oga https://github.com/eriknovikov/voice-type/raw/main/assets/sounds/stop.oga
-```
-
-
-### Browser symlink (required)
-
-Voice Type expects browser binaries named `google-chrome` and `chromium` respectively. If your browser uses a different name (e.g. `google-chrome-stable`), add a symlink:
+1. Download the latest release for your architecture:
+   - [Voice Type releases](https://github.com/eriknovikov/voice-type/releases)
+2. Extract and move the binary:
+   ```bash
+   tar -xzf voice-type-linux-x64.tar.gz
+   sudo mv voice-type /usr/local/bin/voice-type
+   sudo chmod +x /usr/local/bin/voice-type
+   ```
 
 ```bash
 sudo ln -s /usr/bin/google-chrome-stable /usr/bin/google-chrome #similar for chromium
@@ -83,20 +69,17 @@ Bind these in your desktop environment's shortcut settings. If you're in GNOME, 
 | F9 | Toggle daemon | `sh -c "curl http://127.0.0.1:3232/exit 2>/dev/null \|\| START_COMMAND"` |
 | F10 | Toggle dictation | `curl http://127.0.0.1:3232/toggle` |
 
-## npm
-Replace START_COMMAND with the output of `echo "$(which node) $(which voice-type)"`. For example, in my case, START_COMMAND would be `/home/nkv/.nvm/versions/node/v25.9.0/bin/node /home/nkv/.nvm/versions/node/v25.9.0/bin/voice-type` 
-
-## Flatpak
-Replace START_COMMAND with `flatpak run org.github.eriknovikov.VoiceType`
+## Binary
+Replace START_COMMAND with `voice-type`
 
 ---
 
 # Uninstalling
 
-| Installation | Command |
-|---|---|
-| Flatpak | `flatpak uninstall org.github.eriknovikov.VoiceType && flatpak uninstall --unused` |
-| npm | `npm uninstall --global voice-type-cli` |
+```bash
+sudo rm /usr/local/bin/voice-type
+sudo rm -rf /usr/local/share/voice-type
+```
 
 ---
 
@@ -109,8 +92,6 @@ Replace START_COMMAND with `flatpak run org.github.eriknovikov.VoiceType`
 ```bash
 export PATH="$PATH:/usr/local/bin"
 ```
-
-**npm installation works properly via cli but not via shortcut**: GNOME (or Desktop Environments in general) don't know about your PATH defined in .bashrc or .zshrc; to fix it, make sure you are sending the full paths in your system of both `node` and `voice-type`. So, the command should be the result of running this `$(which node) $(which voice-type)`, and CANNOT be just `voice-type`.
 
 **Microphone not detected or no results in dictation** — Check your system audio settings. Make sure you have configured your mic as the system's default mic. In most distros, you should use `pavucontrol`(in your package manager).
 

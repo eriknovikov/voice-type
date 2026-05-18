@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: x64
+          - arch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "latest"
+
+      - name: Build binary
+        run: |
+          mkdir -p build
+          bun build src/index.ts --compile --outfile build/voice-type
+
+      - name: Create tarball
+        run: |
+          mkdir -p voice-type-${{ matrix.arch }}
+          cp build/voice-type voice-type-${{ matrix.arch }}/
+          tar -czf voice-type-linux-${{ matrix.arch }}.tar.gz voice-type-${{ matrix.arch }}/
+
+      - name: Generate hash
+        run: sha256sum voice-type-linux-${{ matrix.arch }}.tar.gz > voice-type-linux-${{ matrix.arch }}.tar.gz.sha256
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-type-${{ matrix.arch }}
+          path: |
+            voice-type-linux-${{ matrix.arch }}.tar.gz
+            voice-type-linux-${{ matrix.arch }}.tar.gz.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create checksums.txt
+        run: |
+          cd artifacts
+          printf '# Checksums for voice-type binaries\n' > checksums.txt
+          find . -name "*.sha256" -exec cat {} >> checksums.txt \;
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*/voice-type-linux-x64.tar.gz
+            artifacts/*/voice-type-linux-arm64.tar.gz
+            artifacts/checksums.txt
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

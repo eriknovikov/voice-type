@@ -23,6 +23,35 @@ Voice Type is a system-wide speech-to-text daemon for Linux. It uses Chrome's We
 
 ---
 
+## Release Process (Binary-only)
+
+Releases are built automatically via GitHub Actions on new tags.
+
+### CI/CD: `.github/workflows/release.yml`
+- Trigger: new git tag matching `v*`
+- Matrix build: x64 and ARM64 architectures
+- Uses `bun build --compile` to build standalone binary
+- Creates `.tar.gz` with binary only
+- Generates individual SHA256 hashes + combined `checksums.txt`
+- Creates GitHub Release via `softprops/action-gh-release`
+
+### Installation
+```bash
+curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/install.sh | bash
+```
+
+### install.sh (aws-doctor pattern)
+- Detects architecture (x64/arm64)
+- Fetches latest version from GitHub API (or specific `--version <tag>`)
+- Supports `--local` mode for local builds
+- Downloads tar.gz + `checksums.txt` from release
+- Verifies SHA256 hash against checksums.txt
+- Installs binary to `/usr/local/bin`
+- Downloads sounds from GitHub raw URLs to `/usr/local/share/voice-type/sounds`
+- Color-coded logging (INFO/WARN/ERROR)
+
+---
+
 ## Architecture & Components
 
 ### Entry Point: [`src/index.ts`](src/index.ts)
@@ -156,7 +185,6 @@ Voice Type is a system-wide speech-to-text daemon for Linux. It uses Chrome's We
 ### SoundNotifier: [`src/soundNotifier.ts`](src/soundNotifier.ts)
 - Uses `paplay` to play audio feedback
 - Sound files determined by installation method:
-  - Flatpak: `/app/share/sounds/voice-type`
   - Compiled binary: `/usr/local/share/voice-type/sounds`
   - Dev/NPM: `<cwd>/assets/sounds`
 - Sounds: `start.oga`, `stop.oga`, `error.oga` (ERROR and OFFLINE both use `stop.oga`)

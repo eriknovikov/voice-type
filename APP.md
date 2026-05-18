@@ -210,10 +210,9 @@ curl http://127.0.0.1:3232/stop
 curl http://127.0.0.1:3232/exit
 ```
 
-### Installation Methods
-1. **Flatpak**: Self-contained, includes all dependencies. Supports Chrome and Chromium via `--browser` flag, but does not support custom browser paths via `--browser_path`.
-2. **Binary**: System-wide installation via install script. Full browser customization support including custom paths.
-3. **npm**: Global package installation (when published). Full browser customization support including custom paths.
+### Installation Method
+
+**Binary**: System-wide installation via install script. Full browser customization support including custom paths.
 
 ## Development Context
 
@@ -240,7 +239,6 @@ voice-type/
 │   └── tests/            # Manual test files
 ├── assets/
 │   └── sounds/           # Notification sounds
-├── flatpak/              # Flatpak packaging
 └── package.json          # Dependencies and scripts
 ```
 
@@ -268,22 +266,6 @@ voice-type/
 - **No Authentication**: Intended for single-user desktop use
 - **Microphone Access**: Requires user permission via Chrome
 - **Input Simulation**: dotool requires appropriate permissions
-
-## Flatpak-Specific Considerations
-
-### Browser Path Limitations
-Due to the sandboxed nature of Flatpak, the `--browser_path` flag is **not supported** in the Flatpak version. Users can only use:
-- `--browser chrome` (default) - Uses host's `google-chrome-stable`
-- `--browser chromium` - Uses host's `chromium`
-
-For custom browser paths (e.g., Chrome Beta, Dev, or non-standard installations), use the binary or npm installation instead.
-
-### Browser Wrappers
-The Flatpak build creates wrapper scripts that bridge the sandbox to host browsers:
-- `/app/bin/host-chrome` - Wraps `flatpak-spawn --host google-chrome-stable`
-- `/app/bin/host-chromium` - Wraps `flatpak-spawn --host chromium`
-
-These wrappers are automatically configured during the build process via `sed` substitution in [`src/browserLauncher.ts`](src/browserLauncher.ts:5-6), replacing the default browser paths with the wrapper paths.
 
 ## Integration Points
 
