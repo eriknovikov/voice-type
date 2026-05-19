@@ -54,14 +54,15 @@ VOICE TYPE - Real-Time Dictation Daemon
 Usage: voice-type [options]
 
 Options:
-  -l, --lang <lang>       Set Web Speech API language (e.g., en-US, es-ES). Default: en-US
-  -b, --browser <browser> Set browser type (chrome, chromium). Default: chrome
-  -p, --browser_path <path> Set custom path to browser executable
-  -T, --timeout <sec>     Auto-stop after N seconds of silence (streaming only, default: 0 = disabled)
-  --text                   Enable text notifications (default: false)
-  --sound                  Enable sound notifications (default: false)
-  -d, --detached           Run the daemon in the background (detached mode)
-  -h, --help               Show this help message
+  -l, --lang <lang>           Web Speech API language (e.g., en-US, es-ES). Default: en-US
+  --browser_type <browser>    Browser type: chrome or chromium. Default: chrome
+  -p, --browser_path <path>   Path to browser executable
+  --timeout <sec>             Auto-stop after N seconds of silence (streaming only). Default: 0
+  --no-stream                 Use final transcripts only (no interim corrections)
+  -t, --text                  Enable text notifications (default: false)
+  -s, --sound                 Enable sound notifications (default: false)
+  -d, --detached              Run the daemon in the background (detached mode)
+  -h, --help                  Show this help message
 
 Supported Languages (most common):
   English: en-US

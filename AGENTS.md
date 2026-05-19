@@ -1,287 +1,270 @@
 # AGENTS.md
 
-This file provides guidance to agents when working with code in this repository.
+Guidance for AI agents and contributors working in this repository.
 
-## Project Overview
+## Documentation map
 
-Voice Type is a system-wide speech-to-text daemon for Linux. It uses Chrome's Web Speech API (running headless in the background) to transcribe speech into text, which is then typed into the active window via `dotool`. No local models, no paid services.
-
-**Key Flow:**
-1. Daemon starts HTTP server on port 3232 and launches headless Chrome
-2. Chrome initializes Web Speech API (WSA) with exposed functions for speech events
-3. User triggers `/toggle` endpoint to start/stop listening
-4. Speech results flow: Chrome WSA → `onSpeechUpdate({ text })` → TypingController → dotool
-5. TypingController calculates diff between previous and current text, then backspaces and retypes corrections
+| File | Audience | Contents |
+|---|---|---|
+| [README.md](README.md) | End users | Install, usage, hotkeys, troubleshooting |
+| [INTERNALS.md](INTERNALS.md) | Curious users / deep dive | How Voice Type works under the hood |
+| **AGENTS.md** (this file) | Agents & contributors | Architecture, conventions, APIs, agent rules |
 
 ---
 
-## Build Commands (Bun required)
-- `bun run dev` - Run with watch mode (`bun --watch src/index.ts`)
-- `bun run build` - Build for distribution (outputs to `dist/`)
-- `bun run start` - Run directly (`bun run src/index.ts`)
-- `bun run compile-binary` - Compile to native binary (outputs to `build/voice-type`)
+## Project overview
 
----
+Voice Type is a system-wide speech-to-text daemon for Linux. It runs Chrome or Chromium headlessly, uses the Web Speech API for cloud transcription, and types results into the focused window via `dotool`. No local models, no paid API keys.
 
-## Release Process (Binary-only)
+**Runtime flow:**
 
-Releases are built automatically via GitHub Actions on new tags.
+1. Daemon binds HTTP on `127.0.0.1:3232` and launches a persistent headless browser
+2. `browser.js` initializes WSA; Node exposes `onSpeechUpdate` / `onBrowserRecStop` via Puppeteer
+3. Hotkey hits `/toggle` (or `/start` / `/stop`) to begin or end listening
+4. Transcripts → `TypingController` diff → `dotool` keystrokes
+5. Optional D-Bus / `paplay` notifications
 
-### CI/CD: `.github/workflows/release.yml`
-- Trigger: new git tag matching `v*`
-- Matrix build: x64 and ARM64 architectures
-- Uses `bun build --compile` to build standalone binary
-- Creates `.tar.gz` with binary only
-- Generates individual SHA256 hashes + combined `checksums.txt`
-- Creates GitHub Release via `softprops/action-gh-release`
+**Data flow:**
 
-### Installation
-```bash
-curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/install.sh | bash
+```
+Hotkey → curl :3232/toggle → Daemon → browser.startListening()
+              ↓
+Microphone → Web Speech API → onSpeechUpdate({ text })
+              ↓
+TypingController (diff) → dotool → focused application
+              ↓
+Notifier → D-Bus / paplay (if enabled)
 ```
 
-### install.sh (aws-doctor pattern)
-- Detects architecture (x64/arm64)
-- Fetches latest version from GitHub API (or specific `--version <tag>`)
-- Supports `--local` mode for local builds
-- Downloads tar.gz + `checksums.txt` from release
-- Verifies SHA256 hash against checksums.txt
-- Installs binary to `/usr/local/bin`
-- Downloads sounds from GitHub raw URLs to `/usr/local/share/voice-type/sounds`
-- Color-coded logging (INFO/WARN/ERROR)
+---
+
+## Design principles (do not fight these)
+
+1. **Persistent browser** — Chrome stays up for the daemon lifetime (~2–3s init once; near-zero hotkey latency after). Do not tear down the browser per dictation session.
+2. **HTTP hotkeys** — Localhost Express endpoints, not D-Bus or custom IPC. Keeps integration with any DE shortcut manager.
+3. **Interim streaming by default** — `stream: true` (default) sends in-progress transcripts; diff logic backspaces and retypes corrections. `--no-stream` waits for final WSA results only.
+4. **dotool for input** — Wayland-friendly `/dev/uinput` simulation. Requires `input` group + udev rules. Layout forced to US via `DOTOOL_XKB_LAYOUT=us`.
+5. **Web Speech API only** — Transcription lives in Chrome; swapping engines means replacing `browser.js` + browser launch, not a small patch.
+
+**Key technical choices (from project history):**
+
+- WSA over local STT models (accuracy, zero model management)
+- `puppeteer-core` + system Chrome (no bundled Chromium download)
+- D-Bus notification replacement (`replaces_id`, transient hints) for live status without spam
+- 100ms stop cooldown to prevent rapid start/stop races
 
 ---
 
-## Architecture & Components
+## Rules for agents
 
-### Entry Point: [`src/index.ts`](src/index.ts)
-- Exports `PORT = 3232`
-- Parses CLI flags via `cli.parseFlags()`, handles `--detached` mode via `cli.respawnDetached()`
-- Creates Daemon instance and starts it
-- Handles SIGTERM/SIGINT for clean shutdown via `destroyDaemon()`
+1. **Minimize scope** — Smallest correct change. No drive-by refactors or unrelated README/architecture edits.
+2. **Preserve file roles** — `src/browser.js` must stay `.js` (injected into Chrome). Imports use `.js` extensions (`verbatimModuleSyntax`).
+3. **Match existing style** — Prettier: 4-space tabs, 120 print width, no semicolons. `export default class` pattern. `import type` for type-only imports.
+4. **User docs vs agent docs** — User-facing install/usage → `README.md`. Architecture and contributor detail → this file or `INTERNALS.md`. Do not duplicate long architecture sections in the README.
+5. **No automated tests** — Manual scripts live in `src/tests/*.manual.ts`. Run with `bun run src/tests/<file>`. Do not add Jest/Vitest unless explicitly requested.
+6. **Linux-only** — Do not introduce macOS/Windows code paths. External deps: `dotool`, Chrome/Chromium, `paplay`, D-Bus session bus.
+7. **Binary releases** — Production installs use `install.sh` + GitHub releases (`bun build --compile`). Keep `package.json` scripts in sync when changing build steps.
+8. **Update this file** — If you change HTTP routes, CLI flags, streaming behavior, or core data flow, update AGENTS.md in the same PR.
+9. **Security model** — HTTP server is localhost-only, no auth (single-user desktop). Do not expose the daemon on `0.0.0.0` without an explicit security review.
+
+---
+
+## Build & development
+
+**Requires Bun.**
+
+| Command | Purpose |
+|---|---|
+| `bun run dev` | Watch mode (`bun --watch src/index.ts`) |
+| `bun run start` | Run daemon directly |
+| `bun run build` | Bundle to `dist/` (Node target) |
+| `bun build src/index.ts --compile --outfile build/voice-type` | Standalone binary (same as CI / `install.sh --local`) |
+
+**Project layout:**
+
+```
+voice-type/
+├── src/
+│   ├── index.ts           # Entry: CLI parse, signal handlers, daemon start
+│   ├── cli.ts             # parseArgs, help, detached respawn
+│   ├── daemon.ts          # HTTP server, browser lifecycle, transcription control
+│   ├── browser.js         # WSA wrapper (Chrome context) — must remain .js
+│   ├── browserLauncher.ts # puppeteer-core launch + detectBrowser()
+│   ├── typingController.ts
+│   ├── notifier.ts, textNotifier.ts, soundNotifier.ts
+│   ├── logger.ts, utils.ts, types.ts, constants.ts
+│   └── tests/*.manual.ts
+├── assets/sounds/         # start.oga, stop.oga (dev); /usr/local/share/... in prod
+├── install.sh             # Release installer
+└── INTERNALS.md           # User-facing deep dive
+```
+
+---
+
+## Release process (binary-only)
+
+Triggered by git tags matching `v*` (see `.github/workflows/release.yml`).
+
+- Matrix: linux x64 + arm64
+- `bun build --compile` → `voice-type-linux-{arch}.tar.gz` + `checksums.txt`
+- `install.sh`: detect arch, download release, verify SHA256, install to `/usr/local/bin`, fetch sounds to `/usr/local/share/voice-type/sounds`
+- Flags: `--version <tag>`, `--local` (build + install from source tree)
+
+---
+
+## HTTP API (port 3232, localhost)
+
+| Route | Action |
+|---|---|
+| `GET /health` | JSON `{ status: "ok" }` |
+| `GET /start` | Start listening |
+| `GET /stop` | Stop listening (intentional) |
+| `GET /toggle` | Toggle listen state |
+| `GET /exit` | Shutdown daemon |
+
+**Responses:** `503` browser not ready · `429` stop cooldown (100ms) · `200` with short text body on success
+
+Recommended hotkeys (see README): F9 toggles daemon (`/exit` or start `voice-type`), F10 toggles dictation (`/toggle`).
+
+---
+
+## CLI flags
+
+Parsed in [`src/cli.ts`](src/cli.ts) via `node:util.parseArgs` (strict).
+
+| Flag | Default | Notes |
+|---|---|---|
+| `-l, --lang` | `en-US` | Must be in `WSA_LANGUAGES` ([`constants.ts`](src/constants.ts)) |
+| `--browser_type` | `chrome` | `chrome` or `chromium` → sets `BROWSER_TYPE` env |
+| `-p, --browser_path` | — | Custom executable → `BROWSER_PATH` env |
+| `--timeout` | `0` | Seconds of silence before auto-stop; **only when streaming** (`timeout > 0` resets on each speech update) |
+| `--no-stream` | off | Final transcripts only (no interim diffs) |
+| `--text` | off | D-Bus desktop notifications |
+| `-s, --sound` | off | `paplay` feedback |
+| `-d, --detached` | off | Respawn self detached; parent exits |
+| `-h, --help` | — | Print help |
+
+Browser paths checked by launcher: `/usr/bin/google-chrome`, `/usr/bin/chromium`.
+
+---
+
+## Architecture & components
+
+### Entry: [`src/index.ts`](src/index.ts)
+
+- `PORT = 3232`
+- `parseFlags()` → `Daemon` constructor → `daemon.start(PORT)`
+- SIGTERM/SIGINT → `destroy()`
 
 ### Daemon: [`src/daemon.ts`](src/daemon.ts)
-- HTTP Express server with routes: `/start`, `/stop`, `/toggle`, `/exit`
-- Manages browser lifecycle via Puppeteer-core
-- Coordinates TypingController and Notifier
-- Uses 100ms `stopCooldown` after stop to prevent rapid start/stop cycles
-- Exposes functions to browser via `page.exposeFunction()`:
-  - `onSpeechUpdate({ text })` - handles interim transcription results
-  - `onBrowserRecStop({ reason })` - called when speech recognition stops (reason: "silence" | "offline" | undefined)
-- Private state:
-  - `isWSAListening` - whether speech recognition is active
-  - `stopCooldown` - prevents rapid start/stop
-  - `typingController.hasStopped` - flag checked when applying diffs
-- Route responses:
-  - Success: `res.send()` with message
-  - Cooldown active: `res.status(429).send("Cooldown active")`
-  - Browser not ready: `res.status(503).send("Wait for browser")`
-- Public methods:
-  - `start(port, browserType, customBrowserPath?)` - initializes server and browser
-  - `destroy()` - cleanup resources on shutdown
-- Private methods:
-  - `initBrowser()` - launches browser, sets up page, exposes functions, calls `browser.initWSA()`
-  - `startTranscription()` / `stopTranscription(reason)` - control speech recognition
-  - `handleSpeechUpdate(payload)` - forwards to typing controller
-  - `handleBrowserRecStop(payload)` - auto-stops if was listening
-  - `isBrowserReady()` - checks `page` and `browser` are non-null
-- Uses `isPortInUse()` helper to prevent multiple daemon instances
 
-### Browser/WSA: [`src/browser.js`](src/browser.js) (`.js` extension required)
-- Runs in Chrome context, uses `window.SpeechRecognition` or `window.webkitSpeechRecognition`
-- `initWSA(lang)` - initializes continuous recognition with interim results
-- Stores reference as `window.recognition` and `window.isOffline` flag
-- Recognition config: `continuous: true`, `interimResults: true`
-- Only sends interim (in-progress) transcripts via `window.onSpeechUpdate({ text: interimText })`
-- Final transcripts are accumulated in `finalText` and logged to console (not typed)
-- `rec.onstart` sets `rec.isRunning = true`
-- `rec.onerror` sets `window.isOffline = true` for network errors, throws for other errors
-- `rec.onend` calls `window.onBrowserRecStop({ reason: window.isOffline ? "offline" : "silence" })`
+- Express routes (see HTTP API); `browserHealthMiddleware` before transcribe routes
+- `initBrowser()` → launch, new page, `exposeFunction` for speech callbacks, `browser.initWSA(stream, lang)`
+- `startTranscription` / `stopTranscription(reason)` — reasons: `intentional`, `silence`, `offline`
+- `handleBrowserRecStop` — auto-stops if WSA ends while still listening
+- `silenceTimer` — daemon-side timeout when `stream && timeout > 0`; reset on each `handleSpeechUpdate`
+- `isPortInUse()` — prevents duplicate daemon instances
+- State: `isWSAListening`, `stopCooldown`, `typingController.hasStopped`
+
+### Browser/WSA: [`src/browser.js`](src/browser.js)
+
+- `initWSA(stream, lang)` — `continuous: true`; `interimResults` only if `stream`
+- `onresult` → `onSpeechUpdate({ text })` with interim or accumulated final text
+- `onend` → `onBrowserRecStop({ reason: offline \| silence })`
+- `onerror` — `network` sets offline flag; other errors throw
+- Exported: `startListening`, `stopRecognition`, `healthCheck`
 
 ### TypingController: [`src/typingController.ts`](src/typingController.ts)
-- Spawns `dotool` process with `DOTOOL_XKB_LAYOUT=us` env var
-- Public properties:
-  - `hasStopped` - when true, `applyDiff()` does nothing (prevents typing after manual stop)
-- **Diff Algorithm** via `calculateDiff(currText)`: `DiffEnum`
-  - `NoChange` - texts match
-  - `ChangeResAndClear` - current text is empty (after silence)
-  - `ChangeRes` - texts differ but current is non-empty
-- `calculateAndApplyDiff(str)` - combines diff calculation and application
-- `applyDiff(currText, diffResult)` - handles typing/backspacing
-  - `NoChange`: do nothing
-  - `ChangeRes`: backspace deleted chars, type new chars (or type all if prevText is empty)
-  - `ChangeResAndClear`: call `reset()`
-- `reset()` - clears `prevText`
-- `sendBackspaces(count)` - sends `key BackSpace \n` repeated count times to dotool
-- `typeText(text)` - handles character typing with buffering
-- `destroy()` - kills dotool process with SIGTERM
-- **Character Handling**:
-  - ASCII (32-126): buffered in `asciiBuffer`, sent as `type <string>`
-  - Newlines (`\n`): `key enter`
-  - Unicode/CJK/Emojis: GNOME hex input (`key ctrl+shift+u` + hex chars + `key enter`)
-- Helper: `findCommonPrefixLen(currText, prevText)` - finds common prefix length
 
-### Browser Launcher: [`src/browserLauncher.ts`](src/browserLauncher.ts)
-- Exports `BrowserType = "chrome" | "chromium"`
-- `detectBrowser()` - checks for Chrome at `/usr/bin/google-chrome` or Chromium at `/usr/bin/chromium`
-- `launchBrowser(browserType, browserPath?)` - launches browser via puppeteer-core
-- Chrome/Chromium paths: `/usr/bin/google-chrome`, `/usr/bin/chromium`
-- Launch args (shared):
-  - `--use-fake-ui-for-media-stream`
-  - `--disable-background-timer-throttling`
-  - `--log-level=0`
-  - `--disable-dev-shm-usage`
-  - `--disable-gpu`
-  - `--disable-software-rasterizer`
-  - `--disable-background-networking`
-  - `--disable-default-apps`
-  - `--disable-extensions`
-  - `--disable-sync`
-  - `--disable-translate`
-  - `--metrics-recording-only`
-  - `--no-first-run`
-  - `--safebrowsing-disable-auto-update`
-  - `--process-per-site`
-  - `--disable-features=IsolateOrigins,site-per-process`
-- Uses `headless: "new"` mode and `name: "Voice-Type-browser"`
+- Persistent `dotool` child; `hasStopped` blocks `applyDiff` after manual stop
+- **DiffEnum:** `NoChange`, `ChangeRes` (backspace + type), `ChangeResAndClear` (empty transcript → reset)
+- Unicode via GNOME hex entry; ASCII buffered as `type ...`
 
-### CLI Parsing: [`src/cli.ts`](src/cli.ts)
-- Uses `node:util.parseArgs` with strict mode
-- Options:
-  - `-s, --sound` - enable sound notifications (default: disabled)
-  - `--text` - enable text notifications (default: disabled)
-  - `-l, --lang <lang>` - WSA language (default: "en-US")
-  - `-b, --browser <browser>` - "chrome" or "chromium" (default: "chrome")
-  - `-p, --browser_path <path>` - custom browser executable path
-  - `-d, --detached` - run in background
-  - `-h, --help` - show help
-- `parseFlags(args)` - validates language against `WSA_LANGUAGES`, validates browser type
-- `showHelp()` - displays usage information
-- `respawnDetached(args)` - spawns detached child process, unrefs it so parent can exit immediately
-- `pruneFlags(flags)` - removes `--detached` and `-d` from args when respawning
+### Browser launcher: [`src/browserLauncher.ts`](src/browserLauncher.ts)
 
-### Notifications: [`src/notifier.ts`](src/notifier.ts)
-- Composes `TextNotifier` and `SoundNotifier`
-- `destroy()` - cleans up text notifier
-- Async notification methods (all `await` both text and sound):
-  - `notifyDaemonStart()` - daemon started
-  - `notifyDaemonStop()` - daemon shutting down
-  - `notifyMicStart()` - started listening
-  - `notifyMicStopIntentional()` - stopped intentionally
-  - `notifyMicStopSilence()` - stopped due to silence timeout
-  - `notifyOffline()` - network disconnected
-  - `notifyError(msg)` - error occurred
-  - `notifyAlreadyRunning()` - prevented duplicate daemon
+- `detectBrowser()`, `launchBrowser()` — headless `"new"`, shared `LAUNCH_ARGS` (media fake UI, disable throttling, etc.)
+- `BrowserType = "chrome" | "chromium"`
 
-### TextNotifier: [`src/textNotifier.ts`](src/textNotifier.ts)
-- Uses `dbus-next` to send desktop notifications via `org.freedesktop.Notifications`
-- Maintains D-Bus connection with retry mechanism (max 3 retries, exponential backoff)
-- Connection health check via `isConnectionHealthy()`
-- `ensureConnection()` - reconnects if needed before sending
-- Notification replacement: uses `lastNotificationId` to replace existing popup (uses `x-canonical-private-synchronous` hint)
-- Transient notifications with urgency levels (low=0, normal=1, critical=2)
-- `destroy()` - disconnects D-Bus
+### Notifications
 
-### SoundNotifier: [`src/soundNotifier.ts`](src/soundNotifier.ts)
-- Uses `paplay` to play audio feedback
-- Sound files determined by installation method:
-  - Compiled binary: `/usr/local/share/voice-type/sounds`
-  - Dev/NPM: `<cwd>/assets/sounds`
-- Sounds: `start.oga`, `stop.oga`, `error.oga` (ERROR and OFFLINE both use `stop.oga`)
-- `notify()` is async - returns `Promise<void>` that resolves when paplay process closes
-- Handles paplay errors gracefully
+- [`notifier.ts`](src/notifier.ts) — composes text + sound; all methods async
+- [`textNotifier.ts`](src/textNotifier.ts) — `dbus-next`, replace via `lastNotificationId`, retry with backoff
+- [`soundNotifier.ts`](src/soundNotifier.ts) — `paplay`; prod path `/usr/local/share/voice-type/sounds`
 
 ### Logger: [`src/logger.ts`](src/logger.ts)
-- `Logger` class with buffer rotation (default max size: 10MB)
-- `log(message)` - adds to buffer, console.logs, evicts old messages when full
-- `log()` helper exports singleton, prepends `"[DAEMON] "` to messages
+
+- Rotating in-memory buffer (10MB default); `[DAEMON]` prefix on console
 
 ---
 
-## Types: [`src/types.ts`](src/types.ts)
+## Types ([`src/types.ts`](src/types.ts))
 
 ```typescript
 enum DiffEnum { NoChange, ChangeRes, ChangeResAndClear }
-type WSALanguage = (typeof WSA_LANGUAGES)[keyof typeof WSA_LANGUAGES]
-type Urgency = "low" | "normal" | "critical"
 
 interface CliFlags {
     lang: WSALanguage
     textNotifs: boolean
     soundNotifs: boolean
-    browser: BrowserType
+    stream: boolean
+    browserType: BrowserType
     browserPath?: string
+    timeout: number
     detached: boolean
     help: boolean
 }
 ```
 
-`BrowserType` is exported from `browserLauncher.ts` as `"chrome" | "chromium"`
-
-### Constants: [`src/constants.ts`](src/constants.ts)
-- `WSA_LANGUAGES` - 45 BCP47 language tags (en-US, en-GB, es-ES, ru-RU, zh-CN, etc.)
+`WSA_LANGUAGES` — 45 BCP47 tags in [`src/constants.ts`](src/constants.ts).
 
 ---
 
-## Code Style (Prettier)
-- Tab width: 4 spaces, Print width: 120, No semicolons, No prose wrap
-- **Import extensions**: Always use `.js` extension in imports due to `verbatimModuleSyntax`
-- **Type imports**: Use `import type { X }` syntax for type-only imports
-- Classes export as `export default class ClassName`
-- TypeScript strict mode enabled
+## Extension points
+
+| Goal | Where to change |
+|---|---|
+| New language | Add to `WSA_LANGUAGES` in `constants.ts` |
+| New notification | Method on `Notifier` + wire in `daemon.ts` |
+| Non-dotool input | Replace `TypingController` (high effort) |
+| Alternate STT | Replace `browser.js` + launch config (high effort) |
 
 ---
 
-## Testing
-- No automated test framework - manual tests in [`src/tests/*.manual.ts`](src/tests/)
-- Run manually with `bun run src/tests/<filename>`
+## Operational notes
+
+- **Startup:** ~2–3s browser init; then idle until `/toggle`
+- **Memory:** ~200MB Chrome + ~50MB Bun (rough)
+- **Transcription latency:** interim results typically &lt;100ms after WSA fires
+- **Reliability:** browser reinit on health check failure; D-Bus reconnect with backoff
+- **Permissions:** dotool needs `input` group; mic permission via Chrome fake-UI flag + system default input
 
 ---
 
-## Linux-Specific Dependencies (external, not in package.json)
-- `dotool` - types text into system (install from source: https://git.sr.ht/~geb/dotool/)
-- `dbus-next` - desktop notifications via libdbus
-- `x11` - window management (for detecting active window)
-- `paplay` - audio playback (pulseaudio-utils package)
+## Linux dependencies (system, not npm)
 
-### dotool Setup
-After installation, run: `sudo udevadm control --reload && sudo udevadm trigger`
-User must be in `input` group: `sudo usermod -aG input $USER` (requires reboot)
+| Tool | Role |
+|---|---|
+| `dotool` | Virtual keyboard — [source](https://git.sr.ht/~geb/dotool/) |
+| `google-chrome` or `chromium` | WSA host |
+| `paplay` | Sound notifications |
+| D-Bus session | Text notifications |
 
----
-
-## CLI Usage Examples
-
-```bash
-voice-type                    # Start daemon (F9 to toggle, F10 to dictate)
-voice-type -l es-ES          # Spanish dictation
-voice-type -s                # Enable sound notifications
-voice-type --text            # Enable text notifications
-voice-type -d                # Run detached (background)
-voice-type -p /path/to/chrome # Custom browser path
-```
-
-### HTTP API (port 3232)
-- `GET /start` - Start listening (returns "Listening" or error)
-- `GET /stop` - Stop listening (returns "Stopped" or error)
-- `GET /toggle` - Toggle listening state
-- `GET /exit` - Stop daemon completely
-
-### Error Responses
-- `503 Service Unavailable` - Browser not ready
-- `429 Too Many Requests` - Cooldown active (100ms after stop)
+**dotool setup:** `sudo udevadm control --reload && sudo udevadm trigger`; `sudo usermod -aG input $USER` (reboot).
 
 ---
 
-## Package.json Details
+## Code style (Prettier)
+
+4-space indent, 120 columns, no semicolons, no prose wrap. Strict TypeScript. Classes: `export default class Name`.
+
+---
+
+## package.json (reference)
 
 ```json
 {
   "name": "voice-type-cli",
-  "version": "1.2.2",
   "type": "module",
-  "bin": { "voice-type": "bin/voice-type" },
-  "files": ["bin", "dist", "assets"],
   "dependencies": {
     "dbus-next": "^0.10.2",
     "express": "^5.2.1",
@@ -289,3 +272,6 @@ voice-type -p /path/to/chrome # Custom browser path
     "x11": "^2.3.0"
   }
 }
+```
+
+`x11` is listed for optional/window utilities; core dictation path is HTTP + dotool + Chrome.
