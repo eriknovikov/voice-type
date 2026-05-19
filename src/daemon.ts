@@ -10,6 +10,7 @@ import { PORT } from "./index.js"
 export default class Daemon {
     private wsaLanguage: string
     private stream: boolean
+    private timeout: number
     private browser: Browser | null = null
     private page: Page | null = null
     private isWSAListening: boolean = false
@@ -18,13 +19,21 @@ export default class Daemon {
     private typingController: TypingController = new TypingController()
     private notifier: Notifier
     private stopCooldown: boolean = false
+    private silenceTimer: NodeJS.Timeout | null = null
 
-    constructor(textNotifsEnabled: boolean, soundsNotifsEnabled: boolean, stream?: boolean, wsaLanguage?: string) {
+    constructor(
+        textNotifsEnabled: boolean,
+        soundsNotifsEnabled: boolean,
+        stream?: boolean,
+        wsaLanguage?: string,
+        timeout?: number,
+    ) {
         this.app = express()
         this.setupRoutes()
         this.notifier = new Notifier({ textNotifsEnabled, soundsNotifsEnabled })
         this.wsaLanguage = wsaLanguage ?? "en-US"
         this.stream = stream ?? false
+        this.timeout = timeout ?? 0
     }
 
     private setupRoutes() {
@@ -71,6 +80,10 @@ export default class Daemon {
         this.typingController.hasStopped = false
         this.notifier.notifyMicStart()
 
+        if (this.stream && this.timeout > 0) {
+            this.resetSilenceTimer()
+        }
+
         await this.page!.evaluate(browser.startListening)
         res.send("Listening")
     }
@@ -98,6 +111,8 @@ export default class Daemon {
             res?.send("No active listener")
             return
         }
+        this.clearSilenceTimer()
+
         log(`Stopping transcription... Reason: ${reason}`)
         this.isWSAListening = false
         this.typingController.hasStopped = true
@@ -158,6 +173,27 @@ export default class Daemon {
 
     private handleSpeechUpdate(payload: { text: string }) {
         this.typingController.calculateAndApplyDiff(payload.text)
+        if (this.stream && this.timeout > 0) {
+            this.resetSilenceTimer()
+        }
+    }
+
+    private resetSilenceTimer() {
+        this.clearSilenceTimer()
+        if (this.timeout > 0) {
+            this.silenceTimer = setTimeout(() => {
+                if (this.isWSAListening) {
+                    this.stopTranscription("silence")
+                }
+            }, this.timeout * 1000)
+        }
+    }
+
+    private clearSilenceTimer() {
+        if (this.silenceTimer) {
+            clearTimeout(this.silenceTimer)
+            this.silenceTimer = null
+        }
     }
     private async handleBrowserRecStop(payload: { reason: "silence" | "offline" | undefined }) {
         if (this.isWSAListening) await this.stopTranscription(payload.reason ?? "intentional")
@@ -190,6 +226,7 @@ export default class Daemon {
      */
     public async destroy() {
         console.log("\n[DAEMON] Shutting down daemon...")
+        this.clearSilenceTimer()
         this.notifier.destroy()
         this.typingController.destroy()
 

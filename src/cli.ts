@@ -32,6 +32,10 @@ const options = {
         type: "string",
         short: "p",
     },
+    timeout: {
+        type: "string",
+        default: "0",
+    },
     detached: {
         type: "boolean",
         short: "d",
@@ -53,6 +57,7 @@ Options:
   -l, --lang <lang>       Set Web Speech API language (e.g., en-US, es-ES). Default: en-US
   -b, --browser <browser> Set browser type (chrome, chromium). Default: chrome
   -p, --browser_path <path> Set custom path to browser executable
+  -T, --timeout <sec>     Auto-stop after N seconds of silence (streaming only, default: 0 = disabled)
   --text                   Enable text notifications (default: false)
   --sound                  Enable sound notifications (default: false)
   -d, --detached           Run the daemon in the background (detached mode)
@@ -114,10 +119,17 @@ export function parseFlags(args: string[]): CliFlags {
         console.error(`Supported Browsers: "chrome", "chromium"`)
         process.exit(1)
     }
+    const timeout = parseInt(values.timeout, 10)
+    if (isNaN(timeout) || timeout < 0) {
+        console.error(`Error: Invalid timeout '${values.timeout}'. Must be a non-negative number.`)
+        process.exit(1)
+    }
+
     return {
         lang: lang as WSALanguage,
         browserType: values.browser_type as BrowserType,
         browserPath: values.browser_path,
+        timeout,
         textNotifs: values["text"],
         stream: !values["no-stream"],
         soundNotifs: values["sound"],

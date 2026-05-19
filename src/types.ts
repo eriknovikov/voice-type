@@ -18,6 +18,7 @@ export interface CliFlags {
     soundNotifs: boolean
     browserType: BrowserType
     browserPath?: string
+    timeout: number
     detached: boolean
     help: boolean
 }
