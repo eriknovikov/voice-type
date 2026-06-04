@@ -27,7 +27,11 @@ Voice Type is a system-wide speech-to-text daemon for Linux. It runs Chrome or C
 **Data flow:**
 
 ```
-Hotkey → curl :3232/toggle → Daemon → browser.startListening()
+Hotkey → curl :3232/toggle[?language=xx] → Daemon
+              ↓
+        resolveAndValidateLanguage (?language= → CLI --lang → en-US)
+              ↓
+        browser.setLangAndStart(lang)  (mutates rec.lang then start())
               ↓
 Microphone → Web Speech API → onSpeechUpdate({ text })
               ↓
@@ -90,6 +94,7 @@ voice-type/
 │   ├── daemon.ts          # HTTP server, browser lifecycle, transcription control
 │   ├── browser.js         # WSA wrapper (Chrome context) — must remain .js
 │   ├── browserLauncher.ts # puppeteer-core launch + detectBrowser()
+│   ├── language.ts        # Shared isValidLanguage, readLanguageQuery, DEFAULT_LANGUAGE
 │   ├── typingController.ts
 │   ├── notifier.ts, textNotifier.ts, soundNotifier.ts
 │   ├── logger.ts, utils.ts, types.ts, constants.ts
@@ -117,14 +122,22 @@ Triggered by git tags matching `v*` (see `.github/workflows/release.yml`).
 | Route | Action |
 |---|---|
 | `GET /health` | JSON `{ status: "ok" }` |
-| `GET /start` | Start listening |
-| `GET /stop` | Stop listening (intentional) |
-| `GET /toggle` | Toggle listen state |
-| `GET /exit` | Shutdown daemon |
+| `GET /start` | Start listening. Accepts `?language=<bcp47>` (alias `?lang=`) to override the default for this request. |
+| `GET /stop` | Stop listening (intentional). Param ignored. |
+| `GET /toggle` | Toggle listen state. Accepts `?language=<bcp47>` (alias `?lang=`). When already listening, the param is dropped and the listener is stopped. |
+| `GET /exit` | Shutdown daemon. Param ignored. |
 
-**Responses:** `503` browser not ready · `429` stop cooldown (100ms) · `200` with short text body on success
+**Language resolution order** (per request, on `/start` and `/toggle` only):
 
-Recommended hotkeys (see README): F9 toggles daemon (`/exit` or start `voice-type`), F10 toggles dictation (`/toggle`).
+1. `?language=` (or `?lang=`) — trimmed; empty string is treated as absent
+2. CLI `--lang` startup default
+3. Hard-coded `DEFAULT_LANGUAGE` (`en-US`) from [`src/language.ts`](src/language.ts)
+
+**Responses:** `503` browser not ready · `429` stop cooldown (100ms) · `400` invalid `?language=` value (with error notification) · `200` with short text body on success
+
+**Validation:** `?language=` is checked against [`WSA_LANGUAGES`](src/constants.ts) in [`isValidLanguage`](src/language.ts). On failure, the route responds `400` and calls `notifier.notifyError(...)` (D-Bus + paplay if enabled) without mutating any state. `/stop` and `/exit` never validate the param.
+
+Recommended hotkeys (see README): F9 toggles daemon (`/exit` or start `voice-type`), F10 toggles dictation (`/toggle`). Bind F11/F12 etc. to `?language=es-ES` / `?language=fr-FR` to switch languages per hotkey.
 
 ---
 
@@ -134,7 +147,7 @@ Parsed in [`src/cli.ts`](src/cli.ts) via `node:util.parseArgs` (strict).
 
 | Flag | Default | Notes |
 |---|---|---|
-| `-l, --lang` | `en-US` | Must be in `WSA_LANGUAGES` ([`constants.ts`](src/constants.ts)) |
+| `-l, --lang` | `en-US` | Startup default language. Must be in `WSA_LANGUAGES` ([`constants.ts`](src/constants.ts)). Override per request via `?language=` on `/start` and `/toggle` (see HTTP API). |
 | `--browser_type` | `chrome` | `chrome` or `chromium` → sets `BROWSER_TYPE` env |
 | `-p, --browser_path` | — | Custom executable → `BROWSER_PATH` env |
 | `--timeout` | `0` | Seconds of silence before auto-stop; **only when streaming** (`timeout > 0` resets on each speech update) |
@@ -159,12 +172,14 @@ Browser paths checked by launcher: `/usr/bin/google-chrome`, `/usr/bin/chromium`
 ### Daemon: [`src/daemon.ts`](src/daemon.ts)
 
 - Express routes (see HTTP API); `browserHealthMiddleware` before transcribe routes
-- `initBrowser()` → launch, new page, `exposeFunction` for speech callbacks, `browser.initWSA(stream, lang)`
-- `startTranscription` / `stopTranscription(reason)` — reasons: `intentional`, `silence`, `offline`
+- `initBrowser()` → launch, new page, `exposeFunction` for speech callbacks, `browser.initWSA(stream, defaultLanguage)`
+- `resolveAndValidateLanguage(req, res)` — reads `?language=` / `?lang=`, validates against `WSA_LANGUAGES`, returns the resolved string or `null` after sending `400` + `notifyError`. Used by `/start` and `/toggle`.
+- `startTranscription(lang, res)` — passes `lang` to `browser.setLangAndStart` so the in-page `rec.lang` is mutated and recognition begins in the requested language
+- `stopTranscription(reason)` — reasons: `intentional`, `silence`, `offline`
 - `handleBrowserRecStop` — auto-stops if WSA ends while still listening
 - `silenceTimer` — daemon-side timeout when `stream && timeout > 0`; reset on each `handleSpeechUpdate`
 - `isPortInUse()` — prevents duplicate daemon instances
-- State: `isWSAListening`, `stopCooldown`, `typingController.hasStopped`
+- State: `isWSAListening`, `stopCooldown`, `typingController.hasStopped`, `defaultLanguage` (startup default only)
 
 ### Browser/WSA: [`src/browser.js`](src/browser.js)
 
@@ -172,7 +187,7 @@ Browser paths checked by launcher: `/usr/bin/google-chrome`, `/usr/bin/chromium`
 - `onresult` → `onSpeechUpdate({ text })` with interim or accumulated final text
 - `onend` → `onBrowserRecStop({ reason: offline \| silence })`
 - `onerror` — `network` sets offline flag; other errors throw
-- Exported: `startListening`, `stopRecognition`, `healthCheck`
+- Exported: `startListening`, `stopRecognition`, `setLangAndStart(lang)`, `healthCheck`
 
 ### TypingController: [`src/typingController.ts`](src/typingController.ts)
 
@@ -217,6 +232,14 @@ interface CliFlags {
 
 `WSA_LANGUAGES` — 45 BCP47 tags in [`src/constants.ts`](src/constants.ts).
 
+Per-request language is shared between CLI and HTTP via [`src/language.ts`](src/language.ts):
+
+```typescript
+const DEFAULT_LANGUAGE = "en-US"
+function isValidLanguage(lang: unknown): lang is string
+function readLanguageQuery(query: Record<string, unknown>): string | undefined
+```
+
 ---
 
 ## Extension points
@@ -227,6 +250,7 @@ interface CliFlags {
 | New notification | Method on `Notifier` + wire in `daemon.ts` |
 | Non-dotool input | Replace `TypingController` (high effort) |
 | Alternate STT | Replace `browser.js` + launch config (high effort) |
+| Per-request language validation/resolution | [`src/language.ts`](src/language.ts) |
 
 ---
 

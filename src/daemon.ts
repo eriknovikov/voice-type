@@ -6,9 +6,10 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import Notifier from "./notifier.js"
 import { launchBrowser } from "./browserLauncher.js"
 import { PORT } from "./index.js"
+import { DEFAULT_LANGUAGE, isValidLanguage, readLanguageQuery } from "./language.js"
 
 export default class Daemon {
-    private wsaLanguage: string
+    private defaultLanguage: string
     private stream: boolean
     private timeout: number
     private browser: Browser | null = null
@@ -31,7 +32,7 @@ export default class Daemon {
         this.app = express()
         this.setupRoutes()
         this.notifier = new Notifier({ textNotifsEnabled, soundsNotifsEnabled })
-        this.wsaLanguage = wsaLanguage ?? "en-US"
+        this.defaultLanguage = wsaLanguage ?? DEFAULT_LANGUAGE
         this.stream = stream ?? false
         this.timeout = timeout ?? 0
     }
@@ -42,7 +43,9 @@ export default class Daemon {
         })
 
         this.app.get("/start", this.browserHealthMiddleware.bind(this), async (req, res) => {
-            await this.startTranscription(res)
+            const lang = this.resolveAndValidateLanguage(req, res)
+            if (lang === null) return
+            await this.startTranscription(lang, res)
         })
 
         this.app.get("/stop", this.browserHealthMiddleware.bind(this), async (req, res) => {
@@ -51,9 +54,14 @@ export default class Daemon {
 
         this.app.get("/toggle", this.browserHealthMiddleware.bind(this), async (req, res) => {
             if (this.isWSAListening) {
+                // Language arg on an already-listening toggle is intentionally dropped:
+                // a swap mid-session would require re-instantiating SpeechRecognition,
+                // which is deferred. Just stop (with cooldown + typing reset).
                 await this.stopTranscription("intentional", res)
             } else {
-                await this.startTranscription(res)
+                const lang = this.resolveAndValidateLanguage(req, res)
+                if (lang === null) return
+                await this.startTranscription(lang, res)
             }
         })
 
@@ -65,7 +73,22 @@ export default class Daemon {
         })
     }
 
-    private async startTranscription(res: Response) {
+    private resolveAndValidateLanguage(req: Request, res: Response): string | null {
+        const requested = readLanguageQuery(req.query as Record<string, unknown>)
+        if (requested === undefined) {
+            return this.defaultLanguage
+        }
+        if (!isValidLanguage(requested)) {
+            log(`Invalid language param '${requested}'`)
+            // Fire-and-forget: notify + respond without mutating state
+            void this.notifier.notifyError(`Invalid language: ${requested}`)
+            res.status(400).send(`Invalid language: ${requested}`)
+            return null
+        }
+        return requested
+    }
+
+    private async startTranscription(lang: string, res: Response) {
         if (this.stopCooldown) {
             res.status(429).send("Cooldown active - wait before starting")
             return
@@ -75,7 +98,7 @@ export default class Daemon {
             return
         }
 
-        log("Starting transcription...")
+        log(`Starting transcription in '${lang}'...`)
         this.isWSAListening = true
         this.typingController.hasStopped = false
         this.notifier.notifyMicStart()
@@ -84,7 +107,7 @@ export default class Daemon {
             this.resetSilenceTimer()
         }
 
-        await this.page!.evaluate(browser.startListening)
+        await this.page!.evaluate(browser.setLangAndStart, lang)
         res.send("Listening")
     }
 
@@ -168,7 +191,7 @@ export default class Daemon {
         await this.page.goto("data:text/html,<html><body><h1>Voice Type</h1></body></html>")
         await this.page.exposeFunction("onSpeechUpdate", this.handleSpeechUpdate.bind(this))
         await this.page.exposeFunction("onBrowserRecStop", this.handleBrowserRecStop.bind(this))
-        await this.page.evaluate(browser.initWSA, this.stream, this.wsaLanguage)
+        await this.page.evaluate(browser.initWSA, this.stream, this.defaultLanguage)
     }
 
     private handleSpeechUpdate(payload: { text: string }) {

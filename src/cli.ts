@@ -1,6 +1,7 @@
 import { spawn } from "child_process"
 import { parseArgs } from "node:util"
 import { WSA_LANGUAGES } from "./constants.js"
+import { isValidLanguage } from "./language.js"
 import type { CliFlags, WSALanguage } from "./types.js"
 import type { BrowserType } from "./browserLauncher.js"
 
@@ -54,7 +55,8 @@ VOICE TYPE - Real-Time Dictation Daemon
 Usage: voice-type [options]
 
 Options:
-  -l, --lang <lang>           Web Speech API language (e.g., en-US, es-ES). Default: en-US
+  -l, --lang <lang>           Default language for dictation (e.g., en-US, es-ES). Used when /start
+                              or /toggle is called without a ?language= param. Default: en-US
   --browser_type <browser>    Browser type: chrome or chromium. Default: chrome
   -p, --browser_path <path>   Path to browser executable
   --timeout <sec>             Auto-stop after N seconds of silence (streaming only). Default: 0
@@ -63,6 +65,10 @@ Options:
   -s, --sound                 Enable sound notifications (default: false)
   -d, --detached              Run the daemon in the background (detached mode)
   -h, --help                  Show this help message
+
+Per-request language:
+  The active language can be overridden at call time via ?language=<bcp47> on
+  /start and /toggle. ?lang= is also accepted. /stop and /exit ignore the param.
 
 Supported Languages (most common):
   English: en-US
@@ -74,10 +80,6 @@ Supported Languages (most common):
 To see the exhaustive list of languages, visit:
   https://github.com/eriknovikov/voice-type/tree/master/src/constants.ts
 `
-
-function isValidLanguage(lang: string): boolean {
-    return Object.values(WSA_LANGUAGES).includes(lang as any)
-}
 
 function pruneFlags(flags: string[]) {
     return flags.filter((flag) => flag !== "--detached" && flag !== "-d")

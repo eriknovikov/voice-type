@@ -23,6 +23,9 @@ const daemon = new Daemon(
     parsedFlags.textNotifs,
     parsedFlags.soundNotifs,
     parsedFlags.stream,
+    // The CLI --lang flag is the startup default; per-request language is
+    // resolved inside Daemon.setupRoutes() from the ?language= / ?lang=
+    // query param of /start and /toggle.
     parsedFlags.lang,
     parsedFlags.timeout,
 )

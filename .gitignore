@@ -4,3 +4,4 @@ build
 bun.lock
 TODO.md
 releases
+.cursor

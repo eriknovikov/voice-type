@@ -65,6 +65,19 @@ export function startListening() {
     }
 }
 
+export function setLangAndStart(lang) {
+    if (!window.recognition) {
+        console.error("rec not initialized")
+        return
+    }
+    try {
+        window.recognition.lang = lang
+        window.recognition.start()
+    } catch (e) {
+        console.error(`Error setting lang and starting rec: ${e.message || e}`)
+    }
+}
+
 export function stopRecognition() {
     if (!window.recognition) {
         const message = "rec not initialized"

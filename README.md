@@ -32,10 +32,10 @@ Pin a version: `curl -sSL .../install.sh | bash -s -- --version v3.1.0`
 
 # Usage
 
-1. **Start the daemon once** (e.g. F9) — Chrome loads in the background; the mic is not active yet.
-2. **Dictate** (e.g. F10) — speech is transcribed into the focused window in real time.
-3. **Stop dictation** (F10 again) — mic off; daemon keeps running for the next session.
-4. **Stop the daemon** (F9 again) — shuts down Chrome and frees resources.
+1. **Start the daemon once** (e.g. F10) — Chrome loads in the background; the mic is not active yet.
+2. **Dictate** (e.g. F9) — speak, and text appears in the focused window in real time.
+3. **Stop dictation** (F9 again) — mic off; the daemon stays running for the next session.
+4. **Stop the daemon** (F10 again) — shuts down Chrome and frees resources.
 
 ---
 
@@ -43,7 +43,7 @@ Pin a version: `curl -sSL .../install.sh | bash -s -- --version v3.1.0`
 
 | Flag | Description | Default |
 |---|---|---|
-| `--lang`, `-l` | Recognition language ([list](https://github.com/eriknovikov/voice-type/blob/main/src/constants.ts)) | `en-US` |
+| `--lang`, `-l` | Startup default language ([list](https://github.com/eriknovikov/voice-type/blob/main/src/constants.ts)). Override per key with `?lang=` (see [multiple languages](#dictate-in-multiple-languages)). | `en-US` |
 | `--browser_type` | `chrome` or `chromium` | `chrome` |
 | `--browser_path`, `-p` | Custom browser binary (e.g. `google-chrome-beta`) | — |
 | `--timeout` | Auto-stop after N seconds of silence (streaming only) | `0` (off) |
@@ -60,21 +60,36 @@ Bind these in your desktop environment (GNOME: Settings → Keyboard → Custom 
 
 | Key | Action | Command |
 |---|---|---|
-| F9 | Toggle daemon | `sh -c "curl http://127.0.0.1:3232/exit 2>/dev/null \|\| voice-type"` |
-| F10 | Toggle dictation | `curl http://127.0.0.1:3232/toggle` |
+| F10 | Start / stop the daemon | `sh -c "curl http://localhost:3232/exit 2>/dev/null \|\| voice-type"` |
+| F9 | Dictate (default language) | `curl http://localhost:3232/toggle` |
 
-Add flags to the start side of F9 if needed, e.g. `voice-type -l es-ES -s`.
+Press F10 once to start the daemon, then F9 to dictate. That's the whole flow.
+
+### Dictate in multiple languages
+
+Bind a separate key to each language by adding `?lang=` to the dictation command. Each key toggles dictation in its own language — no daemon restart, no flags to remember.
+
+| Key | Language | Command |
+|---|---|---|
+| F9 | English | `curl 'http://localhost:3232/toggle?lang=en-US'` |
+| F8 | Spanish | `curl 'http://localhost:3232/toggle?lang=es-ES'` |
+| F7 | French | `curl 'http://localhost:3232/toggle?lang=fr-FR'` |
+
+Plain `curl http://localhost:3232/toggle` (no `?lang=`) uses the daemon's startup default. Set that default with `voice-type -l es-ES`. See the [full language list](https://github.com/eriknovikov/voice-type/blob/main/src/constants.ts).
 
 ### HTTP API
 
-All endpoints are `GET` on `http://127.0.0.1:3232`:
+All endpoints are `GET` on `http://localhost:3232`:
 
 | Endpoint | Effect |
 |---|---|
+| `/health` | Returns `{"status":"ok"}` |
 | `/toggle` | Start or stop listening |
 | `/start` | Start listening |
 | `/stop` | Stop listening |
 | `/exit` | Shut down the daemon |
+
+`/start` and `/toggle` accept `?lang=<bcp47>` (alias `?language=`) to set the recognition language for that request, falling back to the startup default (`--lang`) when omitted. Invalid values return `400` with an error notification and leave the current state unchanged. `/stop` and `/exit` ignore the param.
 
 ---
 
