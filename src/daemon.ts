@@ -7,11 +7,19 @@ import Notifier from "./notifier.js"
 import { launchBrowser } from "./browserLauncher.js"
 import { PORT } from "./index.js"
 import { DEFAULT_LANGUAGE, isValidLanguage, readLanguageQuery } from "./language.js"
+import { capitalizeFirst, endsSentence, transformTranscript } from "./transcriptTransformer.js"
 
 export default class Daemon {
     private defaultLanguage: string
     private stream: boolean
     private timeout: number
+    private punctuation: boolean
+    // Sentence-start state for --punctuation: in stream mode a long pause
+    // finalizes the WSA segment and the next transcript arrives as a fresh
+    // string, so "capitalize after a period" can't be derived from the text
+    // itself. Track whether the previous segment ended a sentence instead.
+    private capitalizeNext: boolean = true
+    private lastTransformedText: string = ""
     private browser: Browser | null = null
     private page: Page | null = null
     private isWSAListening: boolean = false
@@ -28,6 +36,7 @@ export default class Daemon {
         stream?: boolean,
         wsaLanguage?: string,
         timeout?: number,
+        punctuation?: boolean,
     ) {
         this.app = express()
         this.setupRoutes()
@@ -35,6 +44,7 @@ export default class Daemon {
         this.defaultLanguage = wsaLanguage ?? DEFAULT_LANGUAGE
         this.stream = stream ?? false
         this.timeout = timeout ?? 0
+        this.punctuation = punctuation ?? false
     }
 
     private setupRoutes() {
@@ -99,6 +109,8 @@ export default class Daemon {
         }
 
         log(`Starting transcription in '${lang}'...`)
+        this.capitalizeNext = true
+        this.lastTransformedText = ""
         this.isWSAListening = true
         this.typingController.hasStopped = false
         this.notifier.notifyMicStart()
@@ -194,8 +206,36 @@ export default class Daemon {
         await this.page.evaluate(browser.initWSA, this.stream, this.defaultLanguage)
     }
 
+    private transformIfEnabled(rawText: string): string {
+        if (!this.punctuation) return rawText
+        let text = transformTranscript(rawText)
+        if (text.trim() === "") {
+            // Segment finalized (interim transcript reset): the next segment
+            // starts a new sentence only if this one ended with one.
+            //
+            // This is the ONLY place capitalizeNext is recomputed, and it reads
+            // the LAST interim of the segment — so corrections that arrive
+            // before finalization ("hello perod" -> "hello period") are
+            // reflected. A correction that ships only in the segment's final
+            // result is never seen: stream mode forwards interim text only, so
+            // the final result reaches us as this empty update. That's fine —
+            // such a correction is equally invisible to the typed text, so the
+            // capitalization decision always agrees with what's on screen.
+            if (this.lastTransformedText !== "") {
+                this.capitalizeNext = endsSentence(this.lastTransformedText)
+                this.lastTransformedText = ""
+            }
+            return text
+        }
+        // Applied on every interim update of the segment so the prefix diff
+        // never flips the first letter back and forth.
+        if (this.capitalizeNext) text = capitalizeFirst(text)
+        this.lastTransformedText = text
+        return text
+    }
+
     private handleSpeechUpdate(payload: { text: string }) {
-        this.typingController.calculateAndApplyDiff(payload.text)
+        this.typingController.calculateAndApplyDiff(this.transformIfEnabled(payload.text))
         if (this.stream && this.timeout > 0) {
             this.resetSilenceTimer()
         }

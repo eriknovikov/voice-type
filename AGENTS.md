@@ -35,6 +35,8 @@ Hotkey → curl :3232/toggle[?language=xx] → Daemon
               ↓
 Microphone → Web Speech API → onSpeechUpdate({ text })
               ↓
+transformIfEnabled (spoken punctuation + capitalization, --punctuation only)
+              ↓
 TypingController (diff) → dotool → focused application
               ↓
 Notifier → D-Bus / paplay (if enabled)
@@ -65,7 +67,7 @@ Notifier → D-Bus / paplay (if enabled)
 2. **Preserve file roles** — `src/browser.js` must stay `.js` (injected into Chrome). Imports use `.js` extensions (`verbatimModuleSyntax`).
 3. **Match existing style** — Prettier: 4-space tabs, 120 print width, no semicolons. `export default class` pattern. `import type` for type-only imports.
 4. **User docs vs agent docs** — User-facing install/usage → `README.md`. Architecture and contributor detail → this file or `INTERNALS.md`. Do not duplicate long architecture sections in the README.
-5. **No automated tests** — Manual scripts live in `src/tests/*.manual.ts`. Run with `bun run src/tests/<file>`. Do not add Jest/Vitest unless explicitly requested.
+5. **No automated tests** — There is currently no test suite (former `src/tests/*.manual.ts` scripts were removed). Verify changes by running the daemon. Do not add Jest/Vitest unless explicitly requested.
 6. **Linux-only** — Do not introduce macOS/Windows code paths. External deps: `dotool`, Chrome/Chromium, `paplay`, D-Bus session bus.
 7. **Binary releases** — Production installs use `install.sh` + GitHub releases (`bun build --compile`). Keep `package.json` scripts in sync when changing build steps.
 8. **Update this file** — If you change HTTP routes, CLI flags, streaming behavior, or core data flow, update AGENTS.md in the same PR.
@@ -95,10 +97,10 @@ voice-type/
 │   ├── browser.js         # WSA wrapper (Chrome context) — must remain .js
 │   ├── browserLauncher.ts # puppeteer-core launch + detectBrowser()
 │   ├── language.ts        # Shared isValidLanguage, readLanguageQuery, DEFAULT_LANGUAGE
+│   ├── transcriptTransformer.ts # Spoken punctuation + capitalization (--punctuation)
 │   ├── typingController.ts
 │   ├── notifier.ts, textNotifier.ts, soundNotifier.ts
-│   ├── logger.ts, utils.ts, types.ts, constants.ts
-│   └── tests/*.manual.ts
+│   └── utils.ts, types.ts, constants.ts
 ├── assets/sounds/         # start.oga, stop.oga (dev); /usr/local/share/... in prod
 ├── install.sh             # Release installer
 └── INTERNALS.md           # User-facing deep dive
@@ -151,6 +153,7 @@ Parsed in [`src/cli.ts`](src/cli.ts) via `node:util.parseArgs` (strict).
 | `--browser_type` | `chrome` | `chrome` or `chromium` → sets `BROWSER_TYPE` env |
 | `-p, --browser_path` | — | Custom executable → `BROWSER_PATH` env |
 | `--timeout` | `0` | Seconds of silence before auto-stop; **only when streaming** (`timeout > 0` resets on each speech update) |
+| `--punctuation` | off | Spoken punctuation ("comma", "period", "question mark", "exclamation mark", "semicolon", "colon") → symbols; auto-capitalize sentence starts. Applied to the transcript **before** diffing (see `transcriptTransformer.ts`) |
 | `--no-stream` | off | Final transcripts only (no interim diffs) |
 | `--text` | off | D-Bus desktop notifications |
 | `-s, --sound` | off | `paplay` feedback |
@@ -178,8 +181,9 @@ Browser paths checked by launcher: `/usr/bin/google-chrome`, `/usr/bin/chromium`
 - `stopTranscription(reason)` — reasons: `intentional`, `silence`, `offline`
 - `handleBrowserRecStop` — auto-stops if WSA ends while still listening
 - `silenceTimer` — daemon-side timeout when `stream && timeout > 0`; reset on each `handleSpeechUpdate`
+- `transformIfEnabled(rawText)` — with `--punctuation`, runs `transformTranscript` on the full transcript before diffing and manages sentence-start state: `capitalizeNext` is set on `startTranscription` and recomputed only at segment finalization (empty interim update) from `lastTransformedText`, so a gap after a sentence end capitalizes the next segment while a mid-sentence gap does not
 - `isPortInUse()` — prevents duplicate daemon instances
-- State: `isWSAListening`, `stopCooldown`, `typingController.hasStopped`, `defaultLanguage` (startup default only)
+- State: `isWSAListening`, `stopCooldown`, `typingController.hasStopped`, `defaultLanguage` (startup default only), `capitalizeNext` + `lastTransformedText` (`--punctuation` only)
 
 ### Browser/WSA: [`src/browser.js`](src/browser.js)
 
@@ -195,6 +199,12 @@ Browser paths checked by launcher: `/usr/bin/google-chrome`, `/usr/bin/chromium`
 - **DiffEnum:** `NoChange`, `ChangeRes` (backspace + type), `ChangeResAndClear` (empty transcript → reset)
 - Unicode via GNOME hex entry; ASCII buffered as `type ...`
 
+### Transcript transformer: [`src/transcriptTransformer.ts`](src/transcriptTransformer.ts)
+
+- Pure functions, no state: `transformTranscript` (spoken-word punctuation rules + in-string capitalization after `.?!`), `capitalizeFirst`, `endsSentence`
+- Word-boundary, case-insensitive rules — "commander"/"periodic" stay literal; no escape mechanism for literal "comma" etc. (off = literal typing)
+- Always applied to the **whole** transcript per update so `prevText`/`currText` diff in the same transformed space; segment-boundary capitalization state lives in `Daemon`, not here
+
 ### Browser launcher: [`src/browserLauncher.ts`](src/browserLauncher.ts)
 
 - `detectBrowser()`, `launchBrowser()` — headless `"new"`, shared `LAUNCH_ARGS` (media fake UI, disable throttling, etc.)
@@ -206,9 +216,9 @@ Browser paths checked by launcher: `/usr/bin/google-chrome`, `/usr/bin/chromium`
 - [`textNotifier.ts`](src/textNotifier.ts) — `dbus-next`, replace via `lastNotificationId`, retry with backoff
 - [`soundNotifier.ts`](src/soundNotifier.ts) — `paplay`; prod path `/usr/local/share/voice-type/sounds`
 
-### Logger: [`src/logger.ts`](src/logger.ts)
+### Logging
 
-- Rotating in-memory buffer (10MB default); `[DAEMON]` prefix on console
+- No dedicated logger module — `log()` in [`src/utils.ts`](src/utils.ts) prefixes console output with `[DAEMON]`; browser console is piped with `[BROWSER]`, dotool stderr with `[DOTOOL]`
 
 ---
 
@@ -225,12 +235,13 @@ interface CliFlags {
     browserType: BrowserType
     browserPath?: string
     timeout: number
+    punctuation: boolean
     detached: boolean
     help: boolean
 }
 ```
 
-`WSA_LANGUAGES` — 45 BCP47 tags in [`src/constants.ts`](src/constants.ts).
+`WSA_LANGUAGES` — 41 BCP47 tags in [`src/constants.ts`](src/constants.ts).
 
 Per-request language is shared between CLI and HTTP via [`src/language.ts`](src/language.ts):
 
@@ -251,6 +262,7 @@ function readLanguageQuery(query: Record<string, unknown>): string | undefined
 | Non-dotool input | Replace `TypingController` (high effort) |
 | Alternate STT | Replace `browser.js` + launch config (high effort) |
 | Per-request language validation/resolution | [`src/language.ts`](src/language.ts) |
+| New spoken-punctuation rule | `PUNCTUATION_RULES` in [`src/transcriptTransformer.ts`](src/transcriptTransformer.ts) |
 
 ---
 

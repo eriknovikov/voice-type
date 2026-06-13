@@ -19,6 +19,7 @@ export interface CliFlags {
     browserType: BrowserType
     browserPath?: string
     timeout: number
+    punctuation: boolean
     detached: boolean
     help: boolean
 }

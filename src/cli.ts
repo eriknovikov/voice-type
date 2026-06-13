@@ -37,6 +37,10 @@ const options = {
         type: "string",
         default: "0",
     },
+    punctuation: {
+        type: "boolean",
+        default: false,
+    },
     detached: {
         type: "boolean",
         short: "d",
@@ -60,6 +64,9 @@ Options:
   --browser_type <browser>    Browser type: chrome or chromium. Default: chrome
   -p, --browser_path <path>   Path to browser executable
   --timeout <sec>             Auto-stop after N seconds of silence (streaming only). Default: 0
+  --punctuation               Convert spoken punctuation ("comma", "period", "question mark",
+                              "exclamation mark", "semicolon", "colon") and auto-capitalize
+                              sentence starts (default: false)
   --no-stream                 Use final transcripts only (no interim corrections)
   -t, --text                  Enable text notifications (default: false)
   -s, --sound                 Enable sound notifications (default: false)
@@ -133,6 +140,7 @@ export function parseFlags(args: string[]): CliFlags {
         browserType: values.browser_type as BrowserType,
         browserPath: values.browser_path,
         timeout,
+        punctuation: values.punctuation,
         textNotifs: values["text"],
         stream: !values["no-stream"],
         soundNotifs: values["sound"],

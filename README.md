@@ -37,6 +37,23 @@ Pin a version: `curl -sSL .../install.sh | bash -s -- --version v3.1.0`
 3. **Stop dictation** (F9 again) — mic off; the daemon stays running for the next session.
 4. **Stop the daemon** (F10 again) — shuts down Chrome and frees resources.
 
+### Spoken punctuation
+
+The Web Speech API doesn't insert punctuation. Start the daemon with `--punctuation` to dictate it:
+
+| You say | You get |
+|---|---|
+| `comma` | `,` |
+| `period` | `.` |
+| `question mark` | `?` |
+| `exclamation mark` (or `exclamation point`) | `!` |
+| `semicolon` | `;` |
+| `colon` | `:` |
+
+Saying "hello comma world period" types `hello, world.` — the first word of each sentence is capitalized automatically, including the first word after starting dictation and after a pause that follows a sentence end (a pause mid-sentence does not capitalize).
+
+Matching is whole-word, so "commander" and "periodic" type literally. There is no escape sequence: with the flag on, you can't type the literal words "comma" or "period"; leave the flag off (the default) to type everything literally.
+
 ---
 
 # Options
@@ -47,6 +64,7 @@ Pin a version: `curl -sSL .../install.sh | bash -s -- --version v3.1.0`
 | `--browser_type` | `chrome` or `chromium` | `chrome` |
 | `--browser_path`, `-p` | Custom browser binary (e.g. `google-chrome-beta`) | — |
 | `--timeout` | Auto-stop after N seconds of silence (streaming only) | `0` (off) |
+| `--punctuation` | Turn spoken punctuation into symbols and auto-capitalize sentences (see [Spoken punctuation](#spoken-punctuation)) | off |
 | `--no-stream` | Final transcripts only (no live corrections) | off |
 | `--sound`, `-s` | Sound notifications | off |
 | `--text` | Desktop notifications | off |
