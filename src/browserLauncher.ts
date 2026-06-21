@@ -1,5 +1,5 @@
+import { access, constants as fsConstants } from "node:fs/promises"
 import puppeteer from "puppeteer-core"
-import { spawn } from "child_process"
 
 const CHROME_PATH = "/usr/bin/google-chrome"
 const CHROMIUM_PATH = "/usr/bin/chromium"
@@ -42,22 +42,12 @@ export async function detectBrowser(): Promise<BrowserType | null> {
 }
 
 async function checkBrowserExists(browserPath: string): Promise<boolean> {
-    return new Promise((resolve) => {
-        const which = spawn("which", [browserPath])
-        let output = ""
-
-        which.stdout.on("data", (data) => {
-            output += data.toString()
-        })
-
-        which.on("close", (code) => {
-            resolve(code === 0 && output.trim().length > 0)
-        })
-
-        which.on("error", () => {
-            resolve(false)
-        })
-    })
+    try {
+        await access(browserPath, fsConstants.R_OK)
+        return true
+    } catch {
+        return false
+    }
 }
 
 export async function launchBrowser() {

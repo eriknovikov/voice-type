@@ -81,21 +81,6 @@ install_binary() {
     fi
 }
 
-# Install sounds
-install_sounds() {
-    SOUNDS_DIR="/usr/local/share/voice-type/sounds"
-
-    if [ -w /usr/local/share ]; then
-        mkdir -p "$SOUNDS_DIR"
-        curl -sSfL "https://raw.githubusercontent.com/${REPO}/main/assets/sounds/start.oga" -o "${SOUNDS_DIR}/start.oga"
-        curl -sSfL "https://raw.githubusercontent.com/${REPO}/main/assets/sounds/stop.oga" -o "${SOUNDS_DIR}/stop.oga"
-    else
-        sudo mkdir -p "$SOUNDS_DIR"
-        sudo curl -sSfL "https://raw.githubusercontent.com/${REPO}/main/assets/sounds/start.oga" -o "${SOUNDS_DIR}/start.oga"
-        sudo curl -sSfL "https://raw.githubusercontent.com/${REPO}/main/assets/sounds/stop.oga" -o "${SOUNDS_DIR}/stop.oga"
-    fi
-}
-
 main() {
     log_info "Voice Type Installer"
     log_info "=================="
@@ -131,10 +116,6 @@ main() {
         # Install binary
         log_info "Installing binary..."
         install_binary "build/voice-type"
-
-        # Install sounds
-        log_info "Installing sounds..."
-        install_sounds
 
         log_info "Successfully installed ${BINARY_NAME} to /usr/local/bin/${BINARY_NAME}"
 
@@ -200,7 +181,6 @@ main() {
     tar -xzf "${FILENAME}" -C "$TMP_DIR"
 
     install_binary "${TMP_DIR}/voice-type-${ARCH}/voice-type"
-    install_sounds
 
     log_info "Successfully installed ${BINARY_NAME} to /usr/local/bin/${BINARY_NAME}"
 

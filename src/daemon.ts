@@ -5,27 +5,30 @@ import { isPortInUse, log } from "./utils.js"
 import express, { type Express, type Request, type Response, type NextFunction } from "express"
 import Notifier from "./notifier.js"
 import { launchBrowser } from "./browserLauncher.js"
-import { PORT } from "./index.js"
+import { PORT } from "./constants.js"
 import { DEFAULT_LANGUAGE, isValidLanguage, readLanguageQuery } from "./language.js"
-import { capitalizeFirst, endsSentence, transformTranscript } from "./transcriptTransformer.js"
+import { createTranscriptTransformerSession } from "./transcriptTransformers/index.js"
+import { createNoopTransformerSession } from "./transcriptTransformers/noop.js"
+import type { TranscriptTransformerSession } from "./transcriptTransformers/types.js"
+import SpeechPipeline from "./speechPipeline.js"
+import { shouldAcceptSpeechEvent } from "./speechEventGate.js"
+import type { SpeechEvent } from "./types.js"
 
 export default class Daemon {
     private defaultLanguage: string
     private stream: boolean
     private timeout: number
-    private punctuation: boolean
-    // Sentence-start state for --punctuation: in stream mode a long pause
-    // finalizes the WSA segment and the next transcript arrives as a fresh
-    // string, so "capitalize after a period" can't be derived from the text
-    // itself. Track whether the previous segment ended a sentence instead.
-    private capitalizeNext: boolean = true
-    private lastTransformedText: string = ""
+    private transcriptTransformer: TranscriptTransformerSession = createNoopTransformerSession()
+    private typingController: TypingController = new TypingController()
+    private speechPipeline: SpeechPipeline = new SpeechPipeline(
+        this.transcriptTransformer,
+        this.typingController,
+    )
     private browser: Browser | null = null
     private page: Page | null = null
     private isWSAListening: boolean = false
     private app: Express
 
-    private typingController: TypingController = new TypingController()
     private notifier: Notifier
     private stopCooldown: boolean = false
     private silenceTimer: NodeJS.Timeout | null = null
@@ -36,15 +39,13 @@ export default class Daemon {
         stream?: boolean,
         wsaLanguage?: string,
         timeout?: number,
-        punctuation?: boolean,
     ) {
         this.app = express()
         this.setupRoutes()
         this.notifier = new Notifier({ textNotifsEnabled, soundsNotifsEnabled })
         this.defaultLanguage = wsaLanguage ?? DEFAULT_LANGUAGE
-        this.stream = stream ?? false
+        this.stream = stream ?? true
         this.timeout = timeout ?? 0
-        this.punctuation = punctuation ?? false
     }
 
     private setupRoutes() {
@@ -109,8 +110,9 @@ export default class Daemon {
         }
 
         log(`Starting transcription in '${lang}'...`)
-        this.capitalizeNext = true
-        this.lastTransformedText = ""
+        this.transcriptTransformer = createTranscriptTransformerSession(lang, this.stream)
+        this.transcriptTransformer.reset()
+        this.speechPipeline = new SpeechPipeline(this.transcriptTransformer, this.typingController)
         this.isWSAListening = true
         this.typingController.hasStopped = false
         this.notifier.notifyMicStart()
@@ -150,13 +152,14 @@ export default class Daemon {
 
         log(`Stopping transcription... Reason: ${reason}`)
         this.isWSAListening = false
+        this.transcriptTransformer.reset()
         this.typingController.hasStopped = true
         this.typingController.reset()
 
         // Trigger corresponding notification
         if (reason === "intentional") {
             this.notifier.notifyMicStopIntentional()
-        } else if (reason == "silence") {
+        } else if (reason === "silence") {
             this.notifier.notifyMicStopSilence()
         } else if (reason === "offline") {
             this.notifier.notifyOffline()
@@ -177,8 +180,9 @@ export default class Daemon {
 
     private async browserHealthMiddleware(req: Request, res: Response, next: NextFunction) {
         if (!this.isBrowserReady()) {
-            log("Browser not ready - initializing...")
-            throw new Error("Unexpected path. browser should be ready already")
+            log("Browser not ready")
+            res.status(503).send("Browser not ready")
+            return
         }
 
         try {
@@ -190,6 +194,7 @@ export default class Daemon {
                 await this.reinitBrowser()
                 next()
             } catch (e) {
+                log(`Browser reinitialization failed: ${e}`)
                 res.status(503).send("Browser reinitialization failed")
             }
         }
@@ -201,42 +206,16 @@ export default class Daemon {
         this.page.on("console", (msg) => console.log("[BROWSER]", msg.text()))
 
         await this.page.goto("data:text/html,<html><body><h1>Voice Type</h1></body></html>")
-        await this.page.exposeFunction("onSpeechUpdate", this.handleSpeechUpdate.bind(this))
+        await this.page.exposeFunction("onSpeechEvent", this.handleSpeechEvent.bind(this))
         await this.page.exposeFunction("onBrowserRecStop", this.handleBrowserRecStop.bind(this))
         await this.page.evaluate(browser.initWSA, this.stream, this.defaultLanguage)
     }
 
-    private transformIfEnabled(rawText: string): string {
-        if (!this.punctuation) return rawText
-        let text = transformTranscript(rawText)
-        if (text.trim() === "") {
-            // Segment finalized (interim transcript reset): the next segment
-            // starts a new sentence only if this one ended with one.
-            //
-            // This is the ONLY place capitalizeNext is recomputed, and it reads
-            // the LAST interim of the segment — so corrections that arrive
-            // before finalization ("hello perod" -> "hello period") are
-            // reflected. A correction that ships only in the segment's final
-            // result is never seen: stream mode forwards interim text only, so
-            // the final result reaches us as this empty update. That's fine —
-            // such a correction is equally invisible to the typed text, so the
-            // capitalization decision always agrees with what's on screen.
-            if (this.lastTransformedText !== "") {
-                this.capitalizeNext = endsSentence(this.lastTransformedText)
-                this.lastTransformedText = ""
-            }
-            return text
-        }
-        // Applied on every interim update of the segment so the prefix diff
-        // never flips the first letter back and forth.
-        if (this.capitalizeNext) text = capitalizeFirst(text)
-        this.lastTransformedText = text
-        return text
-    }
+    private handleSpeechEvent(event: SpeechEvent) {
+        if (!shouldAcceptSpeechEvent(this.isWSAListening, this.typingController.hasStopped)) return
 
-    private handleSpeechUpdate(payload: { text: string }) {
-        this.typingController.calculateAndApplyDiff(this.transformIfEnabled(payload.text))
-        if (this.stream && this.timeout > 0) {
+        this.speechPipeline.onEvent(event)
+        if (event.kind === "text" && this.stream && this.timeout > 0) {
             this.resetSilenceTimer()
         }
     }
@@ -245,9 +224,10 @@ export default class Daemon {
         this.clearSilenceTimer()
         if (this.timeout > 0) {
             this.silenceTimer = setTimeout(() => {
-                if (this.isWSAListening) {
-                    this.stopTranscription("silence")
-                }
+                if (!this.isWSAListening) return
+                void this.stopTranscription("silence").catch((e) => {
+                    log(`Silence timer stop failed: ${e}`)
+                })
             }, this.timeout * 1000)
         }
     }
@@ -259,10 +239,15 @@ export default class Daemon {
         }
     }
     private async handleBrowserRecStop(payload: { reason: "silence" | "offline" | undefined }) {
-        if (this.isWSAListening) await this.stopTranscription(payload.reason ?? "intentional")
+        if (!this.isWSAListening) return
+        try {
+            await this.stopTranscription(payload.reason ?? "silence")
+        } catch (e) {
+            log(`Browser rec stop handling failed: ${e}`)
+        }
     }
 
-    //start spawns browser and server listener
+    // Start spawns browser and HTTP listener.
     public async start(port: number) {
         if (await isPortInUse(PORT)) {
             await this.notifier.notifyAlreadyRunning()
@@ -280,7 +265,7 @@ export default class Daemon {
             this.notifier.notifyError("Failed to initialize Voice Type daemon.")
             console.error(e)
 
-            process.exit(0)
+            process.exit(1)
         }
     }
 
@@ -290,6 +275,7 @@ export default class Daemon {
     public async destroy() {
         console.log("\n[DAEMON] Shutting down daemon...")
         this.clearSilenceTimer()
+        this.transcriptTransformer.reset()
         this.notifier.destroy()
         this.typingController.destroy()
 

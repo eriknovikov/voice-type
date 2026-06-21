@@ -1,4 +1,44 @@
+// Injected into Chrome via page.evaluate — no imports. Helpers used by evaluated
+// functions must be nested inside them (Puppeteer only serializes the top-level export).
+// Event mapper: keep browserRecognition.js in sync (tests/browserRecognition.sync.test.ts).
+
 export function initWSA(stream, lang) {
+    function recognitionResultsToEvents(stream, resultIndex, results) {
+        let interimText = ""
+        let finalizedText = ""
+        let segmentFinalized = false
+
+        for (let i = resultIndex; i < results.length; i++) {
+            if (!results[i].isFinal) {
+                interimText += results[i][0].transcript
+            } else {
+                finalizedText += results[i][0].transcript
+                segmentFinalized = true
+            }
+        }
+
+        const events = []
+
+        if (stream) {
+            if (segmentFinalized) {
+                if (finalizedText) {
+                    events.push({ kind: "text", text: finalizedText })
+                }
+                events.push({ kind: "segment-finalized" })
+            }
+            if (interimText) {
+                events.push({ kind: "text", text: interimText })
+            }
+        } else if (segmentFinalized) {
+            if (finalizedText) {
+                events.push({ kind: "text", text: finalizedText })
+            }
+            events.push({ kind: "segment-finalized" })
+        }
+
+        return events
+    }
+
     console.log("browser connected. initializing Web Speech API...")
 
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition
@@ -19,31 +59,20 @@ export function initWSA(stream, lang) {
         rec.isRunning = true
     }
 
-    let finalText = ""
     rec.onresult = (event) => {
-        let interimText = ""
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-            if (!event.results[i].isFinal) {
-                interimText += event.results[i][0].transcript
-            } else {
-                finalText += event.results[i][0].transcript
-            }
+        const events = recognitionResultsToEvents(stream, event.resultIndex, event.results)
+        for (const speechEvent of events) {
+            window.onSpeechEvent(speechEvent)
         }
-        const resultText = stream ? interimText : finalText
-        window.onSpeechUpdate({ text: resultText })
     }
 
-    //onerror happens always before onend.
     rec.onerror = (event) => {
         if (event.error === "network") window.isOffline = true
         else throw new Error(`unexpected recognition error: ${event.error}`)
     }
 
     rec.onend = () => {
-        // if recognition was stopped normally, onBrowserRecStop is a no-op since the daemon.isWSAListening is already FALSE
         window.onBrowserRecStop({ reason: window.isOffline ? "offline" : "silence" })
-        //clear state
-        finalText = ""
         rec.isRunning = false
         window.isOffline = undefined
     }

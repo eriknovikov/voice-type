@@ -12,19 +12,20 @@
     },
     "files": [
         "bin",
-        "dist",
-        "assets"
+        "dist"
     ],
     "scripts": {
         "dev": "bun --watch src/index.ts",
         "start": "bun run src/index.ts",
-        "build": "bun build src/index.ts --outdir dist --target node"
+        "build": "bun build src/index.ts --outdir dist --target node",
+        "test": "bun test tests",
+        "test:watch": "bun test --watch tests",
+        "test:coverage": "bun test --coverage tests"
     },
     "dependencies": {
         "dbus-next": "^0.10.2",
         "express": "^5.2.1",
-        "puppeteer-core": "^24.39.1",
-        "x11": "^2.3.0"
+        "puppeteer-core": "^24.39.1"
     },
     "devDependencies": {
         "@types/express": "^5.0.6",

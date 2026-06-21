@@ -1,5 +1,5 @@
-import { TextNotifier } from "./textNotifier"
-import { SoundNotifier } from "./soundNotifier"
+import { TextNotifier } from "./textNotifier.js"
+import { SoundNotifier } from "./soundNotifier.js"
 
 /**
  * Main notifier that composes TextNotifier and SoundNotifier
@@ -10,8 +10,8 @@ export default class Notifier {
     private soundNotifier: SoundNotifier
 
     constructor(opts: { textNotifsEnabled?: boolean; soundsNotifsEnabled?: boolean } = {}) {
-        this.textNotifier = new TextNotifier(opts.textNotifsEnabled ?? true)
-        this.soundNotifier = new SoundNotifier(opts.soundsNotifsEnabled ?? true)
+        this.textNotifier = new TextNotifier(opts.textNotifsEnabled ?? false)
+        this.soundNotifier = new SoundNotifier(opts.soundsNotifsEnabled ?? false)
     }
 
     async notifyDaemonStart() {

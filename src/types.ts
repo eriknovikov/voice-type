@@ -1,15 +1,11 @@
-import type { BrowserType } from "./browserLauncher"
-import type { WSA_LANGUAGES } from "./constants"
-
-export enum DiffEnum {
-    NoChange = "NO_CHANGE",
-    ChangeRes = "CHANGE_RES",
-    ChangeResAndClear = "CHANGE_RES_AND_CLEAR",
-}
+import type { BrowserType } from "./browserLauncher.js"
+import type { WSA_LANGUAGES } from "./constants.js"
 
 export type Urgency = "low" | "normal" | "critical"
 
 export type WSALanguage = (typeof WSA_LANGUAGES)[keyof typeof WSA_LANGUAGES]
+
+export type SpeechEvent = { kind: "text"; text: string } | { kind: "segment-finalized" }
 
 export interface CliFlags {
     lang: WSALanguage
@@ -19,7 +15,6 @@ export interface CliFlags {
     browserType: BrowserType
     browserPath?: string
     timeout: number
-    punctuation: boolean
     detached: boolean
     help: boolean
 }

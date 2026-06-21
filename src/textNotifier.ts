@@ -1,5 +1,5 @@
 import { sessionBus, Variant, type MessageBus } from "dbus-next"
-import type { Urgency } from "./types"
+import type { Urgency } from "./types.js"
 import { log } from "./utils.js"
 const SYNC_ID = "voice-type-dictation"
 /**
@@ -175,7 +175,7 @@ export class TextNotifier {
         )
     }
 
-    async notifyDaemonStop(hotkey: string = "F10") {
+    async notifyDaemonStop() {
         await this.notify("⏹️ Voice Type Daemon Stopped", "Daemon has been shut down.", "process-stop", "normal")
     }
 
