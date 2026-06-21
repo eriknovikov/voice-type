@@ -5,7 +5,6 @@
         "moduleResolution": "bundler",
         "lib": ["ES2022"],
         "outDir": "./dist",
-        "rootDir": "./src",
         "strict": true,
         "esModuleInterop": true,
         "skipLibCheck": true,
@@ -23,6 +22,6 @@
         "verbatimModuleSyntax": true,
         "types": ["bun-types", "@types/express"]
     },
-    "include": ["src/**/*"],
-    "exclude": ["node_modules", "dist", "tests"]
+    "include": ["src/**/*", "tests/**/*"],
+    "exclude": ["node_modules", "dist"]
 }
