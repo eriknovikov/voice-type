@@ -1,9 +1,7 @@
 import { Browser, Page } from "puppeteer-core"
 import * as browser from "./browser.js"
 import TypingController from "./typingController.js"
-import { log } from "./logger.js"
-import { runPreflight } from "./preflight.js"
-import { persistConfig } from "./config.js"
+import { isPortInUse, log } from "./utils.js"
 import express, { type Express, type Request, type Response, type NextFunction } from "express"
 import Notifier from "./notifier.js"
 import { launchBrowser } from "./browserLauncher.js"
@@ -23,21 +21,15 @@ export default class Daemon {
     private browser: Browser | null = null
     private page: Page | null = null
     private isWSAListening: boolean = false
-    public readonly app: Express
+    private app: Express
 
     private notifier: Notifier
     private stopCooldown: boolean = false
     private silenceTimer: NodeJS.Timeout | null = null
-    private punctuationEnabled: boolean
 
-    constructor(config: VoiceTypeConfig, typingController?: TypingController) {
+    constructor(config: VoiceTypeConfig) {
         this.config = config
-        if (typingController) {
-            this.typingController = typingController
-            this.speechPipeline = new SpeechPipeline(this.transcriptTransformer, this.typingController)
-        }
-        this.punctuationEnabled = config.punctuation
-        this.app =./uninstall.sh express()
+        this.app = express()
         this.setupRoutes()
         this.notifier = new Notifier({ textNotifsEnabled: config.text, soundsNotifsEnabled: config.sound })
     }
@@ -73,29 +65,6 @@ export default class Daemon {
             await this.destroy()
             process.exit(0)
         })
-
-        this.app.get("/togglePunctuation", async (req, res) => {
-            const raw = (req.query as Record<string, unknown>).enabled
-            if (raw !== undefined) {
-                if (raw === "true") {
-                    this.punctuationEnabled = true
-                } else if (raw === "false") {
-                    this.punctuationEnabled = false
-                } else {
-                    res.status(400).json({ error: "enabled must be 'true' or 'false'" })
-                    return
-                }
-            } else {
-                this.punctuationEnabled = !this.punctuationEnabled
-            }
-            try {
-                await persistConfig({ ...this.config, punctuation: this.punctuationEnabled })
-            } catch (e) {
-                log("DAEMON", `Failed to persist punctuation toggle: ${e}`)
-            }
-            log("DAEMON", `punctuation ${this.punctuationEnabled ? "enabled" : "disabled"}`)
-            res.json({ punctuation: this.punctuationEnabled })
-        })
     }
 
     private resolveAndValidateLanguage(req: Request, res: Response): string | null {
@@ -104,7 +73,7 @@ export default class Daemon {
             return this.config.lang
         }
         if (!isValidLanguage(requested)) {
-            log("DAEMON", `Invalid language param '${requested}'`)
+            log(`Invalid language param '${requested}'`)
             void this.notifier.notifyError(`Invalid language: ${requested}`)
             res.status(400).send(`Invalid language: ${requested}`)
             return null
@@ -122,12 +91,8 @@ export default class Daemon {
             return
         }
 
-        log("DAEMON", `Starting transcription in '${lang}'...`)
-        this.transcriptTransformer = createTranscriptTransformerSession(
-            lang,
-            this.config.stream,
-            () => this.punctuationEnabled,
-        )
+        log(`Starting transcription in '${lang}'...`)
+        this.transcriptTransformer = createTranscriptTransformerSession(lang, this.config.stream)
         this.transcriptTransformer.reset()
         this.speechPipeline = new SpeechPipeline(this.transcriptTransformer, this.typingController)
         this.isWSAListening = true
@@ -156,18 +121,18 @@ export default class Daemon {
 
     private async stopTranscription(reason: "intentional" | "offline" | "silence", res?: Response) {
         if (this.stopCooldown) {
-            log("DAEMON", `Stop request ignored - still in cooldown period (reason: ${reason})`)
+            log(`Stop request ignored - still in cooldown period (reason: ${reason})`)
             res?.status(429).send("Cooldown active")
             return
         }
         if (!this.isWSAListening) {
-            log("DAEMON", "No active listener.")
+            log("No active listener.")
             res?.send("No active listener")
             return
         }
         this.clearSilenceTimer()
 
-        log("DAEMON", `Stopping transcription... Reason: ${reason}`)
+        log(`Stopping transcription... Reason: ${reason}`)
         this.isWSAListening = false
         this.transcriptTransformer.reset()
         this.typingController.hasStopped = true
@@ -196,7 +161,7 @@ export default class Daemon {
 
     private async browserHealthMiddleware(req: Request, res: Response, next: NextFunction) {
         if (!this.isBrowserReady()) {
-            log("DAEMON", "Browser not ready")
+            log("Browser not ready")
             res.status(503).send("Browser not ready")
             return
         }
@@ -205,12 +170,12 @@ export default class Daemon {
             await this.page!.evaluate(browser.healthCheck)
             next()
         } catch (e) {
-            log("DAEMON", `Browser health check failed: ${e} - reinitializing...`)
+            log(`Browser health check failed: ${e} - reinitializing...`)
             try {
                 await this.reinitBrowser()
                 next()
             } catch (e) {
-                log("DAEMON", `Browser reinitialization failed: ${e}`)
+                log(`Browser reinitialization failed: ${e}`)
                 res.status(503).send("Browser reinitialization failed")
             }
         }
@@ -219,7 +184,7 @@ export default class Daemon {
     private async initBrowser() {
         this.browser = await launchBrowser(this.config)
         this.page = await this.browser.newPage()
-        this.page.on("console", (msg) => log("BROWSER", msg.text()))
+        this.page.on("console", (msg) => console.log("[BROWSER]", msg.text()))
 
         await this.page.goto("data:text/html,<html><body><h1>Voice Type</h1></body></html>")
         await this.page.exposeFunction("onSpeechEvent", this.handleSpeechEvent.bind(this))
@@ -242,7 +207,7 @@ export default class Daemon {
             this.silenceTimer = setTimeout(() => {
                 if (!this.isWSAListening) return
                 void this.stopTranscription("silence").catch((e) => {
-                    log("DAEMON", `Silence timer stop failed: ${e}`)
+                    log(`Silence timer stop failed: ${e}`)
                 })
             }, this.config.timeout * 1000)
         }
@@ -259,45 +224,33 @@ export default class Daemon {
         try {
             await this.stopTranscription(payload.reason ?? "silence")
         } catch (e) {
-            log("DAEMON", `Browser rec stop handling failed: ${e}`)
+            log(`Browser rec stop handling failed: ${e}`)
         }
     }
 
     public async start() {
-        const result = await runPreflight({
-            port: this.config.port,
-            browser_path: this.config.browser_path,
-        })
-        if (!result.ok) {
-            const { kind, message } = result.failure
-            if (kind === "port-in-use") {
-                await this.notifier.notifyAlreadyRunning()
-                log("DAEMON", message)
-                process.exit(0)
-            }
-            await this.notifier.notifyError(message)
-            log("PREFLIGHT", message)
-            log("DAEMON", `startup failure: ${message}`)
-            await this.destroy()
-            process.exit(1)
+        if (await isPortInUse(this.config.port)) {
+            await this.notifier.notifyAlreadyRunning()
+            log("Daemon already running on port " + this.config.port)
+            process.exit(0)
         }
 
         try {
             this.app.listen(this.config.port, "127.0.0.1", () => {
-                log("DAEMON", `server started on port: ${this.config.port}`)
+                log(`server started on port: ${this.config.port}`)
             })
             await this.initBrowser()
             this.notifier.notifyDaemonStart()
         } catch (e) {
             this.notifier.notifyError("Failed to initialize Voice Type daemon.")
-            log("DAEMON", "Failed to initialize Voice Type daemon:", e)
-            await this.destroy()
+            console.error(e)
+
             process.exit(1)
         }
     }
 
     public async destroy() {
-        log("DAEMON", "Shutting down daemon...")
+        console.log("\n[DAEMON] Shutting down daemon...")
         this.clearSilenceTimer()
         this.transcriptTransformer.reset()
         this.notifier.destroy()

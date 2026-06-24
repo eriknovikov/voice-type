@@ -7,6 +7,12 @@ export type WSALanguage = (typeof WSA_LANGUAGES)[keyof typeof WSA_LANGUAGES]
 
 export type SpeechEvent = { kind: "text"; text: string } | { kind: "segment-finalized" }
 
+export interface ShortcutsConfig {
+    daemon: string
+    toggle: string
+    languages?: Record<string, string>
+}
+
 export interface VoiceTypeConfig {
     port: number
     lang: string
@@ -17,4 +23,5 @@ export interface VoiceTypeConfig {
     sound: boolean
     text: boolean
     punctuation: boolean
+    shortcuts: ShortcutsConfig
 }

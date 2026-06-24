@@ -3,8 +3,7 @@ import { access, readFile, rename, writeFile, mkdir } from "node:fs/promises"
 import { detectDefaultBrowser } from "./browserLauncher.js"
 import { DEFAULT_LANGUAGE, isValidLanguage } from "./language.js"
 import { PORT } from "./constants.js"
-import { log } from "./logger.js"
-import type { VoiceTypeConfig } from "./types.js"
+import type { VoiceTypeConfig, ShortcutsConfig } from "./types.js"
 
 export function configFilePath(): string {
     const base = process.env.XDG_CONFIG_HOME || `${homedir()}/.config`
@@ -21,6 +20,11 @@ const DEFAULT_CONFIG: VoiceTypeConfig = {
     sound: false,
     text: false,
     punctuation: true,
+    shortcuts: {
+        daemon: "F10",
+        toggle: "F9",
+        languages: {},
+    },
 }
 
 export class ConfigParseError extends Error {
@@ -79,18 +83,33 @@ export function stripJsoncComments(text: string): string {
     return out
 }
 
+function isValidShortcutsConfig(raw: unknown): raw is ShortcutsConfig {
+    if (typeof raw !== "object" || raw === null) return false
+    const obj = raw as Record<string, unknown>
+    if (typeof obj.daemon !== "string" || obj.daemon.length === 0) return false
+    if (typeof obj.toggle !== "string" || obj.toggle.length === 0) return false
+    if (obj.languages !== undefined) {
+        if (typeof obj.languages !== "object" || obj.languages === null) return false
+        for (const [key, value] of Object.entries(obj.languages as Record<string, unknown>)) {
+            if (typeof key !== "string" || key.length === 0) return false
+            if (typeof value !== "string" || value.length === 0) return false
+        }
+    }
+    return true
+}
+
 function warn(field: string, reason: string): void {
-    log("CONFIG", `${field}: ${reason}`)
+    console.error(`[config] ${field}: ${reason}`)
 }
 
 export function validateConfig(raw: unknown): VoiceTypeConfig {
     if (typeof raw !== "object" || raw === null) {
-        log("CONFIG", "config file is not a JSON object")
+        console.error("[config] config file is not a JSON object")
         return { ...DEFAULT_CONFIG }
     }
 
     const obj = raw as Record<string, unknown>
-    const result: VoiceTypeConfig = { ...DEFAULT_CONFIG }
+    const result: VoiceTypeConfig = { ...DEFAULT_CONFIG, shortcuts: { ...DEFAULT_CONFIG.shortcuts } }
 
     if (typeof obj.port === "number" && Number.isInteger(obj.port) && obj.port >= 1024 && obj.port <= 65535) {
         result.port = obj.port
@@ -146,6 +165,16 @@ export function validateConfig(raw: unknown): VoiceTypeConfig {
         warn("punctuation", `must be boolean, using default ${DEFAULT_CONFIG.punctuation}`)
     }
 
+    if (typeof obj.shortcuts === "object" && obj.shortcuts !== null && isValidShortcutsConfig(obj.shortcuts)) {
+        result.shortcuts = {
+            daemon: (obj.shortcuts as ShortcutsConfig).daemon,
+            toggle: (obj.shortcuts as ShortcutsConfig).toggle,
+            languages: (obj.shortcuts as ShortcutsConfig).languages ?? {},
+        }
+    } else if ("shortcuts" in obj) {
+        warn("shortcuts", `invalid shortcuts config, using defaults`)
+    }
+
     return result
 }
 
@@ -162,6 +191,7 @@ function hasAllFieldsInvalid(raw: unknown): boolean {
         "sound",
         "text",
         "punctuation",
+        "shortcuts",
     ]
     const validated = validateConfig(raw)
     for (const f of fields) {
@@ -176,7 +206,7 @@ function hasAllFieldsInvalid(raw: unknown): boolean {
 }
 
 async function generateDefaultConfig(): Promise<VoiceTypeConfig> {
-    const config = { ...DEFAULT_CONFIG }
+    const config = { ...DEFAULT_CONFIG, shortcuts: { ...DEFAULT_CONFIG.shortcuts } }
 
     const detected = await detectDefaultBrowser()
     if (detected) {
@@ -223,10 +253,12 @@ export async function loadConfig(): Promise<VoiceTypeConfig> {
         if (err.code === "ENOENT") {
             const config = await generateDefaultConfig()
             await persistConfig(config)
-            log("CONFIG", "CLI flags moved to ~/.config/voice-type.jsonc — a default config has been written there.")
+            console.error(
+                "[voice-type] CLI flags moved to ~/.config/voice-type.jsonc — a default config has been written there.",
+            )
             return config
         }
-        log("CONFIG", `could not read config file: ${(err as Error).message}`)
+        console.error(`[config] could not read config file: ${(err as Error).message}`)
         return await generateDefaultConfig()
     }
 
@@ -236,9 +268,9 @@ export async function loadConfig(): Promise<VoiceTypeConfig> {
         parsed = JSON.parse(stripped)
     } catch (err: any) {
         if (err instanceof ConfigParseError) {
-            log("CONFIG", err.message)
+            console.error(`[config] ${err.message}`)
         } else {
-            log("CONFIG", `could not parse config file: ${(err as Error).message}`)
+            console.error(`[config] could not parse config file: ${(err as Error).message}`)
         }
         await backupIfMissing(filePath)
         const defaultCfg = await generateDefaultConfig()
@@ -249,7 +281,7 @@ export async function loadConfig(): Promise<VoiceTypeConfig> {
     const validated = validateConfig(parsed)
 
     if (hasAllFieldsInvalid(parsed)) {
-        log("CONFIG", "all config fields are invalid — backing up and writing default")
+        console.error("[config] all config fields are invalid — backing up and writing default")
         await backupIfMissing(filePath)
         const defaultCfg = await generateDefaultConfig()
         await persistConfig(defaultCfg)

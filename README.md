@@ -1,104 +1,162 @@
 # Voice Type
 
-System-wide speech-to-text for Linux. Press a key, speak, text appears wherever your cursor is.
+System-wide speech-to-text for Linux. Press a key, speak, and text appears wherever your cursor is.
 
-Runs Chrome's Web Speech API in the background — no local models, no API keys, no startup delay. Works in editors, terminals, browsers. If a transcript corrects mid-sentence, Voice Type backspaces and retypes it.
+Runs Chrome's Web Speech API quietly in the background — no local models, no paid service, no startup delay. Works in editors, terminals, browsers, and most other apps. If the transcript changes mid-sentence, Voice Type backspaces and retypes the corrected text.
 
-**Requirements:** Linux desktop, microphone, Chrome or Chromium.
+**Requirements:** Linux with a desktop environment, a working microphone, and Chrome or Chromium installed system-wide.
 
 ---
 
-## Install
+# Installation
+
+Install the prerequisites below, then run:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/install.sh | bash
 ```
 
-The installer handles binary, dotool (built from source), browser detection, and config. Pin a version with `-- --version v3.1.0`.
+This downloads the latest release, verifies its checksum, and installs `voice-type` to `/usr/local/bin`.
 
-## Keyboard shortcuts
+Pin a version: `curl -sSL .../install.sh | bash -s -- --version v3.1.0`
 
-Set these up in your desktop environment's keyboard settings (GNOME Settings → Keyboard, KDE System Settings → Shortcuts, etc.):
+### Prerequisites
 
-| Action            | Command                                                      |
-| ----------------- | ------------------------------------------------------------ |
-| Start/stop daemon | `sh -c "curl -s http://localhost:3232/exit \|\| voice-type"` |
-| Dictate (English) | `curl -s http://localhost:3232/toggle?lang=en-US`            |
-| Dictate (Spanish) | `curl -s http://localhost:3232/toggle?lang=es-ES`            |
-
-Bind each command to whatever key you want. The installer prints these commands at the end.
-
-## Usage
-
-1. **Start daemon** — press your daemon shortcut (Chrome loads, mic off)
-2. **Dictate** — press your toggle shortcut (speak, text appears live)
-3. **Stop dictation** — press toggle again
-4. **Stop daemon** — press daemon shortcut again
-
-### Spoken punctuation (English)
-
-On by default. Say `comma`, `period`, `question mark`, `new line`, etc. — they type as symbols/keys. Capitalization is automatic at sentence starts.
-
-Toggle at runtime: `curl localhost:3232/togglePunctuation`
-
-### Multiple languages
-
-Bind a separate key to each language command above. Each toggles dictation in its own language — no restart needed.
-
-[Full language list](https://github.com/eriknovikov/voice-type/blob/main/src/constants.ts)
-
-## Config
-
-`~/.config/voice-type.jsonc` — JSON with `//` comments. Written on first run.
-
-```jsonc
-{
-    "port": 3232,
-    "lang": "en-US",
-    "browser_path": "/usr/bin/google-chrome",
-    "stream": true,
-    "sound": false,
-    "text": false,
-    "punctuation": true,
-}
-```
-
-Restart the daemon after editing.
-
-## Update
-
-```bash
-voice-type update
-```
-
-## Troubleshooting
-
-**dotool** — Must be in `input` group: `sudo usermod -aG input $USER && newgrp input`
-
-**Browser not found** — Set `browser_path` in config to your Chrome/Chromium path.
-
-**Logs** — `~/.local/share/voice-type/logs/voice-type.log` (background) or stdout (terminal).
-
-**`command not found`** — `export PATH="$PATH:/usr/local/bin"`
+| Package | Purpose |
+| --- | --- |
+| [dotool](https://git.sr.ht/~geb/dotool/) | Types text into any focused window |
+| `google-chrome` or `chromium` | Hosts the Web Speech API |
+| `paplay` | Sound notifications (only if using `--sound`). `canberra-gtk-play` is preferred when available. |
 
 ---
 
-## Uninstall
+# Usage
 
-````bash
-curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/uninstall.sh | bash
-./uninstall.sh```
+1. **Start the daemon once** (e.g. F10) — Chrome loads in the background; the mic is not active yet.
+2. **Dictate** (e.g. F9) — speak, and text appears in the focused window in real time.
+3. **Stop dictation** (F9 again) — mic off; the daemon stays running for the next session.
+4. **Stop the daemon** (F10 again) — shuts down Chrome and frees resources.
 
-Or manually:
+### Spoken punctuation
+
+The Web Speech API doesn't insert punctuation. For **English (`en-*`)**, spoken punctuation and auto-capitalization are always active. Other languages type literally.
+
+| You say                                     | You get                                             |
+| ------------------------------------------- | --------------------------------------------------- |
+| `comma`                                     | `,`                                                 |
+| `period`                                    | `.`                                                 |
+| `question mark`                             | `?`                                                 |
+| `exclamation mark` (or `exclamation point`) | `!`                                                 |
+| `semicolon`                                 | `;`                                                 |
+| `double quote` (or `double quotes`)         | `"` (with a space before it when it follows a word) |
+| `new line` (or `newline`)                   | Enter (inline, anywhere in the utterance)           |
+| `control enter`                             | Ctrl+Enter (standalone key command; streaming only) |
+
+Saying "hello comma world period" types `Hello, world.` — the first word of each sentence is capitalized automatically, including the first word after starting dictation and after a pause that follows a sentence end (a pause mid-sentence does not capitalize).
+
+**Newline** (streaming mode only): say `new line` or `newline` anywhere in an utterance — e.g. "hello new line world" inserts a line break after `hello`. With `--no-stream`, these phrases type literally. Partial phrases like `new` may appear briefly before the full phrase is recognized and corrected.
+
+**Control enter** (streaming mode only): say `control enter` as the only content in a segment to send Ctrl+Enter. It must be spoken alone — nothing else in the same segment.
+
+All spoken punctuation phrases are case-insensitive (`ComMa` → `,`, `Double Quotes` → `"`, `New Line` → Enter).
+
+Matching is whole-word, so "commander" and "periodic" type literally. There is no escape sequence: on English you cannot type the literal words "comma" or "period".
+
+---
+
+# Options
+
+**Heads up:** CLI flags have moved to `~/.config/voice-type.jsonc`. The table below is outdated and will be replaced in a follow-up release; run `voice-type help` for the current config schema.
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--lang`, `-l` | Startup default language ([list](https://github.com/eriknovikov/voice-type/blob/main/src/constants.ts)). Override per key with `?lang=` (see [multiple languages](#dictate-in-multiple-languages)). | `en-US` |
+| `--browser_type` | `chrome` or `chromium` | `chrome` |
+| `--browser_path`, `-p` | Custom browser binary (e.g. `google-chrome-beta`) | — |
+| `--timeout` | Auto-stop after N seconds of silence (streaming only) | `0` (off) |
+| `--no-stream` | Final transcripts only (no live corrections) | off |
+| `--sound`, `-s` | Sound notifications | off |
+| `--text` | Desktop notifications | off |
+| `--detached`, `-d` | Run daemon in background | off |
+
+---
+
+# Keyboard shortcuts (recommended)
+
+Bind these in your desktop environment (GNOME: Settings → Keyboard → Custom Shortcuts).
+
+| Key | Action                     | Command                                                               |
+| --- | -------------------------- | --------------------------------------------------------------------- |
+| F10 | Start / stop the daemon    | `sh -c "curl http://localhost:3232/exit 2>/dev/null \|\| voice-type"` |
+| F9  | Dictate (default language) | `curl http://localhost:3232/toggle`                                   |
+
+Press F10 once to start the daemon, then F9 to dictate. That's the whole flow.
+
+### Dictate in multiple languages
+
+Bind a separate key to each language by adding `?lang=` to the dictation command. Each key toggles dictation in its own language — no daemon restart, no flags to remember.
+
+| Key | Language | Command                                          |
+| --- | -------- | ------------------------------------------------ |
+| F9  | English  | `curl 'http://localhost:3232/toggle?lang=en-US'` |
+| F8  | Spanish  | `curl 'http://localhost:3232/toggle?lang=es-ES'` |
+| F7  | French   | `curl 'http://localhost:3232/toggle?lang=fr-FR'` |
+
+Plain `curl http://localhost:3232/toggle` (no `?lang=`) uses the daemon's startup default. Set that default with `voice-type -l es-ES`. See the [full language list](https://github.com/eriknovikov/voice-type/blob/main/src/constants.ts).
+
+### HTTP API
+
+All endpoints are `GET` on `http://localhost:3232`:
+
+| Endpoint  | Effect                    |
+| --------- | ------------------------- |
+| `/health` | Returns `{"status":"ok"}` |
+| `/toggle` | Start or stop listening   |
+| `/start`  | Start listening           |
+| `/stop`   | Stop listening            |
+| `/exit`   | Shut down the daemon      |
+
+`/start` and `/toggle` accept `?lang=<bcp47>` (alias `?language=`) to set the recognition language for that request, falling back to the startup default (`--lang`) when omitted. Invalid values return `400` with an error notification and leave the current state unchanged. `/stop` and `/exit` ignore the param.
+
+---
+
+# Uninstalling
 
 ```bash
 sudo rm /usr/local/bin/voice-type
-rm -rf ~/.config/voice-type.jsonc ~/.config/voice-type.jsonc.bak ~/.local/share/voice-type
-````
+# If an older version created this directory, you can remove it:
+sudo rm -rf /usr/local/share/voice-type 2>/dev/null
+```
 
 ---
 
-Want to know more about voice-type?
+# Troubleshooting
 
-- [How I built Voice Type](https://dev.to/eriknovikov/how-i-built-voice-type-3i2p)
-- [INTERNALS.md](./INTERNALS.md)
+**dotool issues** — [Official docs](https://git.sr.ht/~geb/dotool/). After install: `sudo udevadm control --reload && sudo udevadm trigger`. Your user must be in the `input` group (`sudo usermod -aG input $USER`); reboot afterward.
+
+**Chrome not found** — Voice Type expects `/usr/bin/google-chrome` or `/usr/bin/chromium`. If your distro only provides `google-chrome-stable`:
+
+```bash
+sudo ln -s /usr/bin/google-chrome-stable /usr/bin/google-chrome
+```
+
+Or use `--browser_path /usr/bin/google-chrome-stable`.
+
+**`voice-type: command not found`** — Ensure `/usr/local/bin` is on your PATH:
+
+```bash
+export PATH="$PATH:/usr/local/bin"
+```
+
+**Microphone not detected** — Set the default input in system sound settings (`pavucontrol` on most distros).
+
+---
+
+## Contributing
+
+Bug reports, fixes, docs, and feature ideas are welcome. Entry point: `src/index.ts`. For architecture and conventions when hacking on the code, see [AGENTS.md](./AGENTS.md). Open an issue first for anything non-trivial.
+
+## Further reading
+
+- [How I built Voice Type](https://dev.to/eriknovikov/how-i-built-voice-type-3i2p) (blog post)
+- [INTERNALS.md](./INTERNALS.md) — deeper technical walkthrough

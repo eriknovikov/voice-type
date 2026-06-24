@@ -1,6 +1,6 @@
+import { access, constants as fsConstants } from "node:fs/promises"
 import puppeteer from "puppeteer-core"
 import type { VoiceTypeConfig } from "./types.js"
-import { checkBrowserPath } from "./preflight.js"
 
 const CHROME_PATH = "/usr/bin/google-chrome"
 const CHROMIUM_PATH = "/usr/bin/chromium"
@@ -26,6 +26,15 @@ const LAUNCH_ARGS = [
 
 export type BrowserType = "chrome" | "chromium"
 
+async function checkBrowserExists(browserPath: string): Promise<boolean> {
+    try {
+        await access(browserPath, fsConstants.R_OK | fsConstants.X_OK)
+        return true
+    } catch {
+        return false
+    }
+}
+
 export async function detectDefaultBrowser(): Promise<{ path: string; type: BrowserType } | null> {
     const candidates = [
         "/usr/bin/google-chrome",
@@ -39,7 +48,7 @@ export async function detectDefaultBrowser(): Promise<{ path: string; type: Brow
 
     for (const path of candidates) {
         if (path.startsWith("/snap/bin/") || path.startsWith("org.chromium.")) continue
-        if ((await checkBrowserPath(path)).ok) {
+        if (await checkBrowserExists(path)) {
             const type: BrowserType = path.includes("chromium") ? "chromium" : "chrome"
             return { path, type }
         }
