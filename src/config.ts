@@ -3,6 +3,7 @@ import { access, readFile, rename, writeFile, mkdir } from "node:fs/promises"
 import { detectDefaultBrowser } from "./browserLauncher.js"
 import { DEFAULT_LANGUAGE, isValidLanguage } from "./language.js"
 import { PORT } from "./constants.js"
+import { log } from "./logger.js"
 import type { VoiceTypeConfig, ShortcutsConfig } from "./types.js"
 
 export function configFilePath(): string {
@@ -99,12 +100,12 @@ function isValidShortcutsConfig(raw: unknown): raw is ShortcutsConfig {
 }
 
 function warn(field: string, reason: string): void {
-    console.error(`[config] ${field}: ${reason}`)
+    log("CONFIG", `${field}: ${reason}`)
 }
 
 export function validateConfig(raw: unknown): VoiceTypeConfig {
     if (typeof raw !== "object" || raw === null) {
-        console.error("[config] config file is not a JSON object")
+        log("CONFIG", "config file is not a JSON object")
         return { ...DEFAULT_CONFIG }
     }
 
@@ -253,12 +254,10 @@ export async function loadConfig(): Promise<VoiceTypeConfig> {
         if (err.code === "ENOENT") {
             const config = await generateDefaultConfig()
             await persistConfig(config)
-            console.error(
-                "[voice-type] CLI flags moved to ~/.config/voice-type.jsonc — a default config has been written there.",
-            )
+            log("CONFIG", "CLI flags moved to ~/.config/voice-type.jsonc — a default config has been written there.")
             return config
         }
-        console.error(`[config] could not read config file: ${(err as Error).message}`)
+        log("CONFIG", `could not read config file: ${(err as Error).message}`)
         return await generateDefaultConfig()
     }
 
@@ -268,9 +267,9 @@ export async function loadConfig(): Promise<VoiceTypeConfig> {
         parsed = JSON.parse(stripped)
     } catch (err: any) {
         if (err instanceof ConfigParseError) {
-            console.error(`[config] ${err.message}`)
+            log("CONFIG", err.message)
         } else {
-            console.error(`[config] could not parse config file: ${(err as Error).message}`)
+            log("CONFIG", `could not parse config file: ${(err as Error).message}`)
         }
         await backupIfMissing(filePath)
         const defaultCfg = await generateDefaultConfig()
@@ -281,7 +280,7 @@ export async function loadConfig(): Promise<VoiceTypeConfig> {
     const validated = validateConfig(parsed)
 
     if (hasAllFieldsInvalid(parsed)) {
-        console.error("[config] all config fields are invalid — backing up and writing default")
+        log("CONFIG", "all config fields are invalid — backing up and writing default")
         await backupIfMissing(filePath)
         const defaultCfg = await generateDefaultConfig()
         await persistConfig(defaultCfg)

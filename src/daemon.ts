@@ -1,7 +1,7 @@
 import { Browser, Page } from "puppeteer-core"
 import * as browser from "./browser.js"
 import TypingController from "./typingController.js"
-import { log } from "./utils.js"
+import { log } from "./logger.js"
 import { runPreflight } from "./preflight.js"
 import express, { type Express, type Request, type Response, type NextFunction } from "express"
 import Notifier from "./notifier.js"
@@ -74,7 +74,7 @@ export default class Daemon {
             return this.config.lang
         }
         if (!isValidLanguage(requested)) {
-            log(`Invalid language param '${requested}'`)
+            log("DAEMON", `Invalid language param '${requested}'`)
             void this.notifier.notifyError(`Invalid language: ${requested}`)
             res.status(400).send(`Invalid language: ${requested}`)
             return null
@@ -92,7 +92,7 @@ export default class Daemon {
             return
         }
 
-        log(`Starting transcription in '${lang}'...`)
+        log("DAEMON", `Starting transcription in '${lang}'...`)
         this.transcriptTransformer = createTranscriptTransformerSession(lang, this.config.stream)
         this.transcriptTransformer.reset()
         this.speechPipeline = new SpeechPipeline(this.transcriptTransformer, this.typingController)
@@ -122,18 +122,18 @@ export default class Daemon {
 
     private async stopTranscription(reason: "intentional" | "offline" | "silence", res?: Response) {
         if (this.stopCooldown) {
-            log(`Stop request ignored - still in cooldown period (reason: ${reason})`)
+            log("DAEMON", `Stop request ignored - still in cooldown period (reason: ${reason})`)
             res?.status(429).send("Cooldown active")
             return
         }
         if (!this.isWSAListening) {
-            log("No active listener.")
+            log("DAEMON", "No active listener.")
             res?.send("No active listener")
             return
         }
         this.clearSilenceTimer()
 
-        log(`Stopping transcription... Reason: ${reason}`)
+        log("DAEMON", `Stopping transcription... Reason: ${reason}`)
         this.isWSAListening = false
         this.transcriptTransformer.reset()
         this.typingController.hasStopped = true
@@ -162,7 +162,7 @@ export default class Daemon {
 
     private async browserHealthMiddleware(req: Request, res: Response, next: NextFunction) {
         if (!this.isBrowserReady()) {
-            log("Browser not ready")
+            log("DAEMON", "Browser not ready")
             res.status(503).send("Browser not ready")
             return
         }
@@ -171,12 +171,12 @@ export default class Daemon {
             await this.page!.evaluate(browser.healthCheck)
             next()
         } catch (e) {
-            log(`Browser health check failed: ${e} - reinitializing...`)
+            log("DAEMON", `Browser health check failed: ${e} - reinitializing...`)
             try {
                 await this.reinitBrowser()
                 next()
             } catch (e) {
-                log(`Browser reinitialization failed: ${e}`)
+                log("DAEMON", `Browser reinitialization failed: ${e}`)
                 res.status(503).send("Browser reinitialization failed")
             }
         }
@@ -185,7 +185,7 @@ export default class Daemon {
     private async initBrowser() {
         this.browser = await launchBrowser(this.config)
         this.page = await this.browser.newPage()
-        this.page.on("console", (msg) => console.log("[BROWSER]", msg.text()))
+        this.page.on("console", (msg) => log("BROWSER", msg.text()))
 
         await this.page.goto("data:text/html,<html><body><h1>Voice Type</h1></body></html>")
         await this.page.exposeFunction("onSpeechEvent", this.handleSpeechEvent.bind(this))
@@ -208,7 +208,7 @@ export default class Daemon {
             this.silenceTimer = setTimeout(() => {
                 if (!this.isWSAListening) return
                 void this.stopTranscription("silence").catch((e) => {
-                    log(`Silence timer stop failed: ${e}`)
+                    log("DAEMON", `Silence timer stop failed: ${e}`)
                 })
             }, this.config.timeout * 1000)
         }
@@ -225,7 +225,7 @@ export default class Daemon {
         try {
             await this.stopTranscription(payload.reason ?? "silence")
         } catch (e) {
-            log(`Browser rec stop handling failed: ${e}`)
+            log("DAEMON", `Browser rec stop handling failed: ${e}`)
         }
     }
 
@@ -238,32 +238,32 @@ export default class Daemon {
             const { kind, message } = result.failure
             if (kind === "port-in-use") {
                 await this.notifier.notifyAlreadyRunning()
-                log(message)
+                log("DAEMON", message)
                 process.exit(0)
             }
             await this.notifier.notifyError(message)
-            console.error(`[preflight] ${message}`)
-            log(`startup failure: ${message}`)
+            log("PREFLIGHT", message)
+            log("DAEMON", `startup failure: ${message}`)
             await this.destroy()
             process.exit(1)
         }
 
         try {
             this.app.listen(this.config.port, "127.0.0.1", () => {
-                log(`server started on port: ${this.config.port}`)
+                log("DAEMON", `server started on port: ${this.config.port}`)
             })
             await this.initBrowser()
             this.notifier.notifyDaemonStart()
         } catch (e) {
             this.notifier.notifyError("Failed to initialize Voice Type daemon.")
-            console.error(e)
+            log("DAEMON", "Failed to initialize Voice Type daemon:", e)
             await this.destroy()
             process.exit(1)
         }
     }
 
     public async destroy() {
-        console.log("\n[DAEMON] Shutting down daemon...")
+        log("DAEMON", "Shutting down daemon...")
         this.clearSilenceTimer()
         this.transcriptTransformer.reset()
         this.notifier.destroy()

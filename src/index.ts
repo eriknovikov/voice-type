@@ -1,6 +1,7 @@
 import Daemon from "./daemon.js"
 import { showHelp } from "./cli.js"
 import { loadConfig } from "./config.js"
+import { initLogger, log } from "./logger.js"
 
 process.title = "voice-type"
 process.argv[0] = "voice-type"
@@ -29,6 +30,7 @@ if (arg !== undefined) {
 }
 
 async function main() {
+    initLogger()
     const config = await loadConfig()
     const daemon = new Daemon(config)
 
@@ -43,6 +45,6 @@ async function main() {
 }
 
 main().catch((e) => {
-    console.error(e)
+    log("SYSTEM", "fatal:", e)
     process.exit(1)
 })
