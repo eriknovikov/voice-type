@@ -1,7 +1,8 @@
 import { Browser, Page } from "puppeteer-core"
 import * as browser from "./browser.js"
 import TypingController from "./typingController.js"
-import { isPortInUse, log } from "./utils.js"
+import { log } from "./utils.js"
+import { runPreflight } from "./preflight.js"
 import express, { type Express, type Request, type Response, type NextFunction } from "express"
 import Notifier from "./notifier.js"
 import { launchBrowser } from "./browserLauncher.js"
@@ -229,10 +230,22 @@ export default class Daemon {
     }
 
     public async start() {
-        if (await isPortInUse(this.config.port)) {
-            await this.notifier.notifyAlreadyRunning()
-            log("Daemon already running on port " + this.config.port)
-            process.exit(0)
+        const result = await runPreflight({
+            port: this.config.port,
+            browser_path: this.config.browser_path,
+        })
+        if (!result.ok) {
+            const { kind, message } = result.failure
+            if (kind === "port-in-use") {
+                await this.notifier.notifyAlreadyRunning()
+                log(message)
+                process.exit(0)
+            }
+            await this.notifier.notifyError(message)
+            console.error(`[preflight] ${message}`)
+            log(`startup failure: ${message}`)
+            await this.destroy()
+            process.exit(1)
         }
 
         try {
@@ -244,7 +257,7 @@ export default class Daemon {
         } catch (e) {
             this.notifier.notifyError("Failed to initialize Voice Type daemon.")
             console.error(e)
-
+            await this.destroy()
             process.exit(1)
         }
     }
