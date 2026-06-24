@@ -3,6 +3,7 @@ import * as browser from "./browser.js"
 import TypingController from "./typingController.js"
 import { log } from "./logger.js"
 import { runPreflight } from "./preflight.js"
+import { persistConfig } from "./config.js"
 import express, { type Express, type Request, type Response, type NextFunction } from "express"
 import Notifier from "./notifier.js"
 import { launchBrowser } from "./browserLauncher.js"
@@ -22,14 +23,16 @@ export default class Daemon {
     private browser: Browser | null = null
     private page: Page | null = null
     private isWSAListening: boolean = false
-    private app: Express
+    public readonly app: Express
 
     private notifier: Notifier
     private stopCooldown: boolean = false
     private silenceTimer: NodeJS.Timeout | null = null
+    private punctuationEnabled: boolean
 
     constructor(config: VoiceTypeConfig) {
         this.config = config
+        this.punctuationEnabled = config.punctuation
         this.app = express()
         this.setupRoutes()
         this.notifier = new Notifier({ textNotifsEnabled: config.text, soundsNotifsEnabled: config.sound })
@@ -66,6 +69,29 @@ export default class Daemon {
             await this.destroy()
             process.exit(0)
         })
+
+        this.app.get("/togglePunctuation", async (req, res) => {
+            const raw = (req.query as Record<string, unknown>).enabled
+            if (raw !== undefined) {
+                if (raw === "true") {
+                    this.punctuationEnabled = true
+                } else if (raw === "false") {
+                    this.punctuationEnabled = false
+                } else {
+                    res.status(400).json({ error: "enabled must be 'true' or 'false'" })
+                    return
+                }
+            } else {
+                this.punctuationEnabled = !this.punctuationEnabled
+            }
+            try {
+                await persistConfig({ ...this.config, punctuation: this.punctuationEnabled })
+            } catch (e) {
+                log("DAEMON", `Failed to persist punctuation toggle: ${e}`)
+            }
+            log("DAEMON", `punctuation ${this.punctuationEnabled ? "enabled" : "disabled"}`)
+            res.json({ punctuation: this.punctuationEnabled })
+        })
     }
 
     private resolveAndValidateLanguage(req: Request, res: Response): string | null {
@@ -93,7 +119,11 @@ export default class Daemon {
         }
 
         log("DAEMON", `Starting transcription in '${lang}'...`)
-        this.transcriptTransformer = createTranscriptTransformerSession(lang, this.config.stream)
+        this.transcriptTransformer = createTranscriptTransformerSession(
+            lang,
+            this.config.stream,
+            () => this.punctuationEnabled,
+        )
         this.transcriptTransformer.reset()
         this.speechPipeline = new SpeechPipeline(this.transcriptTransformer, this.typingController)
         this.isWSAListening = true

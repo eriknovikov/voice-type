@@ -37,7 +37,7 @@ Supported languages (most common):
 Full list: https://github.com/eriknovikov/voice-type/blob/main/src/constants.ts
 
 HTTP API (GET on http://localhost:<port>):
-  /health  /toggle  /start  /stop  /exit
+  /health  /toggle  /start  /stop  /exit  /togglePunctuation
 `
 
 export function showHelp() {

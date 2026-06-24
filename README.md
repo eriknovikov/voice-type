@@ -39,7 +39,7 @@ Pin a version: `curl -sSL .../install.sh | bash -s -- --version v3.1.0`
 
 ### Spoken punctuation
 
-The Web Speech API doesn't insert punctuation. For **English (`en-*`)**, spoken punctuation and auto-capitalization are always active. Other languages type literally.
+The Web Speech API doesn't insert punctuation. For **English (`en-*`)**, spoken punctuation and auto-capitalization are **on by default** and can be toggled at runtime without restarting dictation: `curl localhost:3232/togglePunctuation` flips the current state; `?enabled=true` or `?enabled=false` sets it explicitly. The setting persists to `~/.config/voice-type.jsonc`. Other languages type literally.
 
 | You say                                     | You get                                             |
 | ------------------------------------------- | --------------------------------------------------- |
@@ -108,13 +108,14 @@ Plain `curl http://localhost:3232/toggle` (no `?lang=`) uses the daemon's startu
 
 All endpoints are `GET` on `http://localhost:3232`:
 
-| Endpoint  | Effect                    |
-| --------- | ------------------------- |
+| Endpoint | Effect |
+| --- | --- |
 | `/health` | Returns `{"status":"ok"}` |
-| `/toggle` | Start or stop listening   |
-| `/start`  | Start listening           |
-| `/stop`   | Stop listening            |
-| `/exit`   | Shut down the daemon      |
+| `/toggle` | Start or stop listening |
+| `/start` | Start listening |
+| `/stop` | Stop listening |
+| `/exit` | Shut down the daemon |
+| `/togglePunctuation` | Toggle spoken punctuation (English only). Optional `?enabled=true\|false`. Returns `{"punctuation": <bool>}`. Persists to config. |
 
 `/start` and `/toggle` accept `?lang=<bcp47>` (alias `?language=`) to set the recognition language for that request, falling back to the startup default (`--lang`) when omitted. Invalid values return `400` with an error notification and leave the current state unchanged. `/stop` and `/exit` ignore the param.
 
