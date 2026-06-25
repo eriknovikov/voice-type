@@ -5,7 +5,15 @@ import { tmpdir } from "node:os"
 import type { Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import Daemon from "../src/daemon.js"
+import TypingController from "../src/typingController.js"
+import type { DotoolSink } from "../src/dotoolSink.js"
 import type { VoiceTypeConfig } from "../src/types.js"
+
+const STUB_SINK: DotoolSink = {
+    write() {},
+    writable: false,
+    kill() {},
+}
 
 const BASE_CONFIG: VoiceTypeConfig = {
     port: 0,
@@ -20,7 +28,7 @@ const BASE_CONFIG: VoiceTypeConfig = {
 }
 
 async function startDaemon(cfg: VoiceTypeConfig): Promise<{ baseUrl: string; server: Server }> {
-    const daemon = new Daemon(cfg)
+    const daemon = new Daemon(cfg, new TypingController(STUB_SINK))
     const server = await new Promise<Server>((resolve) => {
         const s = daemon.app.listen(0, "127.0.0.1", () => resolve(s))
     })

@@ -30,8 +30,12 @@ export default class Daemon {
     private silenceTimer: NodeJS.Timeout | null = null
     private punctuationEnabled: boolean
 
-    constructor(config: VoiceTypeConfig) {
+    constructor(config: VoiceTypeConfig, typingController?: TypingController) {
         this.config = config
+        if (typingController) {
+            this.typingController = typingController
+            this.speechPipeline = new SpeechPipeline(this.transcriptTransformer, this.typingController)
+        }
         this.punctuationEnabled = config.punctuation
         this.app = express()
         this.setupRoutes()

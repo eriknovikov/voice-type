@@ -86,7 +86,7 @@ voice-type update
 ## Uninstall
 
 ```bash
-./uninstall.sh
+curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/uninstall.sh | bash
 ```
 
 Or manually:
