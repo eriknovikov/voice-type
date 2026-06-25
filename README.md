@@ -85,16 +85,16 @@ voice-type update
 
 ## Uninstall
 
-````bash
+```bash
 curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/uninstall.sh | bash
-./uninstall.sh```
+```
 
 Or manually:
 
 ```bash
 sudo rm /usr/local/bin/voice-type
 rm -rf ~/.config/voice-type.jsonc ~/.config/voice-type.jsonc.bak ~/.local/share/voice-type
-````
+```
 
 ---
 

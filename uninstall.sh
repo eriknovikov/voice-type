@@ -144,7 +144,7 @@ remove_sound_deps() {
 }
 
 main() {
-    if [ ! -t 0 ]; then
+    if [ ! -t 1 ] && [ ! -e /dev/tty ]; then
         log_error "Run from a terminal: bash uninstall.sh"
         exit 1
     fi
