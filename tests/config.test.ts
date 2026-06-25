@@ -46,9 +46,6 @@ describe("validateConfig", () => {
         expect(cfg.sound).toBe(false)
         expect(cfg.text).toBe(false)
         expect(cfg.punctuation).toBe(true)
-        expect(cfg.shortcuts.daemon).toBe("F10")
-        expect(cfg.shortcuts.toggle).toBe("F9")
-        expect(cfg.shortcuts.languages).toEqual({})
     })
 
     test("returns default config for non-object input", () => {
@@ -85,11 +82,6 @@ describe("validateConfig", () => {
             sound: true,
             text: true,
             punctuation: false,
-            shortcuts: {
-                daemon: "F10",
-                toggle: "F9",
-                languages: { "es-ES": "F8" },
-            },
         }
         const cfg = validateConfig(input)
         expect(cfg.port).toBe(4040)
@@ -101,35 +93,6 @@ describe("validateConfig", () => {
         expect(cfg.sound).toBe(true)
         expect(cfg.text).toBe(true)
         expect(cfg.punctuation).toBe(false)
-        expect(cfg.shortcuts).toEqual({
-            daemon: "F10",
-            toggle: "F9",
-            languages: { "es-ES": "F8" },
-        })
-    })
-
-    test("shortcuts: missing → default block", () => {
-        const cfg = validateConfig({ port: 4000 })
-        expect(cfg.shortcuts.daemon).toBe("F10")
-        expect(cfg.shortcuts.toggle).toBe("F9")
-        expect(cfg.shortcuts.languages).toEqual({})
-    })
-
-    test("shortcuts: empty daemon falls back", () => {
-        const cfg = validateConfig({ shortcuts: { daemon: "", toggle: "F9" } })
-        expect(cfg.shortcuts.daemon).toBe("F10")
-        expect(cfg.shortcuts.toggle).toBe("F9")
-    })
-
-    test("shortcuts: empty languages entry is filtered", () => {
-        const cfg = validateConfig({
-            shortcuts: {
-                daemon: "F10",
-                toggle: "F9",
-                languages: { x: "" },
-            },
-        })
-        expect(cfg.shortcuts.languages).toEqual({})
     })
 })
 

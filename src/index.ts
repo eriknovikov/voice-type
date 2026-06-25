@@ -12,25 +12,21 @@ if (arg === "help" || arg === "-h" || arg === "--help") {
     showHelp()
     process.exit(0)
 }
-if (arg === "update") {
-    console.error("voice-type update is not yet implemented")
-    process.exit(1)
-}
-if (arg === "shortcuts") {
-    if (process.argv[3] !== "--apply") {
-        showHelp()
-        process.exit(0)
-    }
-    console.error("voice-type shortcuts --apply is not yet implemented")
-    process.exit(1)
-}
-if (arg !== undefined) {
-    showHelp()
-    process.exit(0)
-}
 
 async function main() {
     initLogger()
+
+    if (arg === "update") {
+        const { runUpdate } = await import("./updater.js")
+        await runUpdate()
+        return
+    }
+
+    if (arg !== undefined) {
+        showHelp()
+        process.exit(0)
+    }
+
     const config = await loadConfig()
     const daemon = new Daemon(config)
 

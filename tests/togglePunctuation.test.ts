@@ -17,7 +17,6 @@ const BASE_CONFIG: VoiceTypeConfig = {
     sound: false,
     text: false,
     punctuation: true,
-    shortcuts: { daemon: "F10", toggle: "F9", languages: {} },
 }
 
 async function startDaemon(cfg: VoiceTypeConfig): Promise<{ baseUrl: string; server: Server }> {

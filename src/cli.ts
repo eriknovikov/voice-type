@@ -4,8 +4,7 @@ VOICE TYPE - Real-Time Dictation Daemon
 Usage:
   voice-type                 Run the daemon (foreground).
   voice-type help            Show this help.
-  voice-type update          Self-update the binary (ST-7).
-  voice-type shortcuts --apply   Apply configured keyboard shortcuts to your desktop.
+  voice-type update          Self-update the binary.
 
 Configuration:
   All settings live in ~/.config/voice-type.jsonc (JSON with // comments).
@@ -21,12 +20,10 @@ Configuration:
     "sound": false,
     "text": false,
     "punctuation": true,             // spoken punctuation + capitalization for en-*
-    "shortcuts": {
-      "daemon": "F10",
-      "toggle": "F9",
-      "languages": { "es-ES": "F8" } // optional, BCP47 tag -> key
-    }
   }
+
+  Keyboard shortcuts are set up in your desktop environment settings using
+  the curl commands shown by the installer.
 
 Per-request language:
   /start and /toggle accept ?lang=<bcp47> (alias ?language=) to override the
