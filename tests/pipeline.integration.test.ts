@@ -8,7 +8,7 @@ import { normCase, nonStreamSegmentEvents, streamingSegmentEvents } from "./stre
 
 function runPipeline(stream: boolean, lang: string, segments: SpeechEvent[][]) {
     const target = new FakeTypingTarget()
-    const transformer = createTranscriptTransformerSession(lang, stream)
+    const transformer = createTranscriptTransformerSession(lang, stream, () => true)
     transformer.reset()
     const typing = new TypingController(target.sink)
     const pipeline = new SpeechPipeline(transformer, typing)

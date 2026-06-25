@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process"
-import { log } from "./utils.js"
+import { log } from "./logger.js"
 
 export interface DotoolSink {
     write(data: string): void
@@ -15,11 +15,11 @@ export function spawnDotoolSink(): DotoolSink {
     dotool.stderr.on("data", (data) => {
         const lines = data.toString().split("\n").filter(Boolean)
         for (const line of lines) {
-            console.log(`[DOTOOL] ${line}`)
+            log("DOTOOL", line)
         }
     })
     dotool.on("exit", (_code, signal) => {
-        log(`dotool finished with signal [${signal}]`)
+        log("DOTOOL", `dotool finished with signal [${signal}]`)
     })
 
     return {

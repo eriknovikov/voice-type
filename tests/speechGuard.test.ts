@@ -20,7 +20,7 @@ describe("shouldAcceptSpeechEvent", () => {
 describe("speech guard integration", () => {
     test("stopped typing controller blocks further pipeline events", () => {
         const target = new FakeTypingTarget()
-        const transformer = createTranscriptTransformerSession("en-US", true)
+        const transformer = createTranscriptTransformerSession("en-US", true, () => true)
         transformer.reset()
         const typing = new TypingController(target.sink)
         const pipeline = new SpeechPipeline(transformer, typing)

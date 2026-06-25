@@ -7,14 +7,14 @@ export type WSALanguage = (typeof WSA_LANGUAGES)[keyof typeof WSA_LANGUAGES]
 
 export type SpeechEvent = { kind: "text"; text: string } | { kind: "segment-finalized" }
 
-export interface CliFlags {
-    lang: WSALanguage
-    textNotifs: boolean
+export interface VoiceTypeConfig {
+    port: number
+    lang: string
+    browser_type: BrowserType
+    browser_path: string
     stream: boolean
-    soundNotifs: boolean
-    browserType: BrowserType
-    browserPath?: string
     timeout: number
-    detached: boolean
-    help: boolean
+    sound: boolean
+    text: boolean
+    punctuation: boolean
 }

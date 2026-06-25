@@ -5,9 +5,9 @@ import type { TranscriptTransformerSession } from "./types.js"
 export function createTranscriptTransformerSession(
     language: string,
     streamEnabled: boolean,
+    getPunctuationEnabled: () => boolean,
 ): TranscriptTransformerSession {
-    if (language.startsWith("en-")) return createEnglishTransformerSession(streamEnabled)
-    // es-*, fr-*, etc. use noop until a language-specific transformer is wired here.
+    if (language.startsWith("en-")) return createEnglishTransformerSession(streamEnabled, getPunctuationEnabled)
     return createNoopTransformerSession()
 }
 

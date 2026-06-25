@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createEnglishTransformerSession } from "../../src/transcriptTransformers/en.js"
 
 function session(stream = true) {
-    const s = createEnglishTransformerSession(stream)
+    const s = createEnglishTransformerSession(stream, () => true)
     s.reset()
     return s
 }
@@ -33,7 +33,7 @@ describe("createEnglishTransformerSession", () => {
 
     test("double quote with leading space after word", () => {
         const s = session()
-        expect(s.transform('hello double quote world').text).toBe('Hello " world')
+        expect(s.transform("hello double quote world").text).toBe('Hello " world')
     })
 
     test("literal words commander and periodic", () => {
@@ -107,5 +107,72 @@ describe("createEnglishTransformerSession", () => {
         finalizeSegment(s)
         s.reset()
         expect(s.transform("world").text).toBe("World")
+    })
+})
+
+describe("createEnglishTransformerSession — punctuation toggle", () => {
+    test("disabled: spoken punctuation phrases type literally", () => {
+        let on = false
+        const s = createEnglishTransformerSession(true, () => on)
+        s.reset()
+        expect(s.transform("hello comma world period").text).toBe("hello comma world period")
+    })
+
+    test("disabled: no auto-capitalization", () => {
+        let on = false
+        const s = createEnglishTransformerSession(true, () => on)
+        s.reset()
+        expect(s.transform("hello world").text).toBe("hello world")
+    })
+
+    test("disabled: control enter types literally, no key chord", () => {
+        let on = false
+        const s = createEnglishTransformerSession(true, () => on)
+        s.reset()
+        expect(s.transform("control enter").text).toBe("control enter")
+        expect(s.onSegmentFinalized()).toEqual([])
+    })
+
+    test("toggle mid-session: enabled then disabled", () => {
+        let on = true
+        const s = createEnglishTransformerSession(true, () => on)
+        s.reset()
+        expect(s.transform("hello comma world period").text).toBe("Hello, world.")
+        on = false
+        expect(s.transform("hello comma world period").text).toBe("hello comma world period")
+    })
+
+    test("toggle mid-session: disabled then enabled", () => {
+        let on = false
+        const s = createEnglishTransformerSession(true, () => on)
+        s.reset()
+        expect(s.transform("hello world").text).toBe("hello world")
+        on = true
+        expect(s.transform("hello comma").text).toBe("Hello,")
+    })
+
+    test("cross-segment spacing preserved across disable", () => {
+        let on = true
+        const s = createEnglishTransformerSession(true, () => on)
+        s.reset()
+        expect(s.transform("hello").text).toBe("Hello")
+        s.onSegmentFinalized()
+        on = false
+        expect(s.transform("world").text).toBe(" world")
+        s.onSegmentFinalized()
+        on = true
+        expect(s.transform("hello period").text).toBe(" hello.")
+    })
+
+    test("deferred tokens consumed as literal text when disabled", () => {
+        let on = true
+        const s = createEnglishTransformerSession(true, () => on)
+        s.reset()
+        expect(s.transform("hello new").text).toBe("Hello")
+        s.onSegmentFinalized()
+        on = false
+        expect(s.transform("line world").text).toBe(" new line world")
+        s.onSegmentFinalized()
+        expect(s.transform("hello").text).toBe(" hello")
     })
 })

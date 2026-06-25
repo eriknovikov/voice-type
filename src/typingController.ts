@@ -1,7 +1,7 @@
 import type { DotoolKeyChord } from "./transcriptTransformers/types.js"
 import type { DotoolSink } from "./dotoolSink.js"
 import { spawnDotoolSink } from "./dotoolSink.js"
-import { log } from "./utils.js"
+import { log } from "./logger.js"
 
 export default class TypingController {
     private prevText: string = ""
@@ -15,7 +15,7 @@ export default class TypingController {
     public sendBackspaces(count: number) {
         if (count <= 0) return
         if (!this.dotool.writable) {
-            log("dotool stdin not writable")
+            log("TYPING", "dotool stdin not writable")
             return
         }
         const cmdString = "key BackSpace \n".repeat(count)
@@ -25,7 +25,7 @@ export default class TypingController {
     public sendKeyChord(chord: DotoolKeyChord) {
         if (this.hasStopped) return
         if (!this.dotool.writable) {
-            log("dotool stdin not writable")
+            log("TYPING", "dotool stdin not writable")
             return
         }
         this.dotool.write(`key ${chord}\n`)
@@ -35,7 +35,7 @@ export default class TypingController {
         if (this.hasStopped) return
         if (!text) return
         if (!this.dotool.writable) {
-            log("dotool stdin not writable")
+            log("TYPING", "dotool stdin not writable")
             return
         }
 

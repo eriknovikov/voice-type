@@ -14,7 +14,7 @@ Voice Type is a **Linux-only** system-wide speech-to-text daemon. It keeps a hea
 
 End-to-end: **hotkey → daemon → browser (WSA) → transcript transform → prefix-diff typing → focused app.**
 
-For install, usage, CLI flags, and HTTP routes see [`README.md`](README.md). For a deeper technical walkthrough see [`INTERNALS.md`](INTERNALS.md). **Do not duplicate those in this file** — they change more often than agent rules.
+For install, usage, config, and HTTP routes see [`README.md`](README.md). For a deeper technical walkthrough see [`INTERNALS.md`](INTERNALS.md). **Do not duplicate those in this file** — they change more often than agent rules.
 
 ---
 
@@ -27,6 +27,9 @@ For install, usage, CLI flags, and HTTP routes see [`README.md`](README.md). For
 5. **Web Speech API only** — Swapping STT means replacing `browser.js` + launch config, not a small patch.
 6. **Security** — Server binds localhost only, no auth. Do not expose on `0.0.0.0` without explicit review.
 7. **Puppeteer injection** — Code passed to `page.evaluate` is serialized as a single function; helpers must be **nested inside** that function, not at module scope in `browser.js`. Keep the WSA→event mapper in sync with `browserRecognition.js` (`tests/browserRecognition.sync.test.ts`).
+8. **Config as sole control surface** — Runtime options live in `~/.config/voice-type.jsonc` only. No CLI flags except `help`/subcommand dispatch.
+9. **dotool built from source** — The installer (`install.sh`) always compiles dotool from the `1.6` tarball; never installed via a package manager.
+10. **Logging adapts to environment** — TTY → stdout only. Backgrounded (non-TTY) → `~/.local/share/voice-type/logs/voice-type.log` with 1 MB rotation (5 files kept).
 
 `src/browser.js` must remain **JavaScript** (injected into Chrome). Imports use `.js` extensions (`verbatimModuleSyntax`).
 
@@ -63,11 +66,11 @@ Prettier defaults: **4-space indent**, **120** print width, **no semicolons**. S
 
 ## Build (requires Bun)
 
-| Command | Purpose |
-|---|---|
-| `bun run dev` | Watch mode |
-| `bun run start` | Run daemon |
-| `bun run build` | Bundle to `dist/` |
+| Command                                                       | Purpose           |
+| ------------------------------------------------------------- | ----------------- |
+| `bun run dev`                                                 | Watch mode        |
+| `bun run start`                                               | Run daemon        |
+| `bun run build`                                               | Bundle to `dist/` |
 | `bun build src/index.ts --compile --outfile build/voice-type` | Standalone binary |
 
 Source lives under `src/` — entry `index.ts`, orchestration `daemon.ts`, WSA `browser.js` + `browserRecognition.js`, `speechPipeline.ts`, `typingController.ts`, `dotoolSink.ts`, language-specific logic under `transcriptTransformers/`.

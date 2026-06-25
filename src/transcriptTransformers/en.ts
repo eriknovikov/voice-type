@@ -1,4 +1,3 @@
-import { isOperationAllowed } from "./policy.js"
 import type { DotoolKeyChord, TranscriptCommand, TranscriptTransformerSession, TransformResult } from "./types.js"
 
 type PunctuationRole = "trailing" | "openingQuote"
@@ -40,9 +39,24 @@ const COMMAND_DEFS: CommandDef[] = [
         words: ["exclamation", "point"],
         render: { kind: "punctuation", char: "!", role: "trailing" },
     },
-    { kind: "text", id: "semicolon", words: ["semicolon"], render: { kind: "punctuation", char: ";", role: "trailing" } },
-    { kind: "text", id: "semicolon", words: ["semi", "colon"], render: { kind: "punctuation", char: ";", role: "trailing" } },
-    { kind: "text", id: "semicolon", words: ["semi-colon"], render: { kind: "punctuation", char: ";", role: "trailing" } },
+    {
+        kind: "text",
+        id: "semicolon",
+        words: ["semicolon"],
+        render: { kind: "punctuation", char: ";", role: "trailing" },
+    },
+    {
+        kind: "text",
+        id: "semicolon",
+        words: ["semi", "colon"],
+        render: { kind: "punctuation", char: ";", role: "trailing" },
+    },
+    {
+        kind: "text",
+        id: "semicolon",
+        words: ["semi-colon"],
+        render: { kind: "punctuation", char: ";", role: "trailing" },
+    },
     { kind: "text", id: "new line", words: ["new", "line"], render: { kind: "newline" } },
     { kind: "text", id: "newline", words: ["newline"], render: { kind: "newline" } },
     {
@@ -76,7 +90,6 @@ function tokenize(text: string): string[] {
 
 function allowedCommands(streamEnabled: boolean): CommandDef[] {
     return COMMAND_DEFS.filter((cmd) => {
-        if (!isOperationAllowed(cmd.id)) return false
         if (!streamEnabled && (cmd.id === "new line" || cmd.id === "newline" || cmd.kind === "key")) return false
         return true
     })
@@ -250,7 +263,10 @@ function needsCrossSegmentSpace(text: string): boolean {
     return /\S$/.test(text)
 }
 
-export function createEnglishTransformerSession(streamEnabled: boolean): TranscriptTransformerSession {
+export function createEnglishTransformerSession(
+    streamEnabled: boolean,
+    getPunctuationEnabled: () => boolean,
+): TranscriptTransformerSession {
     const commandCtx = buildCommandContext(streamEnabled)
     let capitalizeNext = true
     let lastRenderedText = ""
@@ -264,6 +280,17 @@ export function createEnglishTransformerSession(streamEnabled: boolean): Transcr
             let rawTokens = tokenize(rawText)
             if (carriedDeferred.length > 0) {
                 rawTokens = [...carriedDeferred, ...rawTokens]
+            }
+
+            if (!getPunctuationEnabled()) {
+                let text = rawTokens.join(" ")
+                if (pendingBoundarySpace && text.length > 0) {
+                    text = " " + text
+                }
+                lastRenderedText = text
+                segmentEndDeferred = []
+                lastSegmentItems = []
+                return { text, commands: [] }
             }
 
             const { items, deferred } = parseTokens(rawTokens, commandCtx)

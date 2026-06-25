@@ -1,6 +1,6 @@
 import { sessionBus, Variant, type MessageBus } from "dbus-next"
 import type { Urgency } from "./types.js"
-import { log } from "./utils.js"
+import { log } from "./logger.js"
 const SYNC_ID = "voice-type-dictation"
 /**
  * Handles text notifications via D-Bus (org.freedesktop.Notifications)
@@ -21,7 +21,7 @@ export class TextNotifier {
     constructor(enabled: boolean = true) {
         this.enabled = enabled
         if (this.enabled) {
-            this.initDBus().catch((err) => log("Failed to init D-Bus TextNotifier:" + JSON.stringify(err)))
+            this.initDBus().catch((err) => log("DBUS", "Failed to init D-Bus TextNotifier:" + JSON.stringify(err)))
         }
     }
 
@@ -55,7 +55,7 @@ export class TextNotifier {
                 try {
                     this.bus.disconnect()
                 } catch (err) {
-                    log("Error disconnecting existing D-Bus connection: " + JSON.stringify(err))
+                    log("DBUS", "Error disconnecting existing D-Bus connection: " + JSON.stringify(err))
                 }
                 this.bus = null
             }
@@ -64,7 +64,10 @@ export class TextNotifier {
             const obj = await this.bus.getProxyObject("org.freedesktop.Notifications", "/org/freedesktop/Notifications")
             this.notifyInterface = obj.getInterface("org.freedesktop.Notifications")
         } catch (error) {
-            log(`D-Bus initialization failed (attempt ${retryCount + 1}/${this.maxRetries}):` + JSON.stringify(error))
+            log(
+                "DBUS",
+                `D-Bus initialization failed (attempt ${retryCount + 1}/${this.maxRetries}):` + JSON.stringify(error),
+            )
 
             if (retryCount < this.maxRetries - 1) {
                 const delay = this.retryDelay * Math.pow(2, retryCount) // Exponential backoff
@@ -135,7 +138,7 @@ export class TextNotifier {
                 durationMs,
             )
         } catch (error) {
-            log("D-Bus Notification Error:" + JSON.stringify(error))
+            log("DBUS", "D-Bus Notification Error:" + JSON.stringify(error))
 
             // If notification fails, try to reinitialize the connection
             try {
@@ -159,7 +162,7 @@ export class TextNotifier {
                     )
                 }
             } catch (retryError) {
-                log("Failed to send notification after reconnection:" + JSON.stringify(retryError))
+                log("DBUS", "Failed to send notification after reconnection:" + JSON.stringify(retryError))
             }
         }
     }
@@ -231,7 +234,7 @@ export class TextNotifier {
             try {
                 this.bus.disconnect()
             } catch (error) {
-                log("Error disconnecting D-Bus:" + JSON.stringify(error))
+                log("DBUS", "Error disconnecting D-Bus:" + JSON.stringify(error))
             }
             this.bus = null
             this.notifyInterface = null

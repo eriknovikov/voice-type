@@ -4,7 +4,6 @@ set -e
 REPO="eriknovikov/voice-type"
 BINARY_NAME="voice-type"
 
-# Color codes
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -22,58 +21,299 @@ log_error() {
     printf "${RED}[ERROR]${NC} %s\n" "$1" >&2
 }
 
-# Detect architecture
+log_link() {
+    _label="$1"
+    _path="$2"
+    printf "${GREEN}[INFO]${NC} %s " "$_label" >&2
+    printf "\033]8;;file://%s\007%s\033]8;;\007\n" "$_path" "$_path" >&2
+}
+
+user_in_input_group() {
+    id -nG 2>/dev/null | tr ' ' '\n' | grep -qx "input"
+}
+
+prompt_yn() {
+    _msg="$1"
+    _default="$2"
+    case "$_default" in
+        [Yy]*) _opts="Y/n"; _bracket="y" ;;
+        [Nn]*) _opts="y/N"; _bracket="n" ;;
+        *) log_error "prompt_yn: default must be Y or N"; exit 1 ;;
+    esac
+    printf "%s (%s) [%s] " "$_msg" "$_opts" "$_bracket" >&2
+    read -r _answer < /dev/tty || _answer=""
+    if [ -z "$_answer" ]; then
+        echo "$_default"
+    else
+        echo "$_answer"
+    fi
+}
+
 detect_arch() {
     ARCH="$(uname -m)"
     case "$ARCH" in
-        x86_64|amd64)
-            echo "x64"
-            ;;
-        arm64|aarch64)
-            echo "arm64"
-            ;;
-        *)
-            log_error "Unsupported architecture: $ARCH"
-            exit 1
-            ;;
+        x86_64|amd64) echo "x64" ;;
+        arm64|aarch64) echo "arm64" ;;
+        *) log_error "Unsupported architecture: $ARCH"; exit 1 ;;
     esac
 }
 
-# Parse mode flags
-MODE="prod"
-VERSION=""
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --local)
-            MODE="local"
-            shift
+detect_pkg_manager() {
+    if command -v apt-get >/dev/null 2>&1; then echo "apt"; return; fi
+    if command -v dnf >/dev/null 2>&1; then echo "dnf"; return; fi
+    if command -v pacman >/dev/null 2>&1; then echo "pacman"; return; fi
+    if command -v apk >/dev/null 2>&1; then echo "apk"; return; fi
+    if command -v xbps-install >/dev/null 2>&1; then echo "xbps"; return; fi
+    if command -v nix-env >/dev/null 2>&1; then echo "nix"; return; fi
+    echo "none"
+}
+
+browser_probe() {
+    for p in \
+        "/usr/bin/google-chrome" \
+        "/usr/bin/google-chrome-stable" \
+        "/usr/bin/google-chrome-beta" \
+        "/opt/google/chrome/chrome" \
+        "/usr/bin/chromium" \
+        "/usr/bin/chromium-browser" \
+        "/usr/local/bin/chromium"
+    do
+        case "$p" in
+            /snap/bin/*) continue ;;
+            *org.chromium.*) continue ;;
+        esac
+        if [ -x "$p" ]; then
+            echo "$p"
+            return 0
+        fi
+    done
+    return 1
+}
+
+detect_browser() {
+    BROWSER_PATH=$(browser_probe)
+    if [ -n "$BROWSER_PATH" ]; then
+        case "$BROWSER_PATH" in
+            *chromium*) BROWSER_TYPE="chromium" ;;
+            *) BROWSER_TYPE="chrome" ;;
+        esac
+    else
+        log_warn "No Chrome/Chromium found. Set browser_path in config later."
+        BROWSER_PATH=""
+        BROWSER_TYPE="chrome"
+    fi
+}
+
+ask_notifications() {
+    ANSWER=$(prompt_yn "Enable text notifications?" "N")
+    case "$ANSWER" in
+        [Yy]*) TEXT_ENABLED="true" ;;
+        *) TEXT_ENABLED="false" ;;
+    esac
+
+    ANSWER=$(prompt_yn "Enable sound notifications?" "N")
+    case "$ANSWER" in
+        [Yy]*)
+            SOUND_ENABLED="true"
+            if ! command -v canberra-gtk-play >/dev/null 2>&1 && ! command -v paplay >/dev/null 2>&1; then
+                PM=$(detect_pkg_manager)
+                case "$PM" in
+                    apt) sudo apt-get install -y pulseaudio-utils libcanberra-gtk3-module || true ;;
+                    dnf) sudo dnf install -y pulseaudio-utils libcanberra-gtk3 || true ;;
+                    pacman) sudo pacman -S --noconfirm libpulse libcanberra || true ;;
+                    apk) sudo apk add pulseaudio-utils libcanberra || true ;;
+                    xbps) sudo xbps-install -y pulseaudio-utils libcanberra || true ;;
+                    *) log_warn "Install pulseaudio-utils + libcanberra manually." ;;
+                esac
+            fi
             ;;
-        --version)
-            VERSION="$2"
-            MODE="version"
-            shift 2
+        *) SOUND_ENABLED="false" ;;
+    esac
+}
+
+install_dotool() {
+    HAS_DOTOOL=0
+    if command -v dotool >/dev/null 2>&1; then
+        HAS_DOTOOL=1
+    fi
+    : "${DOTOOL_NEEDS_RELOGIN:=0}"
+
+    while true; do
+        if [ "$HAS_DOTOOL" = "1" ]; then
+            ANSWER=$(prompt_yn "Reinstall dotool from source? (already on PATH)" "N")
+        else
+            ANSWER=$(prompt_yn "Install dotool from source? (REQUIRED - not found on PATH)" "Y")
+        fi
+        case "$ANSWER" in
+            [Yy]*) break ;;
+            [Nn]*)
+                if [ "$HAS_DOTOOL" = "1" ]; then
+                    return 0
+                else
+                    log_error "dotool is required for typing. You cannot skip this step."
+                    continue
+                fi
+                ;;
+        esac
+    done
+
+    PM=$(detect_pkg_manager)
+
+    DEPS=""
+    INSTALL_CMD=""
+    UNINSTALL_CMD=""
+    case "$PM" in
+        apt)
+            DEPS="golang-go libxkbcommon-dev scdoc build-essential"
+            INSTALL_CMD="sudo apt-get install -y"
+            UNINSTALL_CMD="sudo apt-get remove -y"
             ;;
-        -*)
-            shift
+        dnf)
+            DEPS="golang libxkbcommon-devel scdoc gcc make"
+            INSTALL_CMD="sudo dnf install -y"
+            UNINSTALL_CMD="sudo dnf remove -y"
+            ;;
+        pacman)
+            DEPS="go libxkbcommon scdoc base-devel"
+            INSTALL_CMD="sudo pacman -S --noconfirm"
+            UNINSTALL_CMD="sudo pacman -Rs --noconfirm"
+            ;;
+        apk)
+            DEPS="go libxkbcommon-dev scdoc build-base"
+            INSTALL_CMD="sudo apk add"
+            UNINSTALL_CMD="sudo apk del"
+            ;;
+        xbps)
+            DEPS="go libxkbcommon-devel scdoc base-devel"
+            INSTALL_CMD="sudo xbps-install -y"
+            UNINSTALL_CMD="sudo xbps-remove -y"
             ;;
         *)
-            shift
+            log_error "Unsupported package manager. Install dotool manually."
+            return 1
             ;;
     esac
-done
 
-# Get latest version from GitHub
+    NEEDED=""
+    for dep in $DEPS; do
+        if ! dpkg -s "$dep" >/dev/null 2>&1 \
+            && ! rpm -q "$dep" >/dev/null 2>&1 \
+            && ! pacman -Qi "$dep" >/dev/null 2>&1 \
+            && ! apk info "$dep" >/dev/null 2>&1 \
+            && ! xbps-query "$dep" >/dev/null 2>&1; then
+            NEEDED="$NEEDED $dep"
+        fi
+    done
+
+    NEEDED=$(echo "$NEEDED" | sed 's/^ *//;s/ *$//')
+
+    if [ -n "$NEEDED" ]; then
+        log_info "Installing build deps:$NEEDED"
+        $INSTALL_CMD $NEEDED || {
+            log_error "Failed to install build dependencies"
+            return 1
+        }
+    fi
+
+    TMP_DOTOOL=$(mktemp -d)
+    trap 'rm -rf "$TMP_DOTOOL"' EXIT
+
+    log_info "Downloading and building dotool 1.6..."
+    curl -sSL "https://git.sr.ht/~geb/dotool/archive/1.6.tar.gz" | tar -xz -C "$TMP_DOTOOL" || {
+        log_error "Failed to download dotool source"
+        rm -rf "$TMP_DOTOOL"
+        return 1
+    }
+
+    (cd "$TMP_DOTOOL/dotool-1.6" && ./build.sh && sudo ./build.sh install) || {
+        log_error "dotool build failed"
+        rm -rf "$TMP_DOTOOL"
+        return 1
+    }
+
+    sudo udevadm control --reload
+    sudo udevadm trigger
+
+    if user_in_input_group; then
+        DOTOOL_NEEDS_RELOGIN=0
+    else
+        log_warn "Adding $USER to 'input' group. You MUST re-login or run: newgrp input"
+        sudo usermod -aG input "$USER"
+        DOTOOL_NEEDS_RELOGIN=1
+    fi
+
+    if [ -n "$NEEDED" ]; then
+        ANSWER=$(prompt_yn "Remove build dependencies? (dotool is already installed)" "Y")
+        case "$ANSWER" in
+            [Yy]*) $UNINSTALL_CMD $NEEDED 2>/dev/null || true ;;
+        esac
+    fi
+
+    rm -rf "$TMP_DOTOOL"
+    trap - EXIT
+}
+
+write_config() {
+    CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
+    CONFIG_FILE="$CONFIG_DIR/voice-type.jsonc"
+
+    LANG_HEURISTIC="en-US"
+    if [ -n "$LANG" ]; then
+        RAW_LANG=$(echo "$LANG" | cut -d. -f1 | tr '_' '-')
+        case "$RAW_LANG" in
+            en-US|en-GB|en-AU|en-CA|en-IN|es-ES|es-MX|es-AR|es-CO|ru-RU|\
+            zh-CN|zh-TW|zh-HK|ja-JP|ko-KR|fr-FR|fr-CA|de-DE|de-AT|de-CH|\
+            pt-BR|pt-PT|it-IT|nl-NL|pl-PL|tr-TR|ar-SA|hi-IN|sv-SE|no-NO|\
+            da-DK|fi-FI|el-GR|he-IL|th-TH|vi-VN|id-ID|uk-UA|cs-CZ|ro-RO|hu-HU)
+                LANG_HEURISTIC="$RAW_LANG"
+                ;;
+        esac
+    fi
+
+    mkdir -p "$CONFIG_DIR"
+
+    cat > "$CONFIG_FILE" << EOF
+{
+    "port": 3232, // int 1024-65535, default 3232
+    "lang": "${LANG_HEURISTIC}", // BCP47 tag, default en-US; see src/constants.ts for allowed values
+    "browser_type": "${BROWSER_TYPE:-chrome}", // "chrome" | "chromium", default "chrome"
+    "browser_path": "${BROWSER_PATH}", // absolute path to Chrome/Chromium binary, default auto-detected
+    "stream": true, // bool (true | false), default true — live interim transcripts
+    "timeout": 0, // int seconds of silence before auto-stop (streaming only), default 0 (off)
+    "sound": ${SOUND_ENABLED:-false}, // bool (true | false), default false
+    "text": ${TEXT_ENABLED:-false}, // bool (true | false), default false
+    "punctuation": true, // bool (true | false), default true — spoken punctuation + capitalization for en-*
+    // Set up keyboard shortcuts in your DE settings using these commands:
+    //   Start/stop daemon:  sh -c "curl -s http://localhost:3232/exit || voice-type"
+    //   Dictate:            curl -s http://localhost:3232/toggle?lang=en-US
+    //   Dictate (Spanish):  curl -s http://localhost:3232/toggle?lang=es-ES
+}
+EOF
+}
+
+print_summary() {
+    CONFIG_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/voice-type.jsonc"
+    PORT="${VT_PORT:-3232}"
+    log_info "Voice Type installed."
+    log_link "Config:" "$CONFIG_PATH"
+    log_info "Set up keyboard shortcuts in your DE settings:"
+    log_info "  Start/stop daemon:  sh -c \"curl -s http://localhost:${PORT}/exit || voice-type\""
+    log_info "  Dictate (English):  curl -s http://localhost:${PORT}/toggle?lang=en-US"
+    log_info "  Dictate (Spanish):  curl -s http://localhost:${PORT}/toggle?lang=es-ES"
+    if [ "${DOTOOL_NEEDS_RELOGIN:-0}" = "1" ]; then
+        log_warn "Log out and back in (or run: newgrp input) for input group to take effect."
+    fi
+}
+
 get_latest_version() {
     curl -sS "https://api.github.com/repos/${REPO}/releases/latest" | \
         grep '"tag_name":' | \
         sed -E 's/.*"([^"]+)".*/\1/'
 }
 
-# Install binary
-install_binary() {
+install_binary_file() {
     BINARY_PATH="$1"
     TARGET="/usr/local/bin/${BINARY_NAME}"
-
     if [ -w /usr/local/bin ]; then
         install -m 755 "$BINARY_PATH" "$TARGET"
     else
@@ -81,63 +321,32 @@ install_binary() {
     fi
 }
 
-main() {
-    log_info "Voice Type Installer"
-    log_info "=================="
-
-    ARCH=$(detect_arch)
-    log_info "Detected architecture: ${ARCH}"
-
-    # Local mode: build locally and install
+install_binary() {
     if [ "$MODE" = "local" ]; then
-        log_info "LOCAL MODE - Building and installing locally"
-
-        # Build binary
-        log_info "Building binary..."
         if ! command -v bun >/dev/null 2>&1; then
             log_error "bun not found. Install bun first."
             exit 1
         fi
-
+        log_info "Building binary..."
         mkdir -p build
         bun build src/index.ts --compile --outfile build/voice-type
-
-        # Create tarball in releases directory (binary only)
-        log_info "Creating tarball..."
-        mkdir -p "releases"
         mkdir -p "releases/voice-type-${ARCH}"
         cp build/voice-type "releases/voice-type-${ARCH}/"
         tar -czf "releases/voice-type-linux-${ARCH}.tar.gz" -C releases "voice-type-${ARCH}/"
-
-        # Generate checksum
-        log_info "Generating checksum..."
         sha256sum "releases/voice-type-linux-${ARCH}.tar.gz"
-
-        # Install binary
-        log_info "Installing binary..."
-        install_binary "build/voice-type"
-
-        log_info "Successfully installed ${BINARY_NAME} to /usr/local/bin/${BINARY_NAME}"
-
-        log_info ""
-        log_info "Run 'voice-type --help' to get started"
-
+        install_binary_file "build/voice-type"
         return 0
     fi
 
-    # Version mode: fetch specific version
     if [ "$MODE" = "version" ]; then
-        log_info "Installing version: ${VERSION}"
         TAG="$VERSION"
     else
-        # Prod mode: official latest release
-        log_info "Fetching latest stable version..."
+        log_info "Fetching latest version..."
         TAG=$(get_latest_version)
         if [ -z "$TAG" ]; then
             log_error "Could not determine latest version"
             exit 1
         fi
-        log_info "Installing version: ${TAG}"
     fi
 
     BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
@@ -145,14 +354,11 @@ main() {
     TMP_DIR=$(mktemp -d)
     trap 'rm -rf "$TMP_DIR"' EXIT
 
-    log_info "Downloading ${FILENAME}..."
-
+    log_info "Downloading ${TAG}..."
     curl -sSfL "${BASE_URL}/${FILENAME}" -o "${TMP_DIR}/${FILENAME}"
     curl -sSfL "${BASE_URL}/checksums.txt" -o "${TMP_DIR}/checksums.txt"
 
-    log_info "Verifying checksum..."
     cd "$TMP_DIR"
-
     EXPECTED_CHECKSUM=$(grep "${FILENAME}" checksums.txt | awk '{print $1}')
     if [ -z "$EXPECTED_CHECKSUM" ]; then
         log_error "Could not find checksum for ${FILENAME}"
@@ -170,31 +376,40 @@ main() {
 
     if [ "$EXPECTED_CHECKSUM" != "$ACTUAL_CHECKSUM" ]; then
         log_error "Checksum mismatch!"
-        log_error "Expected: $EXPECTED_CHECKSUM"
-        log_error "Actual:   $ACTUAL_CHECKSUM"
         exit 1
     fi
 
-    log_info "Checksum verified"
-
-    log_info "Extracting archive..."
     tar -xzf "${FILENAME}" -C "$TMP_DIR"
+    install_binary_file "${TMP_DIR}/voice-type-${ARCH}/voice-type"
 
-    install_binary "${TMP_DIR}/voice-type-${ARCH}/voice-type"
-
-    log_info "Successfully installed ${BINARY_NAME} to /usr/local/bin/${BINARY_NAME}"
-
-    # Check if /usr/local/bin is in PATH
     case ":$PATH:" in
-        *":/usr/local/bin:"*)
-            ;;
-        *)
-            log_warn "/usr/local/bin is not in your PATH. Add it to use voice-type."
-            ;;
+        *":/usr/local/bin:"*) ;;
+        *) log_warn "/usr/local/bin is not in your PATH. Add it to use voice-type." ;;
     esac
 
-    log_info ""
-    log_info "Run 'voice-type --help' to get started"
+    rm -rf "$TMP_DIR"
+    trap - EXIT
 }
+
+main() {
+    ARCH=$(detect_arch)
+    detect_browser
+    ask_notifications
+    install_dotool
+    install_binary
+    write_config
+    print_summary
+}
+
+MODE="prod"
+VERSION=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --local) MODE="local"; shift ;;
+        --version) VERSION="$2"; MODE="version"; shift 2 ;;
+        -*) shift ;;
+        *) shift ;;
+    esac
+done
 
 main "$@"

@@ -1,10 +1,10 @@
-import { access, constants as fsConstants } from "node:fs/promises"
 import puppeteer from "puppeteer-core"
+import type { VoiceTypeConfig } from "./types.js"
+import { checkBrowserPath } from "./preflight.js"
 
 const CHROME_PATH = "/usr/bin/google-chrome"
 const CHROMIUM_PATH = "/usr/bin/chromium"
 
-// arguments shared by all browsers
 const LAUNCH_ARGS = [
     "--use-fake-ui-for-media-stream",
     "--disable-background-timer-throttling",
@@ -26,38 +26,29 @@ const LAUNCH_ARGS = [
 
 export type BrowserType = "chrome" | "chromium"
 
-export async function detectBrowser(): Promise<BrowserType | null> {
-    const browsers = [
-        { name: "chrome", path: CHROME_PATH },
-        { name: "chromium", path: CHROMIUM_PATH },
+export async function detectDefaultBrowser(): Promise<{ path: string; type: BrowserType } | null> {
+    const candidates = [
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/google-chrome-beta",
+        "/opt/google/chrome/chrome",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/local/bin/chromium",
     ]
 
-    for (const browser of browsers) {
-        const exists = await checkBrowserExists(browser.path)
-        if (exists) {
-            return browser.name as BrowserType
+    for (const path of candidates) {
+        if (path.startsWith("/snap/bin/") || path.startsWith("org.chromium.")) continue
+        if ((await checkBrowserPath(path)).ok) {
+            const type: BrowserType = path.includes("chromium") ? "chromium" : "chrome"
+            return { path, type }
         }
     }
     return null
 }
 
-async function checkBrowserExists(browserPath: string): Promise<boolean> {
-    try {
-        await access(browserPath, fsConstants.R_OK)
-        return true
-    } catch {
-        return false
-    }
-}
-
-export async function launchBrowser() {
-    let browserType = process.env.BROWSER_TYPE as BrowserType | undefined
-    if (!browserType) {
-        browserType = (await detectBrowser()) as BrowserType
-    }
-
-    const defaultBrowserPath = browserType == "chrome" ? CHROME_PATH : CHROMIUM_PATH
-    const browserPath = process.env.BROWSER_PATH ? process.env.BROWSER_PATH : defaultBrowserPath
+export async function launchBrowser(config: VoiceTypeConfig) {
+    const browserPath = config.browser_path || (config.browser_type === "chrome" ? CHROME_PATH : CHROMIUM_PATH)
 
     return puppeteer.launch({
         executablePath: browserPath,

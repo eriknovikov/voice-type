@@ -44,3 +44,6 @@ export const WSA_LANGUAGES = {
 } as const
 
 export const PORT = 3232
+
+export const CURRENT_VERSION = "4.2.0"
+export const REPO = "eriknovikov/voice-type"

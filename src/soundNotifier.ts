@@ -1,11 +1,12 @@
 import { spawn } from "child_process"
 import { delimiter, join, resolve } from "path"
 import { existsSync } from "fs"
+import { log } from "./logger.js"
 
 const EVENT_IDS: Record<string, string> = {
-    notifyStart: "service-login",
-    notifyStop: "service-logout",
+    notifyStart: "dialog-error",
     notifyOffline: "dialog-error",
+    notifyStop: "dialog-error",
     notifyError: "dialog-error",
 }
 
@@ -89,7 +90,7 @@ export class SoundNotifier {
             const proc = spawn(cmd, args)
 
             proc.on("error", (err) => {
-                console.error(`[SoundNotifier] ${cmd} error:`, err)
+                log("SOUND", `${cmd} error:`, err)
                 resolve()
             })
 
