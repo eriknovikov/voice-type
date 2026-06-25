@@ -2,14 +2,45 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      should_release: ${{ steps.check.outputs.should_release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from constants.ts
+        id: version
+        run: |
+          VERSION=$(grep -oP 'CURRENT_VERSION = "\K[^"]+' src/constants.ts)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      - name: Check if tag already exists
+        id: check
+        run: |
+          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "Tag v${{ steps.version.outputs.version }} already exists, skipping"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "Tag v${{ steps.version.outputs.version }} is new, releasing"
+          fi
+
   build:
+    needs: check-version
+    if: needs.check-version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -52,7 +83,7 @@ jobs:
             voice-type-linux-${{ matrix.arch }}.tar.gz.sha256
 
   release:
-    needs: build
+    needs: [check-version, build]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -67,14 +98,15 @@ jobs:
           find . -name "*.sha256" -exec cat {} >> checksums.txt \;
           test "$(grep -c voice-type-linux checksums.txt)" -eq 2
 
-      - name: Create GitHub Release
+      - name: Create tag and GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.check-version.outputs.version }}
           files: |
             artifacts/*/voice-type-linux-x64.tar.gz
             artifacts/*/voice-type-linux-arm64.tar.gz
             artifacts/checksums.txt
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(needs.check-version.outputs.version, '-') }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
