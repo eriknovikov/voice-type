@@ -282,7 +282,7 @@ write_config() {
     "timeout": 0, // int seconds of silence before auto-stop (streaming only), default 0 (off)
     "sound": ${SOUND_ENABLED:-false}, // bool (true | false), default false
     "text": ${TEXT_ENABLED:-false}, // bool (true | false), default false
-    "punctuation": true, // bool (true | false), default true — spoken punctuation + capitalization for en-*
+    "punctuation": true // bool (true | false), default true — spoken punctuation + capitalization for en-*
     // Set up keyboard shortcuts in your DE settings using these commands:
     //   Start/stop daemon:  sh -c "curl -s http://localhost:3232/exit || voice-type"
     //   Dictate:            curl -s http://localhost:3232/toggle?lang=en-US
