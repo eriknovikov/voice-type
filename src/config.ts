@@ -79,6 +79,52 @@ export function stripJsoncComments(text: string): string {
     return out
 }
 
+export function stripTrailingCommas(text: string): string {
+    let out = ""
+    let inString = false
+    let escapeNext = false
+
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i]
+
+        if (escapeNext) {
+            out += ch
+            escapeNext = false
+            continue
+        }
+
+        if (inString) {
+            out += ch
+            if (ch === "\\") {
+                escapeNext = true
+            } else if (ch === '"') {
+                inString = false
+            }
+            continue
+        }
+
+        if (ch === '"') {
+            inString = true
+            out += ch
+            continue
+        }
+
+        if (ch === ",") {
+            let j = i + 1
+            while (j < text.length && /\s/.test(text[j])) {
+                j++
+            }
+            if (j < text.length && (text[j] === "}" || text[j] === "]")) {
+                continue
+            }
+        }
+
+        out += ch
+    }
+
+    return out
+}
+
 function warn(field: string, reason: string): void {
     log("CONFIG", `${field}: ${reason}`)
 }
@@ -232,7 +278,7 @@ export async function loadConfig(): Promise<VoiceTypeConfig> {
 
     let parsed: unknown
     try {
-        const stripped = stripJsoncComments(rawText)
+        const stripped = stripTrailingCommas(stripJsoncComments(rawText))
         parsed = JSON.parse(stripped)
     } catch (err: any) {
         if (err instanceof ConfigParseError) {
