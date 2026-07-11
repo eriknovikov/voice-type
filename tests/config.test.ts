@@ -2,7 +2,14 @@ import { describe, expect, test, beforeAll, afterAll, beforeEach, afterEach } fr
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, accessSync, renameSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { stripJsoncComments, validateConfig, persistConfig, loadConfig, configFilePath } from "../src/config.js"
+import {
+    stripJsoncComments,
+    stripTrailingCommas,
+    validateConfig,
+    persistConfig,
+    loadConfig,
+    configFilePath,
+} from "../src/config.js"
 import { PORT } from "../src/constants.js"
 
 describe("stripJsoncComments", () => {
@@ -31,6 +38,33 @@ describe("stripJsoncComments", () => {
     test("handles escaped quote inside string", () => {
         const result = stripJsoncComments('{"a":"x\\"//y"}')
         expect(result.trim()).toBe('{"a":"x\\"//y"}')
+    })
+})
+
+describe("stripTrailingCommas", () => {
+    test("removes comma directly before }", () => {
+        const result = stripTrailingCommas('{"a":1,}')
+        expect(JSON.parse(result)).toEqual({ a: 1 })
+    })
+
+    test("removes comma before } across blank lines/whitespace", () => {
+        const result = stripTrailingCommas('{"a":1,\n\n\n}')
+        expect(JSON.parse(result)).toEqual({ a: 1 })
+    })
+
+    test("removes comma directly before ]", () => {
+        const result = stripTrailingCommas("[1,2,]")
+        expect(JSON.parse(result)).toEqual([1, 2])
+    })
+
+    test("does not touch a comma inside a string followed by } inside the same string", () => {
+        const result = stripTrailingCommas('{"a":"x, }"}')
+        expect(JSON.parse(result)).toEqual({ a: "x, }" })
+    })
+
+    test("does not touch a non-trailing comma", () => {
+        const result = stripTrailingCommas('{"a":1,"b":2}')
+        expect(JSON.parse(result)).toEqual({ a: 1, b: 2 })
     })
 })
 
@@ -139,6 +173,30 @@ describe("loadConfig", () => {
 
         const cfg = await loadConfig()
         expect(cfg.port).toBe(4040)
+    })
+
+    test("trailing comments before closing brace: parses without falling back to defaults", async () => {
+        const fp = configFilePath()
+        const dir = fp.substring(0, fp.lastIndexOf("/"))
+        const { mkdirSync } = require("node:fs")
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(
+            fp,
+            '{\n    "port": 4040,\n    "sound": true, // trailing comment\n    // another comment\n    // yet another\n}\n',
+            "utf8",
+        )
+
+        const cfg = await loadConfig()
+        expect(cfg.port).toBe(4040)
+        expect(cfg.sound).toBe(true)
+
+        const bakPath = fp + ".bak"
+        let bakExists = false
+        try {
+            accessSync(bakPath)
+            bakExists = true
+        } catch {}
+        expect(bakExists).toBe(false)
     })
 
     test("bad JSON: backs up to .bak and writes default", async () => {
