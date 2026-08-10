@@ -7,8 +7,64 @@ on:
       - main
 
 jobs:
-  test:
+  go:
+    name: v5 (Go)
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          UNFORMATTED=$(gofmt -l *.go)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "Not gofmt'd:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      # Hermetic: no audio hardware, no network, no /dev/uinput.
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+        run: go build -o /dev/null .
+
+  shell:
+    name: Installer syntax
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # sh -n takes one script per invocation; extra arguments become $1, $2...
+      - name: sh -n
+        run: |
+          for f in install.sh uninstall.sh v4/install.sh v4/uninstall.sh; do
+            echo "checking $f"
+            sh -n "$f"
+          done
+
+      - name: shellcheck
+        run: shellcheck -s sh install.sh uninstall.sh
+
+  # v4 is deprecated and no longer released; its suite runs for information only.
+  v4:
+    name: v4 (Bun, deprecated)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: v4
     steps:
       - name: Checkout
         uses: actions/checkout@v4

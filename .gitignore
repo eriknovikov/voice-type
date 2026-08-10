@@ -5,3 +5,6 @@ bun.lock
 TODO.md
 releases
 .cursor
+.env
+.env.*
+/voice-type

@@ -1,415 +1,434 @@
 #!/bin/sh
-set -e
+# voice-type v5 installer.
+#
+# Fetches the static Go binary for this architecture from GitHub Releases,
+# verifies its checksum, installs it, and writes a config. Distro-agnostic by
+# construction: the binary is static with no libc dependency, so the only
+# package work is the clipboard tool.
+#
+#   curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/install.sh | sh
+#
+# v4 (the Chrome-based TypeScript version) is deprecated and lives in v4/.
+# To install it instead: .../main/v4/install.sh
+set -eu
 
 REPO="eriknovikov/voice-type"
 BINARY_NAME="voice-type"
+PORT=3232
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
+MODE="prod"          # prod | version | local
+VERSION_TAG=""
+PREFIX="/usr/local"
+SKIP_SYSTEM=0
+NEEDS_RELOGIN=0
+API_KEY=""
 
-log_info() {
-    printf "${GREEN}[INFO]${NC} %s\n" "$1" >&2
+RED=$(printf '\033[31m'); YELLOW=$(printf '\033[33m')
+GREEN=$(printf '\033[32m'); RESET=$(printf '\033[0m')
+
+log_info() { printf '%s==>%s %s\n' "$GREEN" "$RESET" "$1" >&2; }
+log_warn() { printf '%s!!%s  %s\n' "$YELLOW" "$RESET" "$1" >&2; }
+log_error() { printf '%sxx%s  %s\n' "$RED" "$RESET" "$1" >&2; }
+
+usage() {
+    cat >&2 << EOF
+Usage: install.sh [options]
+
+  --version vX.Y.Z   install a specific release instead of the latest
+  --local            build from the working tree with the Go toolchain
+  --prefix DIR       install under DIR/bin (default: /usr/local)
+  --skip-system      skip uinput / clipboard / audio setup
+  -h, --help         show this message
+EOF
 }
 
-log_warn() {
-    printf "${YELLOW}[WARN]${NC} %s\n" "$1" >&2
-}
-
-log_error() {
-    printf "${RED}[ERROR]${NC} %s\n" "$1" >&2
-}
-
-log_link() {
-    _label="$1"
-    _path="$2"
-    printf "${GREEN}[INFO]${NC} %s " "$_label" >&2
-    printf "\033]8;;file://%s\007%s\033]8;;\007\n" "$_path" "$_path" >&2
-}
-
-user_in_input_group() {
-    id -nG 2>/dev/null | tr ' ' '\n' | grep -qx "input"
+# Piped through curl, stdin is the script itself -- every prompt must come from
+# the terminal, and there may not be one. Testing permissions on the device node
+# is not enough: /dev/tty exists but cannot be opened when the process has no
+# controlling terminal (systemd, cron, setsid), and an unguarded prompt then dies
+# under `set -e` before the config is written.
+# The probe runs in a subshell with `true`, not `:`. A redirection failure on a
+# special built-in like `:` terminates the shell outright -- neither `2>/dev/null`
+# nor `||` can catch it -- which silently killed the installer before it wrote
+# the config.
+has_tty() {
+    ( true < /dev/tty ) 2> /dev/null || return 1
+    ( true > /dev/tty ) 2> /dev/null
 }
 
 prompt_yn() {
-    _msg="$1"
-    _default="$2"
-    case "$_default" in
-        [Yy]*) _opts="Y/n"; _bracket="y" ;;
-        [Nn]*) _opts="y/N"; _bracket="n" ;;
-        *) log_error "prompt_yn: default must be Y or N"; exit 1 ;;
-    esac
-    printf "%s (%s) [%s] " "$_msg" "$_opts" "$_bracket" >&2
-    read -r _answer < /dev/tty || _answer=""
-    if [ -z "$_answer" ]; then
+    _msg="$1"; _default="$2"
+    if ! has_tty; then
         echo "$_default"
+        return 0
+    fi
+    case "$_default" in
+        [Yy]*) _opts="Y/n" ;;
+        *) _opts="y/N" ;;
+    esac
+    printf '%s (%s) ' "$_msg" "$_opts" > /dev/tty
+    read -r _answer < /dev/tty || _answer=""
+    [ -z "$_answer" ] && _answer="$_default"
+    echo "$_answer"
+}
+
+need_cmd() {
+    command -v "$1" > /dev/null 2>&1 || {
+        log_error "'$1' is required but not installed."
+        exit 1
+    }
+}
+
+# Root's own commands run directly; everyone else goes through sudo.
+as_root() {
+    if [ "$(id -u)" = "0" ]; then
+        "$@"
     else
-        echo "$_answer"
+        need_cmd sudo
+        sudo "$@"
     fi
 }
 
 detect_arch() {
-    ARCH="$(uname -m)"
-    case "$ARCH" in
-        x86_64|amd64) echo "x64" ;;
-        arm64|aarch64) echo "arm64" ;;
-        *) log_error "Unsupported architecture: $ARCH"; exit 1 ;;
+    case "$(uname -m)" in
+        x86_64 | amd64) echo "x64" ;;
+        aarch64 | arm64) echo "arm64" ;;
+        *)
+            log_error "Unsupported architecture: $(uname -m). voice-type ships x64 and arm64 Linux builds."
+            exit 1
+            ;;
     esac
 }
 
 detect_pkg_manager() {
-    if command -v apt-get >/dev/null 2>&1; then echo "apt"; return; fi
-    if command -v dnf >/dev/null 2>&1; then echo "dnf"; return; fi
-    if command -v pacman >/dev/null 2>&1; then echo "pacman"; return; fi
-    if command -v apk >/dev/null 2>&1; then echo "apk"; return; fi
-    if command -v xbps-install >/dev/null 2>&1; then echo "xbps"; return; fi
-    if command -v nix-env >/dev/null 2>&1; then echo "nix"; return; fi
-    echo "none"
+    if command -v dnf > /dev/null 2>&1; then echo "dnf"
+    elif command -v apt-get > /dev/null 2>&1; then echo "apt"
+    elif command -v pacman > /dev/null 2>&1; then echo "pacman"
+    elif command -v zypper > /dev/null 2>&1; then echo "zypper"
+    elif command -v apk > /dev/null 2>&1; then echo "apk"
+    elif command -v xbps-install > /dev/null 2>&1; then echo "xbps"
+    elif command -v nix-env > /dev/null 2>&1; then echo "nix"
+    else echo "none"; fi
 }
 
-browser_probe() {
-    for p in \
-        "/usr/bin/google-chrome" \
-        "/usr/bin/google-chrome-stable" \
-        "/usr/bin/google-chrome-beta" \
-        "/opt/google/chrome/chrome" \
-        "/usr/bin/chromium" \
-        "/usr/bin/chromium-browser" \
-        "/usr/local/bin/chromium"
-    do
-        case "$p" in
-            /snap/bin/*) continue ;;
-            *org.chromium.*) continue ;;
-        esac
-        if [ -x "$p" ]; then
-            echo "$p"
-            return 0
-        fi
-    done
-    return 1
-}
-
-detect_browser() {
-    BROWSER_PATH=$(browser_probe)
-    if [ -n "$BROWSER_PATH" ]; then
-        case "$BROWSER_PATH" in
-            *chromium*) BROWSER_TYPE="chromium" ;;
-            *) BROWSER_TYPE="chrome" ;;
-        esac
-    else
-        log_warn "No Chrome/Chromium found. Set browser_path in config later."
-        BROWSER_PATH=""
-        BROWSER_TYPE="chrome"
-    fi
-}
-
-ask_notifications() {
-    ANSWER=$(prompt_yn "Enable text notifications?" "N")
-    case "$ANSWER" in
-        [Yy]*) TEXT_ENABLED="true" ;;
-        *) TEXT_ENABLED="false" ;;
-    esac
-
-    ANSWER=$(prompt_yn "Enable sound notifications?" "N")
-    case "$ANSWER" in
-        [Yy]*)
-            SOUND_ENABLED="true"
-            if ! command -v canberra-gtk-play >/dev/null 2>&1 && ! command -v paplay >/dev/null 2>&1; then
-                PM=$(detect_pkg_manager)
-                case "$PM" in
-                    apt) sudo apt-get install -y pulseaudio-utils libcanberra-gtk3-module || true ;;
-                    dnf) sudo dnf install -y pulseaudio-utils libcanberra-gtk3 || true ;;
-                    pacman) sudo pacman -S --noconfirm libpulse libcanberra || true ;;
-                    apk) sudo apk add pulseaudio-utils libcanberra || true ;;
-                    xbps) sudo xbps-install -y pulseaudio-utils libcanberra || true ;;
-                    *) log_warn "Install pulseaudio-utils + libcanberra manually." ;;
-                esac
-            fi
-            ;;
-        *) SOUND_ENABLED="false" ;;
-    esac
-}
-
-install_dotool() {
-    HAS_DOTOOL=0
-    if command -v dotool >/dev/null 2>&1; then
-        HAS_DOTOOL=1
-    fi
-    : "${DOTOOL_NEEDS_RELOGIN:=0}"
-
-    while true; do
-        if [ "$HAS_DOTOOL" = "1" ]; then
-            ANSWER=$(prompt_yn "Reinstall dotool from source? (already on PATH)" "N")
-        else
-            ANSWER=$(prompt_yn "Install dotool from source? (REQUIRED - not found on PATH)" "Y")
-        fi
-        case "$ANSWER" in
-            [Yy]*) break ;;
-            [Nn]*)
-                if [ "$HAS_DOTOOL" = "1" ]; then
-                    return 0
-                else
-                    log_error "dotool is required for typing. You cannot skip this step."
-                    continue
-                fi
-                ;;
-        esac
-    done
-
-    PM=$(detect_pkg_manager)
-
-    DEPS=""
-    INSTALL_CMD=""
-    UNINSTALL_CMD=""
-    case "$PM" in
-        apt)
-            DEPS="golang-go libxkbcommon-dev scdoc build-essential"
-            INSTALL_CMD="sudo apt-get install -y"
-            UNINSTALL_CMD="sudo apt-get remove -y"
-            ;;
-        dnf)
-            DEPS="golang libxkbcommon-devel scdoc gcc make"
-            INSTALL_CMD="sudo dnf install -y"
-            UNINSTALL_CMD="sudo dnf remove -y"
-            ;;
-        pacman)
-            DEPS="go libxkbcommon scdoc base-devel"
-            INSTALL_CMD="sudo pacman -S --noconfirm"
-            UNINSTALL_CMD="sudo pacman -Rs --noconfirm"
-            ;;
-        apk)
-            DEPS="go libxkbcommon-dev scdoc build-base"
-            INSTALL_CMD="sudo apk add"
-            UNINSTALL_CMD="sudo apk del"
-            ;;
-        xbps)
-            DEPS="go libxkbcommon-devel scdoc base-devel"
-            INSTALL_CMD="sudo xbps-install -y"
-            UNINSTALL_CMD="sudo xbps-remove -y"
-            ;;
+install_pkg() {
+    _pkg="$1"
+    case "$(detect_pkg_manager)" in
+        dnf) as_root dnf install -y "$_pkg" ;;
+        apt) as_root apt-get install -y "$_pkg" ;;
+        pacman) as_root pacman -S --noconfirm "$_pkg" ;;
+        zypper) as_root zypper install -y "$_pkg" ;;
+        apk) as_root apk add "$_pkg" ;;
+        xbps) as_root xbps-install -y "$_pkg" ;;
+        nix) nix-env -iA "nixpkgs.$_pkg" ;;
         *)
-            log_error "Unsupported package manager. Install dotool manually."
+            log_warn "Unknown package manager -- install '$_pkg' manually."
             return 1
             ;;
     esac
+}
 
-    NEEDED=""
-    for dep in $DEPS; do
-        if ! dpkg -s "$dep" >/dev/null 2>&1 \
-            && ! rpm -q "$dep" >/dev/null 2>&1 \
-            && ! pacman -Qi "$dep" >/dev/null 2>&1 \
-            && ! apk info "$dep" >/dev/null 2>&1 \
-            && ! xbps-query "$dep" >/dev/null 2>&1; then
-            NEEDED="$NEEDED $dep"
-        fi
-    done
+user_in_input_group() {
+    id -nG 2> /dev/null | tr ' ' '\n' | grep -qx input
+}
 
-    NEEDED=$(echo "$NEEDED" | sed 's/^ *//;s/ *$//')
-
-    if [ -n "$NEEDED" ]; then
-        log_info "Installing build deps:$NEEDED"
-        $INSTALL_CMD $NEEDED || {
-            log_error "Failed to install build dependencies"
-            return 1
-        }
+# v5 sends the paste keystroke itself through /dev/uinput, which is owned by the
+# 'input' group. This is a hard requirement -- there is no fallback input path.
+setup_uinput() {
+    if [ ! -e /dev/uinput ]; then
+        log_warn "/dev/uinput does not exist. Loading the uinput module..."
+        as_root modprobe uinput || log_warn "Could not load the uinput module."
+        echo uinput | as_root tee /etc/modules-load.d/uinput.conf > /dev/null 2>&1 || true
     fi
 
-    TMP_DOTOOL=$(mktemp -d)
-    trap 'rm -rf "$TMP_DOTOOL"' EXIT
-
-    log_info "Downloading and building dotool 1.6..."
-    curl -sSL "https://git.sr.ht/~geb/dotool/archive/1.6.tar.gz" | tar -xz -C "$TMP_DOTOOL" || {
-        log_error "Failed to download dotool source"
-        rm -rf "$TMP_DOTOOL"
-        return 1
-    }
-
-    (cd "$TMP_DOTOOL/dotool-1.6" && ./build.sh && sudo ./build.sh install) || {
-        log_error "dotool build failed"
-        rm -rf "$TMP_DOTOOL"
-        return 1
-    }
-
-    sudo udevadm control --reload
-    sudo udevadm trigger
+    as_root udevadm control --reload || true
+    as_root udevadm trigger || true
 
     if user_in_input_group; then
-        DOTOOL_NEEDS_RELOGIN=0
+        log_info "User is already in the 'input' group."
     else
-        log_warn "Adding $USER to 'input' group. You MUST re-login or run: newgrp input"
-        sudo usermod -aG input "$USER"
-        DOTOOL_NEEDS_RELOGIN=1
+        log_warn "Adding $USER to the 'input' group."
+        as_root usermod -aG input "$USER"
+        NEEDS_RELOGIN=1
     fi
-
-    if [ -n "$NEEDED" ]; then
-        ANSWER=$(prompt_yn "Remove build dependencies? (dotool is already installed)" "Y")
-        case "$ANSWER" in
-            [Yy]*) $UNINSTALL_CMD $NEEDED 2>/dev/null || true ;;
-        esac
-    fi
-
-    rm -rf "$TMP_DOTOOL"
-    trap - EXIT
 }
 
+# Wayland needs wl-clipboard, X11 needs xclip. v5 picks at runtime from the
+# session type, so install whichever matches this one.
+setup_clipboard() {
+    if [ -n "${WAYLAND_DISPLAY:-}" ] || [ "${XDG_SESSION_TYPE:-}" = "wayland" ]; then
+        _clip_cmd="wl-copy"; _clip_pkg="wl-clipboard"
+    else
+        _clip_cmd="xclip"; _clip_pkg="xclip"
+    fi
+
+    if command -v "$_clip_cmd" > /dev/null 2>&1; then
+        log_info "Clipboard tool '$_clip_cmd' found."
+        return 0
+    fi
+
+    log_warn "'$_clip_cmd' not found -- voice-type cannot paste without it."
+    case "$(prompt_yn "Install $_clip_pkg?" "Y")" in
+        [Yy]*) install_pkg "$_clip_pkg" || log_warn "Install '$_clip_pkg' manually before first use." ;;
+        *) log_warn "Skipped. Install '$_clip_pkg' manually before first use." ;;
+    esac
+}
+
+check_audio() {
+    if command -v pactl > /dev/null 2>&1 && pactl info > /dev/null 2>&1; then
+        log_info "Audio server reachable."
+    else
+        log_warn "Could not reach PulseAudio/pipewire-pulse. voice-type needs one of them for capture."
+    fi
+}
+
+# v4 and v5 share port 3232 and are mutually exclusive. A v4 daemon still
+# holding the port would make the v5 hotkey silently no-op.
+stop_running_daemon() {
+    command -v curl > /dev/null 2>&1 || return 0
+    curl -s -m 1 "http://localhost:$PORT/health" > /dev/null 2>&1 || return 0
+
+    log_warn "Something is already listening on port $PORT -- probably voice-type v4."
+    case "$(prompt_yn "Stop it now?" "Y")" in
+        [Yy]*)
+            curl -s -m 2 "http://localhost:$PORT/exit" > /dev/null 2>&1 || true
+            log_info "Sent /exit to the running daemon."
+            ;;
+        *) log_warn "Leave it running and v5 will not be able to bind port $PORT." ;;
+    esac
+}
+
+get_latest_tag() {
+    curl -sSfL "https://api.github.com/repos/${REPO}/releases/latest" \
+        | grep '"tag_name":' \
+        | sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/' \
+        | head -n 1
+}
+
+# v4 and v5 releases live in the same repo. Installing a v4 tag with this script
+# would drop a Bun/Chrome binary onto a v5 config, so refuse it by name.
+guard_major_version() {
+    _tag="$1"
+    _major=$(echo "${_tag#v}" | cut -d. -f1)
+    case "$_major" in
+        '' | *[!0-9]*)
+            log_warn "Could not read a major version from '$_tag'. Continuing."
+            return 0
+            ;;
+    esac
+    if [ "$_major" -lt 5 ]; then
+        log_error "$_tag is a v4 release; this installer only handles v5 and later."
+        log_error "Install v4 with: curl -sSL https://raw.githubusercontent.com/${REPO}/main/v4/install.sh | sh"
+        exit 1
+    fi
+}
+
+install_binary_file() {
+    _src="$1"
+    _target_dir="$PREFIX/bin"
+
+    if [ ! -d "$_target_dir" ]; then
+        mkdir -p "$_target_dir" 2> /dev/null || as_root mkdir -p "$_target_dir"
+    fi
+
+    log_info "Installing to $_target_dir/$BINARY_NAME"
+    if [ -w "$_target_dir" ]; then
+        install -m 755 "$_src" "$_target_dir/$BINARY_NAME"
+    else
+        as_root install -m 755 "$_src" "$_target_dir/$BINARY_NAME"
+    fi
+
+    case ":$PATH:" in
+        *":$_target_dir:"*) ;;
+        *) log_warn "$_target_dir is not in your PATH. Add it to run '$BINARY_NAME'." ;;
+    esac
+}
+
+build_local() {
+    need_cmd go
+    if [ ! -f "go.mod" ] || [ ! -f "main.go" ]; then
+        log_error "--local must run from the repository root (no go.mod/main.go here)."
+        exit 1
+    fi
+    _ver="dev"
+    [ -f VERSION ] && _ver=$(cat VERSION)
+    log_info "Building $BINARY_NAME $_ver from source..."
+    CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=$_ver" -o "$TMP_DIR/$BINARY_NAME" .
+    install_binary_file "$TMP_DIR/$BINARY_NAME"
+}
+
+download_release() {
+    need_cmd curl
+    need_cmd tar
+
+    if [ "$MODE" = "version" ]; then
+        TAG="$VERSION_TAG"
+    else
+        log_info "Resolving the latest release..."
+        TAG=$(get_latest_tag)
+        [ -n "$TAG" ] || {
+            log_error "Could not determine the latest release."
+            exit 1
+        }
+    fi
+    guard_major_version "$TAG"
+
+    _file="${BINARY_NAME}-v5-linux-${ARCH}.tar.gz"
+    _base="https://github.com/${REPO}/releases/download/${TAG}"
+
+    log_info "Downloading $TAG ($ARCH)..."
+    curl -sSfL "${_base}/${_file}" -o "$TMP_DIR/$_file"
+    curl -sSfL "${_base}/checksums.txt" -o "$TMP_DIR/checksums.txt"
+
+    _expected=$(grep " ${_file}\$" "$TMP_DIR/checksums.txt" | awk '{print $1}' | head -n 1)
+    [ -n "$_expected" ] || {
+        log_error "No checksum for $_file in checksums.txt."
+        exit 1
+    }
+
+    if command -v sha256sum > /dev/null 2>&1; then
+        _actual=$(sha256sum "$TMP_DIR/$_file" | awk '{print $1}')
+    elif command -v shasum > /dev/null 2>&1; then
+        _actual=$(shasum -a 256 "$TMP_DIR/$_file" | awk '{print $1}')
+    else
+        log_error "Neither sha256sum nor shasum found -- cannot verify the download."
+        exit 1
+    fi
+
+    [ "$_expected" = "$_actual" ] || {
+        log_error "Checksum mismatch for $_file. Refusing to install."
+        exit 1
+    }
+    log_info "Checksum verified."
+
+    tar -xzf "$TMP_DIR/$_file" -C "$TMP_DIR"
+    install_binary_file "$TMP_DIR/${BINARY_NAME}-${ARCH}/${BINARY_NAME}"
+}
+
+ask_api_key() {
+    if [ -n "${OPENROUTER_API_KEY:-}" ]; then
+        log_info "OPENROUTER_API_KEY is set in the environment; leaving the config key empty."
+        return 0
+    fi
+    has_tty || return 0
+    printf 'OpenRouter API key (blank to set it later): ' > /dev/tty
+    read -r API_KEY < /dev/tty || API_KEY=""
+}
+
+config_is_v4() {
+    sed 's|//.*||g' "$1" 2> /dev/null \
+        | grep -Eq '"(browser_path|browser_type|lang|stream|punctuation)"'
+}
+
+# v5 never rewrites a config at runtime; only this installer does, and only
+# after asking. v4 silently overwriting configs is the bug that started all of
+# this -- do not reintroduce it here.
 write_config() {
     CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
     CONFIG_FILE="$CONFIG_DIR/voice-type.jsonc"
 
-    LANG_HEURISTIC="en-US"
-    if [ -n "$LANG" ]; then
-        RAW_LANG=$(echo "$LANG" | cut -d. -f1 | tr '_' '-')
-        case "$RAW_LANG" in
-            en-US|en-GB|en-AU|en-CA|en-IN|es-ES|es-MX|es-AR|es-CO|ru-RU|\
-            zh-CN|zh-TW|zh-HK|ja-JP|ko-KR|fr-FR|fr-CA|de-DE|de-AT|de-CH|\
-            pt-BR|pt-PT|it-IT|nl-NL|pl-PL|tr-TR|ar-SA|hi-IN|sv-SE|no-NO|\
-            da-DK|fi-FI|el-GR|he-IL|th-TH|vi-VN|id-ID|uk-UA|cs-CZ|ro-RO|hu-HU)
-                LANG_HEURISTIC="$RAW_LANG"
+    if [ -f "$CONFIG_FILE" ]; then
+        if ! config_is_v4 "$CONFIG_FILE"; then
+            log_info "Keeping existing config at $CONFIG_FILE"
+            return 0
+        fi
+
+        log_warn "$CONFIG_FILE looks like a v4 config (Chrome/language fields)."
+        if ! has_tty; then
+            log_warn "No terminal to ask on -- keeping it. v5 ignores the v4 fields and uses defaults."
+            return 0
+        fi
+        case "$(prompt_yn "Replace it with a v5 config? (a backup is written first)" "Y")" in
+            [Yy]*)
+                cp "$CONFIG_FILE" "$CONFIG_FILE.v4.bak"
+                log_info "Backed up to $CONFIG_FILE.v4.bak"
+                ;;
+            *)
+                log_info "Keeping it. v5 ignores the v4 fields and uses defaults."
+                return 0
                 ;;
         esac
     fi
 
     mkdir -p "$CONFIG_DIR"
-
-    cat > "$CONFIG_FILE" << EOF
-{
-    "port": 3232, // int 1024-65535, default 3232
-    "lang": "${LANG_HEURISTIC}", // BCP47 tag, default en-US; see src/constants.ts for allowed values
-    "browser_type": "${BROWSER_TYPE:-chrome}", // "chrome" | "chromium", default "chrome"
-    "browser_path": "${BROWSER_PATH}", // absolute path to Chrome/Chromium binary, default auto-detected
-    "stream": true, // bool (true | false), default true — live interim transcripts
-    "timeout": 0, // int seconds of silence before auto-stop (streaming only), default 0 (off)
-    "sound": ${SOUND_ENABLED:-false}, // bool (true | false), default false
-    "text": ${TEXT_ENABLED:-false}, // bool (true | false), default false
-    "punctuation": true // bool (true | false), default true — spoken punctuation + capitalization for en-*
-    // Set up keyboard shortcuts in your DE settings using these commands:
+    # The key lands on disk, so create the file private from the first byte
+    # rather than chmod-ing after the write.
+    (
+        umask 077
+        printf '{\n    "api_key": "%s", // or set OPENROUTER_API_KEY, which wins\n' "$API_KEY" > "$CONFIG_FILE"
+        cat >> "$CONFIG_FILE" << 'EOF'
+    "port": 3232, // int 1024-65535
+    "model": "nvidia/parakeet-tdt-0.6b-v3", // any OpenRouter STT slug
+    "max_duration": 600, // int seconds, hard cap on one dictation
+    "paste_key": "ctrl+v", // terminals usually need "ctrl+shift+v"
+    "paste_delay_ms": 300, // wait before restoring the previous clipboard
+    "trim_silence": true // cut leading/trailing silence before upload
+    // Keyboard shortcuts, set in your desktop environment:
+    //   Dictate:            curl -s http://localhost:3232/toggle
     //   Start/stop daemon:  sh -c "curl -s http://localhost:3232/exit || voice-type"
-    //   Dictate:            curl -s http://localhost:3232/toggle?lang=en-US
-    //   Dictate (Spanish):  curl -s http://localhost:3232/toggle?lang=es-ES
 }
 EOF
+    )
+    chmod 600 "$CONFIG_FILE"
+    log_info "Wrote $CONFIG_FILE"
 }
 
 print_summary() {
-    CONFIG_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/voice-type.jsonc"
-    PORT="${VT_PORT:-3232}"
-    log_info "Voice Type installed."
-    log_link "Config:" "$CONFIG_PATH"
-    log_info "Set up keyboard shortcuts in your DE settings:"
-    log_info "  Start/stop daemon:  sh -c \"curl -s http://localhost:${PORT}/exit || voice-type\""
-    log_info "  Dictate (English):  curl -s http://localhost:${PORT}/toggle?lang=en-US"
-    log_info "  Dictate (Spanish):  curl -s http://localhost:${PORT}/toggle?lang=es-ES"
-    if [ "${DOTOOL_NEEDS_RELOGIN:-0}" = "1" ]; then
-        log_warn "Log out and back in (or run: newgrp input) for input group to take effect."
+    printf '\n' >&2
+    log_info "voice-type v5 installed."
+    log_info "Config: $CONFIG_FILE"
+    if [ -z "$API_KEY" ] && [ -z "${OPENROUTER_API_KEY:-}" ]; then
+        log_warn "No API key yet. Set OPENROUTER_API_KEY, or add \"api_key\" to the config."
     fi
-}
+    log_info "Keyboard shortcuts, set in your desktop environment:"
+    log_info "  Dictate:            curl -s http://localhost:$PORT/toggle"
+    log_info "  Start/stop daemon:  sh -c \"curl -s http://localhost:$PORT/exit || voice-type\""
 
-get_latest_version() {
-    curl -sS "https://api.github.com/repos/${REPO}/releases/latest" | \
-        grep '"tag_name":' | \
-        sed -E 's/.*"([^"]+)".*/\1/'
-}
-
-install_binary_file() {
-    BINARY_PATH="$1"
-    TARGET="/usr/local/bin/${BINARY_NAME}"
-    if [ -w /usr/local/bin ]; then
-        install -m 755 "$BINARY_PATH" "$TARGET"
-    else
-        sudo install -m 755 "$BINARY_PATH" "$TARGET"
+    if [ "$NEEDS_RELOGIN" = "1" ]; then
+        printf '\n' >&2
+        log_warn "Log out and back in (or run: newgrp input) before first use."
     fi
-}
-
-install_binary() {
-    if [ "$MODE" = "local" ]; then
-        if ! command -v bun >/dev/null 2>&1; then
-            log_error "bun not found. Install bun first."
-            exit 1
-        fi
-        log_info "Building binary..."
-        mkdir -p build
-        bun build src/index.ts --compile --outfile build/voice-type
-        mkdir -p "releases/voice-type-${ARCH}"
-        cp build/voice-type "releases/voice-type-${ARCH}/"
-        tar -czf "releases/voice-type-linux-${ARCH}.tar.gz" -C releases "voice-type-${ARCH}/"
-        sha256sum "releases/voice-type-linux-${ARCH}.tar.gz"
-        install_binary_file "build/voice-type"
-        return 0
-    fi
-
-    if [ "$MODE" = "version" ]; then
-        TAG="$VERSION"
-    else
-        log_info "Fetching latest version..."
-        TAG=$(get_latest_version)
-        if [ -z "$TAG" ]; then
-            log_error "Could not determine latest version"
-            exit 1
-        fi
-    fi
-
-    BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
-    FILENAME="voice-type-linux-${ARCH}.tar.gz"
-    TMP_DIR=$(mktemp -d)
-    trap 'rm -rf "$TMP_DIR"' EXIT
-
-    log_info "Downloading ${TAG}..."
-    curl -sSfL "${BASE_URL}/${FILENAME}" -o "${TMP_DIR}/${FILENAME}"
-    curl -sSfL "${BASE_URL}/checksums.txt" -o "${TMP_DIR}/checksums.txt"
-
-    cd "$TMP_DIR"
-    EXPECTED_CHECKSUM=$(grep "${FILENAME}" checksums.txt | awk '{print $1}')
-    if [ -z "$EXPECTED_CHECKSUM" ]; then
-        log_error "Could not find checksum for ${FILENAME}"
-        exit 1
-    fi
-
-    if command -v sha256sum > /dev/null 2>&1; then
-        ACTUAL_CHECKSUM=$(sha256sum "${FILENAME}" | awk '{print $1}')
-    elif command -v shasum > /dev/null 2>&1; then
-        ACTUAL_CHECKSUM=$(shasum -a 256 "${FILENAME}" | awk '{print $1}')
-    else
-        log_error "Neither sha256sum nor shasum found"
-        exit 1
-    fi
-
-    if [ "$EXPECTED_CHECKSUM" != "$ACTUAL_CHECKSUM" ]; then
-        log_error "Checksum mismatch!"
-        exit 1
-    fi
-
-    tar -xzf "${FILENAME}" -C "$TMP_DIR"
-    install_binary_file "${TMP_DIR}/voice-type-${ARCH}/voice-type"
-
-    case ":$PATH:" in
-        *":/usr/local/bin:"*) ;;
-        *) log_warn "/usr/local/bin is not in your PATH. Add it to use voice-type." ;;
-    esac
-
-    rm -rf "$TMP_DIR"
-    trap - EXIT
 }
 
 main() {
     ARCH=$(detect_arch)
-    detect_browser
-    ask_notifications
-    install_dotool
-    install_binary
+
+    TMP_DIR=$(mktemp -d)
+    trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+
+    if [ "$SKIP_SYSTEM" = "0" ]; then
+        setup_uinput
+        setup_clipboard
+        check_audio
+        stop_running_daemon
+    fi
+
+    if [ "$MODE" = "local" ]; then
+        build_local
+    else
+        download_release
+    fi
+
+    ask_api_key
     write_config
     print_summary
 }
 
-MODE="prod"
-VERSION=""
 while [ $# -gt 0 ]; do
     case "$1" in
+        --version)
+            [ $# -ge 2 ] || { log_error "--version needs a tag, e.g. --version v5.0.0"; exit 1; }
+            VERSION_TAG="$2"; MODE="version"; shift 2
+            ;;
         --local) MODE="local"; shift ;;
-        --version) VERSION="$2"; MODE="version"; shift 2 ;;
-        -*) shift ;;
-        *) shift ;;
+        --prefix)
+            [ $# -ge 2 ] || { log_error "--prefix needs a directory"; exit 1; }
+            PREFIX="$2"; shift 2
+            ;;
+        --skip-system) SKIP_SYSTEM=1; shift ;;
+        -h | --help) usage; exit 0 ;;
+        *) log_error "Unknown option: $1"; usage; exit 1 ;;
     esac
 done
 
-main "$@"
+main
