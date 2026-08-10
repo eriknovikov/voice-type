@@ -22,7 +22,7 @@ PREFIX="/usr/local"
 SKIP_SYSTEM=0
 NEEDS_RELOGIN=0
 API_KEY=""
-PREV_SIZE=""
+CONFIG_CREATED=0
 
 RED=$(printf '\033[31m'); YELLOW=$(printf '\033[33m')
 GREEN=$(printf '\033[32m'); RESET=$(printf '\033[0m')
@@ -136,21 +136,27 @@ user_in_input_group() {
 # v5 sends the paste keystroke itself through /dev/uinput, which is owned by the
 # 'input' group. This is a hard requirement -- there is no fallback input path.
 setup_uinput() {
+    _changed=0
+
     if [ ! -e /dev/uinput ]; then
         log_warn "/dev/uinput does not exist. Loading the uinput module..."
         as_root modprobe uinput || log_warn "Could not load the uinput module."
         echo uinput | as_root tee /etc/modules-load.d/uinput.conf > /dev/null 2>&1 || true
+        _changed=1
     fi
 
-    as_root udevadm control --reload || true
-    as_root udevadm trigger || true
-
-    if user_in_input_group; then
-        log_info "User is already in the 'input' group."
-    else
+    if ! user_in_input_group; then
         log_warn "Adding $USER to the 'input' group."
         as_root usermod -aG input "$USER"
         NEEDS_RELOGIN=1
+        _changed=1
+    fi
+
+    # Only reload udev when something actually changed. Otherwise a reinstall on
+    # an already-configured machine asks for a sudo password to do nothing.
+    if [ "$_changed" = "1" ]; then
+        as_root udevadm control --reload || true
+        as_root udevadm trigger || true
     fi
 }
 
@@ -163,10 +169,7 @@ setup_clipboard() {
         _clip_cmd="xclip"; _clip_pkg="xclip"
     fi
 
-    if command -v "$_clip_cmd" > /dev/null 2>&1; then
-        log_info "Clipboard tool '$_clip_cmd' found."
-        return 0
-    fi
+    command -v "$_clip_cmd" > /dev/null 2>&1 && return 0
 
     log_warn "'$_clip_cmd' not found -- voice-type cannot paste without it."
     case "$(prompt_yn "Install $_clip_pkg?" "Y")" in
@@ -176,9 +179,7 @@ setup_clipboard() {
 }
 
 check_audio() {
-    if command -v pactl > /dev/null 2>&1 && pactl info > /dev/null 2>&1; then
-        log_info "Audio server reachable."
-    else
+    if ! command -v pactl > /dev/null 2>&1 || ! pactl info > /dev/null 2>&1; then
         log_warn "Could not reach PulseAudio/pipewire-pulse. voice-type needs one of them for capture."
     fi
 }
@@ -325,15 +326,6 @@ download_release() {
     install_binary_file "$TMP_DIR/${BINARY_NAME}-${ARCH}/${BINARY_NAME}"
 }
 
-# v5 installs over v4's path deliberately, so the old binary is replaced rather
-# than removed. Note its size first: v4 bundled a ~100 MB Bun runtime, and seeing
-# that reclaimed is the clearest signal the swap actually happened.
-note_existing_binary() {
-    _t="$PREFIX/bin/$BINARY_NAME"
-    [ -f "$_t" ] || return 0
-    PREV_SIZE=$(du -h "$_t" 2> /dev/null | cut -f1)
-}
-
 # Leftovers v5 has no use for. Always prompted, never automatic: dotool is a
 # general-purpose tool the user may drive from their own scripts, and the log
 # directory may hold output they still want.
@@ -367,22 +359,13 @@ cleanup_v4() {
     fi
 }
 
-# An older binary earlier in PATH keeps winning over the one just installed --
-# v4 at a different prefix, or a pre-release voice-type-go from a source build.
-# These are reported, never deleted: a wrapper script may still point at them.
+# The one case worth interrupting for: another copy earlier in PATH means the
+# binary just written is not the one that runs.
 check_shadowing() {
     _target="$PREFIX/bin/$BINARY_NAME"
     _resolved=$(command -v "$BINARY_NAME" 2> /dev/null || true)
     if [ -n "$_resolved" ] && [ "$_resolved" != "$_target" ]; then
-        log_warn "'$BINARY_NAME' on your PATH resolves to $_resolved, not $_target."
-        log_warn "Delete that copy, or put $(dirname "$_target") earlier in PATH."
-    fi
-
-    _stale=$(command -v voice-type-go 2> /dev/null || true)
-    if [ -n "$_stale" ]; then
-        log_warn "A pre-5.0 'voice-type-go' binary is still on your PATH at $_stale."
-        log_warn "v5 installs as '$BINARY_NAME'. Repoint any hotkey or wrapper script that"
-        log_warn "launches it, then delete it -- otherwise your hotkey runs the old build."
+        log_warn "'$BINARY_NAME' runs from $_resolved, not the copy just installed at $_target."
     fi
 }
 
@@ -395,10 +378,8 @@ check_shadowing() {
 # and the INT/TERM trap is mandatory, because a Ctrl-C between disabling echo and
 # restoring it would hand the user back a shell that types invisibly.
 ask_api_key() {
-    if [ -n "${OPENROUTER_API_KEY:-}" ]; then
-        log_info "OPENROUTER_API_KEY is set in the environment; leaving the config key empty."
-        return 0
-    fi
+    # A key in the environment wins over the file, so there is nothing to ask.
+    [ -z "${OPENROUTER_API_KEY:-}" ] || return 0
     has_tty || return 0
 
     # Echo goes off *before* the prompt is printed. Anything arriving between the
@@ -431,7 +412,7 @@ write_config() {
     CONFIG_FILE="$CONFIG_DIR/voice-type.jsonc"
 
     if [ -f "$CONFIG_FILE" ]; then
-        log_info "Keeping existing config at $CONFIG_FILE (v5 ignores fields it does not use)."
+        log_info "Keeping existing config at $CONFIG_FILE"
         return 0
     fi
 
@@ -456,25 +437,30 @@ write_config() {
 EOF
     )
     chmod 600 "$CONFIG_FILE"
+    CONFIG_CREATED=1
     log_info "Wrote $CONFIG_FILE"
 }
 
-print_summary() {
-    printf '\n' >&2
-    log_info "voice-type v5 installed."
-    if [ -n "$PREV_SIZE" ]; then
-        log_info "Replaced the previous $PREV_SIZE binary at $PREFIX/bin/$BINARY_NAME."
-    fi
-    log_info "Config: $CONFIG_FILE"
-    if [ -z "$API_KEY" ] && [ -z "${OPENROUTER_API_KEY:-}" ]; then
-        log_warn "No API key yet. Set OPENROUTER_API_KEY, or add \"api_key\" to the config."
-    fi
-    log_info "Keyboard shortcuts, set in your desktop environment:"
-    log_info "  Dictate:            curl -s http://localhost:$PORT/toggle"
-    log_info "  Start/stop daemon:  sh -c \"curl -s http://localhost:$PORT/exit || voice-type\""
+# Read from the file rather than from what this run happened to type: on a
+# reinstall the key is already in the config and warning about it is a lie.
+config_has_key() {
+    [ -f "$CONFIG_FILE" ] || return 1
+    sed 's|//.*||g' "$CONFIG_FILE" 2> /dev/null \
+        | grep -Eq '"api_key"[[:space:]]*:[[:space:]]*"[^"]+"'
+}
 
+print_summary() {
+    if [ "$CONFIG_CREATED" = "1" ]; then
+        log_info "Keyboard shortcuts, to set in your desktop environment:"
+        log_info "  Dictate:            curl -s http://localhost:$PORT/toggle"
+        log_info "  Start/stop daemon:  sh -c \"curl -s http://localhost:$PORT/exit || voice-type\""
+    fi
+
+    # Both of these leave voice-type unable to work, so they stay.
+    if [ -z "${OPENROUTER_API_KEY:-}" ] && ! config_has_key; then
+        log_warn "No API key yet. Set OPENROUTER_API_KEY, or add \"api_key\" to $CONFIG_FILE."
+    fi
     if [ "$NEEDS_RELOGIN" = "1" ]; then
-        printf '\n' >&2
         log_warn "Log out and back in (or run: newgrp input) before first use."
     fi
 }
@@ -491,8 +477,6 @@ main() {
         check_audio
         stop_running_daemon
     fi
-
-    note_existing_binary
 
     if [ "$MODE" = "local" ]; then
         build_local
