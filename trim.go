@@ -34,6 +34,9 @@ const (
 const (
 	minCaptureSeconds = 0.35 // shorter than any real word: a fumbled hotkey
 	speechGateSeconds = 2.0  // above this a capture is intentional, always upload
+	// Voiced speech crosses zero much less often than broadband room noise. This
+	// rescues an utterance that starts before the capture has a quiet floor.
+	speechMaxZeroCrossingRate = 0.20
 )
 
 // worthUploading reports whether a capture is worth a round trip. It exists for
@@ -72,7 +75,33 @@ func hasSpeech(samples []int16) bool {
 		rms[i] = frameRMS(samples[i*trimFrameSamples : (i+1)*trimFrameSamples])
 	}
 
-	return slices.Max(rms) >= silenceGate(rms)
+	peak := slices.Max(rms)
+	if peak >= silenceGate(rms) {
+		return true
+	}
+
+	// A clip that begins immediately with sustained speech has no quiet frames
+	// from which to estimate a floor. Voiced cadence provides a conservative
+	// fallback without treating all steady room noise as speech.
+	return peak >= trimMinGate && hasVoicedCadence(samples)
+}
+
+func hasVoicedCadence(samples []int16) bool {
+	var previous int16
+	crossings, transitions := 0, 0
+	for _, sample := range samples {
+		if sample == 0 {
+			continue
+		}
+		if previous != 0 {
+			transitions++
+			if (previous < 0) != (sample < 0) {
+				crossings++
+			}
+		}
+		previous = sample
+	}
+	return transitions > 0 && float64(crossings)/float64(transitions) <= speechMaxZeroCrossingRate
 }
 
 // trimSilence returns the span of samples between the first and last frame that

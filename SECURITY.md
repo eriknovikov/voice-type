@@ -8,8 +8,8 @@
 - **When active**: The microphone is read only during an explicit recording
   session started by the user.
 - **Data flow**: Captured PCM audio is encoded as WAV and sent to OpenRouter.
-- **Local retention**: Audio from failed transient transcription attempts may be
-  retained under `$TMPDIR/voice-type/` so it is not silently lost.
+- **Local retention**: Audio from failed transcription attempts is retained
+  privately under `$TMPDIR/voice-type/` so it is not silently lost.
 
 ### `/dev/uinput` Access
 

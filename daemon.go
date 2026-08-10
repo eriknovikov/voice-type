@@ -44,7 +44,10 @@ type daemon struct {
 	mu    sync.Mutex
 	state sessionState
 	// capTimer force-stops a session at the fixed duration cap.
-	capTimer *time.Timer
+	capTimer     *time.Timer
+	shuttingDown bool
+	sessionWG    sync.WaitGroup
+	sessionID    uint64
 
 	exitOnce sync.Once
 }
@@ -68,28 +71,25 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 // already in flight.
 func (d *daemon) startSession() (int, string) {
 	d.mu.Lock()
-	if d.state != stateIdle {
-		state := d.state
-		d.mu.Unlock()
-		return http.StatusConflict, fmt.Sprintf("already %s", state)
+	defer d.mu.Unlock()
+	if d.shuttingDown {
+		return http.StatusConflict, "shutting down"
 	}
-	d.state = stateRecording
-	d.mu.Unlock()
+	if d.state != stateIdle {
+		return http.StatusConflict, fmt.Sprintf("already %s", d.state)
+	}
 
 	if err := d.res.Recorder.Start(); err != nil {
-		d.mu.Lock()
-		d.state = stateIdle
-		d.mu.Unlock()
 		logf("AUDIO", "start failed: %v", err)
 		return http.StatusInternalServerError, err.Error()
 	}
 
-	d.mu.Lock()
+	d.state = stateRecording
+	d.sessionID++
+	sessionID := d.sessionID
 	d.capTimer = time.AfterFunc(maxDurationSeconds*time.Second, func() {
-		logf("AUDIO", "duration cap of %ds reached -- stopping", maxDurationSeconds)
-		d.stopSession()
+		d.stopSessionFor(sessionID)
 	})
-	d.mu.Unlock()
 
 	logf("AUDIO", "recording")
 	return http.StatusOK, "recording"
@@ -98,14 +98,25 @@ func (d *daemon) startSession() (int, string) {
 // stopSession moves recording -> transcribing -> idle. It runs on the caller's
 // goroutine so /stop returns only once the text has landed.
 func (d *daemon) stopSession() (int, string) {
+	return d.stopSessionFor(0)
+}
+
+// stopSessionFor ignores an expired duration timer from an older session. A
+// zero session ID is an explicit user stop and applies to the current session.
+func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 	d.mu.Lock()
-	if d.state != stateRecording {
+	if d.state != stateRecording || (sessionID != 0 && sessionID != d.sessionID) {
 		state := d.state
 		d.mu.Unlock()
-		// A stop that arrives while transcribing, or while idle, is a no-op.
+		// A stop that arrives while transcribing, while idle, or from an expired
+		// timer belonging to an older recording is a no-op.
 		return http.StatusOK, fmt.Sprintf("not recording (%s)", state)
 	}
+	d.sessionWG.Add(1)
 	d.state = stateTranscribing
+	if sessionID != 0 {
+		logf("AUDIO", "duration cap of %ds reached -- stopping", maxDurationSeconds)
+	}
 	if d.capTimer != nil {
 		d.capTimer.Stop()
 		d.capTimer = nil
@@ -116,6 +127,7 @@ func (d *daemon) stopSession() (int, string) {
 		d.mu.Lock()
 		d.state = stateIdle
 		d.mu.Unlock()
+		d.sessionWG.Done()
 	}()
 
 	samples := d.res.Recorder.Stop()
@@ -162,33 +174,33 @@ func (d *daemon) stopSession() (int, string) {
 	return http.StatusOK, result.Text
 }
 
-// handleSTTError logs the failure at the right severity and, for transient
-// errors, keeps the audio around rather than silently discarding speech.
+// handleSTTError logs the failure at the right severity and keeps the audio
+// around rather than silently discarding speech.
 func (d *daemon) handleSTTError(err error, wav []byte) (int, string) {
+	retained := ""
+	if path, werr := retainWAV(wav); werr == nil {
+		retained = fmt.Sprintf(" -- audio retained at %s", path)
+	} else {
+		retained = fmt.Sprintf(" (could not retain audio: %v)", werr)
+	}
+
 	var se *sttError
 	if errors.As(err, &se) {
 		switch {
 		case se.Fatal():
-			logf("STT", "authentication rejected (%d): %s", se.Status, se.Error())
+			logf("STT", "authentication rejected (%d): %s%s", se.Status, se.Error(), retained)
 			logf("STT", "check OPENROUTER_API_KEY or the api_key field in %s", configFilePath())
 		case se.Status == http.StatusRequestEntityTooLarge:
-			logf("STT", "audio rejected as too large (%d) -- dictate in shorter takes", se.Status)
+			logf("STT", "audio rejected as too large (%d) -- dictate in shorter takes%s", se.Status, retained)
 		case se.Retryable():
-			if path, werr := retainWAV(wav); werr == nil {
-				logf("STT", "transient failure (%d): %s -- audio retained at %s", se.Status, se.Error(), path)
-			} else {
-				logf("STT", "transient failure (%d): %s (could not retain audio: %v)", se.Status, se.Error(), werr)
-			}
+			logf("STT", "transient failure (%d): %s%s", se.Status, se.Error(), retained)
 		default:
-			logf("STT", "failed: %v", se.Error())
+			logf("STT", "failed: %v%s", se.Error(), retained)
 		}
 		return http.StatusBadGateway, se.Error()
 	}
 
-	logf("STT", "failed: %v", err)
-	if path, werr := retainWAV(wav); werr == nil {
-		logf("STT", "audio retained at %s", path)
-	}
+	logf("STT", "failed: %v%s", err, retained)
 	return http.StatusBadGateway, err.Error()
 }
 
@@ -246,6 +258,15 @@ func statusWord(status int) string {
 func (d *daemon) shutdown() {
 	d.exitOnce.Do(func() {
 		logf("DAEMON", "shutting down")
+		d.mu.Lock()
+		d.shuttingDown = true
+		state := d.state
+		d.mu.Unlock()
+
+		if state == stateRecording {
+			d.stopSession()
+		}
+		d.sessionWG.Wait()
 		close(d.done)
 	})
 }
@@ -267,6 +288,7 @@ func (d *daemon) Run() error {
 
 	select {
 	case err := <-errCh:
+		d.shutdown()
 		return err
 	case <-d.done:
 	}

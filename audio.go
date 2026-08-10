@@ -24,6 +24,12 @@ type Recorder struct {
 	samples []int16
 }
 
+type audioRecorder interface {
+	Start() error
+	Stop() []int16
+	Close()
+}
+
 func newRecorder() (*Recorder, error) {
 	client, err := pulse.NewClient(pulse.ClientApplicationName("voice-type"))
 	if err != nil {

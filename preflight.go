@@ -21,7 +21,7 @@ const (
 // registration and the Pulse connect are paid exactly once.
 type resources struct {
 	Typer    *Typer
-	Recorder *Recorder
+	Recorder audioRecorder
 }
 
 func (r *resources) Close() {

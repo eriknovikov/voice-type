@@ -67,6 +67,23 @@ stop_daemon() {
     fi
 }
 
+load_config_port() {
+    _binary="$PREFIX/bin/$BINARY_NAME"
+    [ -x "$_binary" ] || return 0
+    _version=$("$_binary" version 2> /dev/null) || return 0
+    case "$_version" in
+        5.*) ;;
+        *) return 0 ;;
+    esac
+    _port=$("$_binary" config-port 2> /dev/null) || return 0
+    case "$_port" in
+        '' | *[!0-9]*) return 0 ;;
+    esac
+    if [ "$_port" -ge 1024 ] && [ "$_port" -le 65535 ]; then
+        PORT="$_port"
+    fi
+}
+
 remove_binary() {
     _target="$PREFIX/bin/$BINARY_NAME"
     [ -e "$_target" ] || {
@@ -128,6 +145,7 @@ EOF
 }
 
 main() {
+    load_config_port
     stop_daemon
     remove_binary
     remove_config

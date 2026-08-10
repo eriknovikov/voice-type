@@ -28,15 +28,28 @@ func logf(tag, format string, args ...any) {
 	log.Printf("[%s] %s: %s", time.Now().Format("15:04:05"), tag, fmt.Sprintf(format, args...))
 }
 
-// retainWAV saves audio that could not be transcribed, so a transient API
-// failure never silently discards speech the user already gave.
+// retainWAV saves audio that could not be transcribed, so an API failure never
+// silently discards speech the user already gave.
 func retainWAV(wav []byte) (string, error) {
 	dir := filepath.Join(os.TempDir(), "voice-type")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, fmt.Sprintf("dictation-%s.wav", time.Now().Format("20060102-150405")))
-	if err := os.WriteFile(path, wav, 0o600); err != nil {
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp(dir, "dictation-*.wav")
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
+	if _, err := f.Write(wav); err != nil {
+		f.Close()
+		os.Remove(path)
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(path)
 		return "", err
 	}
 	return path, nil
@@ -56,8 +69,11 @@ func main() {
 	case "version":
 		fmt.Println(version)
 		return
+	case "config-port":
+		fmt.Println(configLoad().Port)
+		return
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n\nusage: voice-type [start|version]\n", flag.Arg(0))
+		fmt.Fprintf(os.Stderr, "unknown command %q\n\nusage: voice-type [start|version|config-port]\n", flag.Arg(0))
 		os.Exit(2)
 	}
 

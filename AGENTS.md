@@ -119,11 +119,13 @@ library.
     of a cent, over-cutting costs the user their words.
 15. **`worthUploading` only judges short captures.** Below `minCaptureSeconds`
     (0.35 s) nothing uploads; between there and `speechGateSeconds` (2 s) the clip
-    must clear a whole-clip noise gate; past 2 s it always uploads, unexamined.
-    This is a discard gate, not the VAD auto-stop that is out of scope — session
-    boundaries stay exactly where the hotkey put them. Do not raise the floor to
-    "2–3 seconds": "yes", "no" and "one sec" are real dictation, and the energy
-    gate, not the clock, is what catches a fumbled hotkey.
+    must clear a whole-clip speech gate: energy contrast first, with voiced
+    cadence as the fallback when speech starts before there is a quiet floor.
+    Past 2 s it always uploads, unexamined. This is a discard gate, not the VAD
+    auto-stop that is out of scope — session boundaries stay exactly where the
+    hotkey put them. Do not raise the floor to "2–3 seconds": "yes", "no" and
+    "one sec" are real dictation, and the signal gate, not the clock, is what
+    catches a fumbled hotkey.
 
 ## Out of scope (deliberate — do not add without discussion)
 
@@ -175,9 +177,10 @@ original source afterwards.
 
 `VERSION` at the repo root is the only place the version number lives. The
 Makefile reads it into `-X main.version`, and `.github/workflows/release.yml`
-reads it to decide the tag: a push to `main` whose `VERSION` has no matching
-`vX.Y.Z` tag builds both architectures, tags, and publishes. An unstamped
-`go build` reports `dev` on purpose — it must never claim a release number.
+reads it to decide the tag: a push to `main` that changes `VERSION` and has no
+matching `vX.Y.Z` tag validates the tree, builds both architectures, pins the
+tag to that exact commit, and publishes. An unstamped `go build` reports `dev`
+on purpose — it must never claim a release number.
 
 Release assets are `voice-type-v5-linux-{x64,arm64}.tar.gz` plus
 `checksums.txt`. The `-v5-` marker is load-bearing: v4 binaries already in the

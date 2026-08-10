@@ -7,7 +7,8 @@ appears wherever your cursor is.
 > v5, a single 6 MB static Go binary: no browser, no 400 MB Chromium, ~4 MB idle
 > instead of ~440 MB. v5 needs an [OpenRouter](https://openrouter.ai) API key
 > (~$0.0015/min). The deprecated v4 source remains in [`v4/`](./v4) and can be
-> installed separately with:
+> installed instead of v5 with the command below. The two versions share the
+> binary name, config path, and port, so back up your config before switching.
 >
 > ```bash
 > curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/v4/install.sh | sh
@@ -19,10 +20,16 @@ appears wherever your cursor is.
 curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/install.sh | sh
 ```
 
-Fetches the static binary for your architecture, verifies its checksum, installs
-it to `/usr/local/bin/voice-type`, and writes a config. Pin a release with
-`--version v5.0.0`, or build the current working tree with `./install.sh --local`
-from the repository root.
+Fetches the static binary for your architecture, verifies its checksum and
+embedded version, installs it to `/usr/local/bin/voice-type`, and writes a
+private config. Pin a release with:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/v5.0.0/install.sh | sh -s -- --version v5.0.0
+```
+
+Build the current working tree with `./install.sh --local` from the repository
+root.
 
 **Requirements:** Linux, a microphone, PulseAudio or pipewire-pulse, membership
 of the `input` group, and an OpenRouter API key. The installer handles the

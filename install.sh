@@ -2,8 +2,8 @@
 # voice-type v5 installer.
 #
 # Fetches the static Go binary for this architecture from GitHub Releases,
-# verifies its checksum, installs it, and writes a config. It only removes
-# leftovers from the deprecated v4 install; runtime setup belongs elsewhere.
+# verifies its checksum, installs it, and writes a config. Runtime and package
+# setup belong elsewhere.
 #
 #   curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/install.sh | sh
 #
@@ -20,6 +20,8 @@ VERSION_TAG=""
 PREFIX="/usr/local"
 API_KEY=""
 CONFIG_CREATED=0
+CONFIG_TMP=""
+TMP_DIR=""
 
 RED=$(printf '\033[31m'); YELLOW=$(printf '\033[33m')
 GREEN=$(printf '\033[32m'); RESET=$(printf '\033[0m')
@@ -27,6 +29,11 @@ GREEN=$(printf '\033[32m'); RESET=$(printf '\033[0m')
 log_info() { printf '%s==>%s %s\n' "$GREEN" "$RESET" "$1" >&2; }
 log_warn() { printf '%s!!%s  %s\n' "$YELLOW" "$RESET" "$1" >&2; }
 log_error() { printf '%sxx%s  %s\n' "$RED" "$RESET" "$1" >&2; }
+
+cleanup() {
+    [ -z "$CONFIG_TMP" ] || rm -f "$CONFIG_TMP"
+    [ -z "$TMP_DIR" ] || rm -rf "$TMP_DIR"
+}
 
 # Wraps a path in an OSC 8 hyperlink so the config is click-to-open in terminals
 # that support them (GNOME Terminal, Kitty, WezTerm, iTerm2, Konsole). Emitted
@@ -43,10 +50,11 @@ link_path() {
 
 usage() {
     cat >&2 << EOF
-Usage: install.sh [--version vX.Y.Z | --local]
+Usage: install.sh [--version vX.Y.Z | --local] [--prefix DIR]
 
   --version vX.Y.Z   install a specific v5 release
   --local            build from the working tree with the Go toolchain
+  --prefix DIR       install under DIR instead of /usr/local
 EOF
 }
 
@@ -98,6 +106,10 @@ as_root() {
 }
 
 detect_arch() {
+    if [ "$(uname -s)" != "Linux" ]; then
+        log_error "Unsupported operating system: $(uname -s). voice-type v5 requires Linux."
+        exit 1
+    fi
     case "$(uname -m)" in
         x86_64 | amd64) echo "x64" ;;
         aarch64 | arm64) echo "arm64" ;;
@@ -119,13 +131,12 @@ get_latest_tag() {
 # script would drop a Bun/Chrome binary onto a v5 config, so refuse it by name.
 guard_major_version() {
     _tag="$1"
+    if ! printf '%s\n' "$_tag" \
+        | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$'; then
+        log_error "Invalid release tag: $_tag"
+        exit 1
+    fi
     _major=$(echo "${_tag#v}" | cut -d. -f1)
-    case "$_major" in
-        '' | *[!0-9]*)
-            log_warn "Could not read a major version from '$_tag'. Continuing."
-            return 0
-            ;;
-    esac
     [ "$_major" -lt 5 ] || return 0
 
     if [ "$MODE" = "version" ]; then
@@ -222,40 +233,14 @@ download_release() {
     log_info "Checksum verified."
 
     tar -xzf "$TMP_DIR/$_file" -C "$TMP_DIR"
-    install_binary_file "$TMP_DIR/${BINARY_NAME}-${ARCH}/${BINARY_NAME}"
-}
 
-# Remove leftovers from the deprecated v4 install. dotool may be used by other
-# software, and the old log directory may contain useful output, so both are
-# offered rather than removed silently.
-cleanup_junk() {
-    _log_dir="${XDG_DATA_HOME:-$HOME/.local/share}/voice-type"
-    if [ -d "$_log_dir" ]; then
-        log_warn "v4 left logs in $_log_dir. v5 logs to stderr only and never writes there."
-        case "$(prompt_yn "Remove that directory?" "Y")" in
-            [Yy]*)
-                rm -rf "$_log_dir"
-                log_info "Removed $_log_dir"
-                ;;
-            *) log_info "Kept $_log_dir" ;;
-        esac
+    _binary="$TMP_DIR/${BINARY_NAME}-${ARCH}/${BINARY_NAME}"
+    _reported_version=$("$_binary" version)
+    if [ "$_reported_version" != "${TAG#v}" ]; then
+        log_error "Downloaded binary reports version $_reported_version, expected ${TAG#v}."
+        exit 1
     fi
-
-    if command -v dotool > /dev/null 2>&1; then
-        _dotool=$(command -v dotool)
-        log_warn "v4 built dotool at $_dotool. v5 drives /dev/uinput itself and never calls it."
-        case "$(prompt_yn "Remove dotool? (answer no if your own scripts use it)" "Y")" in
-            [Yy]*)
-                if [ -w "$(dirname "$_dotool")" ]; then
-                    rm -f "$_dotool"
-                else
-                    as_root rm -f "$_dotool"
-                fi
-                log_info "Removed $_dotool"
-                ;;
-            *) log_info "Kept $_dotool" ;;
-        esac
-    fi
+    install_binary_file "$_binary"
 }
 
 # Called when creating or replacing a config. An existing file is never edited to
@@ -276,7 +261,7 @@ ask_api_key() {
     # echoed by the line discipline in that window.
     _stty_saved=$(stty -g < /dev/tty 2> /dev/null) || _stty_saved=""
     if [ -n "$_stty_saved" ]; then
-        trap 'stty "$_stty_saved" < /dev/tty 2> /dev/null; rm -rf "$TMP_DIR"; exit 130' INT TERM
+        trap 'stty "$_stty_saved" < /dev/tty 2> /dev/null; exit 130' INT TERM
         stty -echo < /dev/tty 2> /dev/null || _stty_saved=""
     fi
 
@@ -285,7 +270,7 @@ ask_api_key() {
 
     if [ -n "$_stty_saved" ]; then
         stty "$_stty_saved" < /dev/tty 2> /dev/null || true
-        trap 'rm -rf "$TMP_DIR"' INT TERM
+        trap 'exit 130' INT TERM
         # Echo off swallowed the user's newline too, so this line both masks the
         # key and terminates the prompt. With no stty the terminal echoed the key
         # itself and there is nothing to mask.
@@ -303,6 +288,10 @@ write_config() {
     if [ -f "$CONFIG_FILE" ]; then
         case "$(prompt_yn "Skip creating the existing config at $(link_path "$CONFIG_FILE")?" "Y")" in
             [Yy]*)
+                chmod 600 "$CONFIG_FILE" || {
+                    log_error "Could not restrict $CONFIG_FILE to mode 600."
+                    exit 1
+                }
                 log_info "Keeping existing config at $(link_path "$CONFIG_FILE")"
                 return 0
                 ;;
@@ -312,12 +301,14 @@ write_config() {
 
     ask_api_key
     mkdir -p "$CONFIG_DIR"
-    # The key lands on disk, so create the file private from the first byte
-    # rather than chmod-ing after the write.
+    CONFIG_TMP=$(mktemp "$CONFIG_DIR/.voice-type.jsonc.XXXXXX")
+    # The key lands on disk, so write a private same-directory temporary file
+    # and atomically replace the config only after the complete write succeeds.
     (
         umask 077
-        printf '{\n    "api_key": "%s", // or set OPENROUTER_API_KEY, which wins\n' "$API_KEY" > "$CONFIG_FILE"
-        cat >> "$CONFIG_FILE" << 'EOF'
+        _json_key=$(printf '%s' "$API_KEY" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        printf '{\n    "api_key": "%s", // or set OPENROUTER_API_KEY, which wins\n' "$_json_key" > "$CONFIG_TMP"
+        cat >> "$CONFIG_TMP" << 'EOF'
     "port": 3232 // int 1024-65535
     // These two are the whole config. Everything else is a tuned default.
     //
@@ -327,7 +318,9 @@ write_config() {
 }
 EOF
     )
-    chmod 600 "$CONFIG_FILE"
+    chmod 600 "$CONFIG_TMP"
+    mv -f "$CONFIG_TMP" "$CONFIG_FILE"
+    CONFIG_TMP=""
     CONFIG_CREATED=1
     log_info "$_config_action $(link_path "$CONFIG_FILE")"
 }
@@ -357,9 +350,8 @@ main() {
     ARCH=$(detect_arch)
 
     TMP_DIR=$(mktemp -d)
-    trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
-
-    cleanup_junk
+    trap cleanup EXIT
+    trap 'exit 130' INT TERM
 
     if [ "$MODE" = "local" ]; then
         build_local
@@ -378,6 +370,10 @@ while [ $# -gt 0 ]; do
             VERSION_TAG="$2"; MODE="version"; shift 2
             ;;
         --local) MODE="local"; shift ;;
+        --prefix)
+            [ $# -ge 2 ] || { log_error "--prefix needs a directory"; exit 1; }
+            PREFIX="$2"; shift 2
+            ;;
         *) log_error "Unknown option: $1"; usage; exit 1 ;;
     esac
 done

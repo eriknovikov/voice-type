@@ -228,9 +228,12 @@ func TestWorthUploadingKeepsSpeech(t *testing.T) {
 	cases := map[string][]int16{
 		// The short ones are the reason there is no hard multi-second floor:
 		// "yes" and "no" are real dictation.
-		"one short word":  concat(silence(0.2, 200), speech(0.4, 6000)),
-		"quiet speaker":   concat(silence(0.3, 50), speech(0.6, 800)),
-		"normal sentence": concat(silence(0.5, 200), speech(1.2, 6000), silence(0.3, 200)),
+		"one short word":   concat(silence(0.2, 200), speech(0.4, 6000)),
+		"quiet speaker":    concat(silence(0.3, 50), speech(0.6, 800)),
+		"immediate word":   speech(0.6, 6000),
+		"no quiet lead-in": speech(0.6, 800),
+		"very quiet onset": speech(0.6, 200),
+		"normal sentence":  concat(silence(0.5, 200), speech(1.2, 6000), silence(0.3, 200)),
 	}
 
 	for name, in := range cases {
