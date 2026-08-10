@@ -177,10 +177,11 @@ original source afterwards.
 
 `VERSION` at the repo root is the only place the version number lives. The
 Makefile reads it into `-X main.version`, and `.github/workflows/release.yml`
-reads it to decide the tag: a push to `main` that changes `VERSION` and has no
-matching `vX.Y.Z` tag validates the tree, builds both architectures, pins the
-tag to that exact commit, and publishes. An unstamped `go build` reports `dev`
-on purpose — it must never claim a release number.
+reads it to decide the tag: a push to `main` that changes `VERSION` (or repairs
+the release workflow) and has no matching `vX.Y.Z` tag validates the tree,
+builds both architectures, pins the tag to that exact commit, and publishes. An
+unstamped `go build` reports `dev` on purpose — it must never claim a release
+number.
 
 Release assets are `voice-type-v5-linux-{x64,arm64}.tar.gz` plus
 `checksums.txt`. The `-v5-` marker is load-bearing: v4 binaries already in the
