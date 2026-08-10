@@ -15,10 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
 
@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       # sh -n takes one script per invocation; extra arguments become $1, $2...
       - name: sh -n
@@ -60,26 +60,3 @@ jobs:
 
       - name: shellcheck
         run: shellcheck -s sh install.sh uninstall.sh
-
-  # v4 is deprecated and no longer released; its suite runs for information only.
-  v4:
-    name: v4 (Bun, deprecated)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    defaults:
-      run:
-        working-directory: v4
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: "latest"
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Run tests
-        run: bun test tests

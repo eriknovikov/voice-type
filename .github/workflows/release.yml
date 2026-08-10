@@ -22,7 +22,7 @@ jobs:
       should_release: ${{ steps.check.outputs.should_release }}
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
 
@@ -66,10 +66,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
 
@@ -94,93 +94,59 @@ jobs:
           sh -n uninstall.sh
           shellcheck -s sh install.sh uninstall.sh
 
-  build:
+  release:
     needs: [check-version, validate]
     if: needs.check-version.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - arch: x64
-            goarch: amd64
-          - arch: arm64
-            goarch: arm64
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Setup Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: go.mod
-
-      # CGO off: both dependencies are pure Go, and the release binary must be
-      # static so it runs on any distro regardless of libc.
-      - name: Build binary
-        env:
-          CGO_ENABLED: "0"
-          GOOS: linux
-          GOARCH: ${{ matrix.goarch }}
-          VERSION: ${{ needs.check-version.outputs.version }}
-        run: |
-          mkdir -p build
-          go build -ldflags="-s -w -X main.version=${VERSION}" \
-            -o build/voice-type .
-          file build/voice-type
-          BUILD_INFO=$(go version -m build/voice-type)
-          printf '%s\n' "$BUILD_INFO"
-          printf '%s\n' "$BUILD_INFO" | grep -F "main.version=${VERSION}"
-          printf '%s\n' "$BUILD_INFO" | grep -F "GOARCH=${GOARCH}"
-          printf '%s\n' "$BUILD_INFO" | grep -F "CGO_ENABLED=0"
-          printf '%s\n' "$BUILD_INFO" | grep -F "vcs.revision=${GITHUB_SHA}"
-          printf '%s\n' "$BUILD_INFO" | grep -F "vcs.modified=false"
-          if [ "$GOARCH" = "amd64" ]; then
-            test "$(build/voice-type version)" = "$VERSION"
-          fi
-
-      # Asset names carry the v5 marker: v4 binaries in the wild self-update by
-      # looking for voice-type-linux-<arch>.tar.gz in the latest release, and
-      # must fail loudly rather than swap themselves for a Go binary.
-      - name: Create tarball
-        run: |
-          mkdir -p voice-type-${{ matrix.arch }}
-          cp build/voice-type voice-type-${{ matrix.arch }}/
-          tar -czf voice-type-v5-linux-${{ matrix.arch }}.tar.gz voice-type-${{ matrix.arch }}/
-          tar -tzf voice-type-v5-linux-${{ matrix.arch }}.tar.gz \
-            | grep -qx "voice-type-${{ matrix.arch }}/voice-type"
-
-      - name: Generate hash
-        run: sha256sum voice-type-v5-linux-${{ matrix.arch }}.tar.gz > voice-type-v5-linux-${{ matrix.arch }}.tar.gz.sha256
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: voice-type-${{ matrix.arch }}
-          path: |
-            voice-type-v5-linux-${{ matrix.arch }}.tar.gz
-            voice-type-v5-linux-${{ matrix.arch }}.tar.gz.sha256
-
-  release:
-    needs: [check-version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          path: artifacts
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Create checksums.txt
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+
+      # One job keeps the checked source, binaries, checksums, tag, and release
+      # on the same workflow SHA without transferring assets between runners.
+      - name: Build and verify release assets
+        env:
+          CGO_ENABLED: "0"
+          VERSION: ${{ needs.check-version.outputs.version }}
         run: |
-          for dir in artifacts/voice-type-*; do
-            (cd "$dir" && sha256sum -c ./*.sha256)
+          for SPEC in x64:amd64 arm64:arm64; do
+            ARCH=${SPEC%%:*}
+            GOARCH=${SPEC##*:}
+            DIR="voice-type-${ARCH}"
+            ARCHIVE="voice-type-v5-linux-${ARCH}.tar.gz"
+
+            mkdir -p "$DIR"
+            GOOS=linux GOARCH="$GOARCH" go build \
+              -ldflags="-s -w -X main.version=${VERSION}" \
+              -o "$DIR/voice-type" .
+            file "$DIR/voice-type"
+
+            BUILD_INFO=$(go version -m "$DIR/voice-type")
+            printf '%s\n' "$BUILD_INFO"
+            printf '%s\n' "$BUILD_INFO" | grep -F "main.version=${VERSION}"
+            printf '%s\n' "$BUILD_INFO" | grep -F "GOARCH=${GOARCH}"
+            printf '%s\n' "$BUILD_INFO" | grep -F "CGO_ENABLED=0"
+            printf '%s\n' "$BUILD_INFO" | grep -F "vcs.revision=${GITHUB_SHA}"
+            printf '%s\n' "$BUILD_INFO" | grep -F "vcs.modified=false"
+            if [ "$GOARCH" = "amd64" ]; then
+              test "$("$DIR/voice-type" version)" = "$VERSION"
+            fi
+
+            tar -czf "$ARCHIVE" "$DIR/"
+            tar -tzf "$ARCHIVE" | grep -qx "$DIR/voice-type"
           done
-          test "$(find artifacts -name 'voice-type-v5-linux-*.tar.gz' -type f | wc -l)" -eq 2
-          cd artifacts
+
           printf '# Checksums for voice-type binaries\n' > checksums.txt
-          find . -name "*.sha256" -exec cat {} >> checksums.txt \;
+          sha256sum voice-type-v5-linux-x64.tar.gz >> checksums.txt
+          sha256sum voice-type-v5-linux-arm64.tar.gz >> checksums.txt
+          sha256sum -c checksums.txt
           test "$(grep -c voice-type-v5-linux checksums.txt)" -eq 2
 
       - name: Ensure release tag targets this build
@@ -199,16 +165,37 @@ jobs:
               -f sha="$GITHUB_SHA"
           fi
 
-      - name: Create tag and GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          tag_name: v${{ needs.check-version.outputs.version }}
-          target_commitish: ${{ github.sha }}
-          files: |
-            artifacts/*/voice-type-v5-linux-x64.tar.gz
-            artifacts/*/voice-type-v5-linux-arm64.tar.gz
-            artifacts/checksums.txt
-          prerelease: ${{ contains(needs.check-version.outputs.version, '-') }}
-          generate_release_notes: true
+      - name: Publish verified assets
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check-version.outputs.version }}
+        run: |
+          TAG="v${VERSION}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            CREATE_FLAGS=(--verify-tag --generate-notes --title "$TAG" --draft)
+            if [[ "$VERSION" == *-* ]]; then
+              CREATE_FLAGS+=(--prerelease)
+            fi
+            gh release create "$TAG" "${CREATE_FLAGS[@]}"
+          fi
+
+          gh release upload "$TAG" \
+            voice-type-v5-linux-x64.tar.gz \
+            voice-type-v5-linux-arm64.tar.gz \
+            checksums.txt \
+            --clobber
+
+          ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          test "$(printf '%s\n' "$ASSETS" | wc -l)" -eq 3
+          for EXPECTED in \
+            voice-type-v5-linux-x64.tar.gz \
+            voice-type-v5-linux-arm64.tar.gz \
+            checksums.txt; do
+            printf '%s\n' "$ASSETS" | grep -qx "$EXPECTED"
+          done
+
+          if [[ "$VERSION" == *-* ]]; then
+            gh release edit "$TAG" --draft=false --prerelease
+          else
+            gh release edit "$TAG" --draft=false --prerelease=false --latest
+          fi
