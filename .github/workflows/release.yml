@@ -170,15 +170,17 @@ jobs:
             gh release create "$TAG" "${CREATE_FLAGS[@]}"
           fi
 
-          TAGGED_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" \
-            --jq '.object.sha')
-          test "$TAGGED_SHA" = "$GITHUB_SHA"
+          IS_DRAFT=$(gh release view "$TAG" --json isDraft --jq '.isDraft')
+          if [ "$IS_DRAFT" = true ]; then
+            TARGET=$(gh release view "$TAG" --json targetCommitish --jq '.targetCommitish')
+            test "$TARGET" = "$GITHUB_SHA"
 
-          gh release upload "$TAG" \
-            voice-type-v5-linux-x64.tar.gz \
-            voice-type-v5-linux-arm64.tar.gz \
-            checksums.txt \
-            --clobber
+            gh release upload "$TAG" \
+              voice-type-v5-linux-x64.tar.gz \
+              voice-type-v5-linux-arm64.tar.gz \
+              checksums.txt \
+              --clobber
+          fi
 
           ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name')
           test "$(printf '%s\n' "$ASSETS" | wc -l)" -eq 3
@@ -189,8 +191,14 @@ jobs:
             printf '%s\n' "$ASSETS" | grep -qx "$EXPECTED"
           done
 
-          if [[ "$VERSION" == *-* ]]; then
-            gh release edit "$TAG" --draft=false --prerelease
-          else
-            gh release edit "$TAG" --draft=false --prerelease=false --latest
+          if [ "$IS_DRAFT" = true ]; then
+            if [[ "$VERSION" == *-* ]]; then
+              gh release edit "$TAG" --draft=false --prerelease
+            else
+              gh release edit "$TAG" --draft=false --prerelease=false --latest
+            fi
           fi
+
+          TAGGED_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" \
+            --jq '.object.sha')
+          test "$TAGGED_SHA" = "$GITHUB_SHA"
