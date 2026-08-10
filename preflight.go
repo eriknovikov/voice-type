@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"net"
-	"os/exec"
 	"time"
 )
 
@@ -62,19 +61,9 @@ func runPreflight(cfg Config) (preflightResult, *resources, error) {
 				"to %s", configFilePath())
 	}
 
-	// 3. Clipboard tool present for this session type.
-	tool := detectClipboardTool()
-	if _, err := exec.LookPath(tool.CopyCmd[0]); err != nil {
-		pkg := "wl-clipboard"
-		if !tool.Wayland {
-			pkg = "xclip"
-		}
-		return preflightFailed, nil, fmt.Errorf("%s not found on PATH -- install %s", tool.CopyCmd[0], pkg)
-	}
-
-	// 4. /dev/uinput usable. Creating the keyboard is the real test -- opening
+	// 3. /dev/uinput usable. Creating the keyboard is the real test -- opening
 	//    the device can succeed where the ioctl setup still fails.
-	typer, err := newTyper(cfg)
+	typer, err := newTyper()
 	if err != nil {
 		return preflightFailed, nil, fmt.Errorf(
 			"cannot create the virtual keyboard: %w\n"+
@@ -83,7 +72,7 @@ func runPreflight(cfg Config) (preflightResult, *resources, error) {
 				"then log out and back in (or run: newgrp input)", err)
 	}
 
-	// 5. PulseAudio reachable.
+	// 4. PulseAudio reachable.
 	rec, err := newRecorder()
 	if err != nil {
 		typer.Close()

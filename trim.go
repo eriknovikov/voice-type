@@ -14,12 +14,12 @@ import (
 //     usually knocks a second or two off the bill. In absolute terms this is
 //     pennies per week -- it is not the reason this file exists.
 //
-// This is *not* the VAD auto-stop that PLAN_V5.md rules out. Session boundaries
-// stay exactly where the hotkey put them, and nothing inside the utterance is
-// touched -- pauses between words survive, because Parakeet infers punctuation
-// from prosody. That same reason is why trimPadSamples leaves a margin at each
-// end instead of cutting flush to the first and last loud frame: clipping the
-// trailing pause costs the terminal period.
+// This is *not* VAD auto-stop. Session boundaries stay exactly where the hotkey
+// put them, and nothing inside the utterance is touched -- pauses between words
+// survive, because Parakeet infers punctuation from prosody. That same reason
+// is why trimPadSamples leaves a margin at each end instead of cutting flush to
+// the first and last loud frame: clipping the trailing pause costs the terminal
+// period.
 const (
 	trimFrameSamples = 320  // 20 ms at 16 kHz
 	trimPadSamples   = 4000 // 250 ms kept outside the detected speech
@@ -28,6 +28,52 @@ const (
 	trimMinGate      = 80.0 // absolute RMS gate, for a digitally silent capture
 	trimFloorRank    = 2    // rank within a window taken as that end's floor
 )
+
+// Discard thresholds for a capture that never contained an utterance -- see
+// worthUploading.
+const (
+	minCaptureSeconds = 0.35 // shorter than any real word: a fumbled hotkey
+	speechGateSeconds = 2.0  // above this a capture is intentional, always upload
+)
+
+// worthUploading reports whether a capture is worth a round trip. It exists for
+// the fumbled hotkey: opened and closed in the same gesture, or opened and left
+// pointing at a quiet room. Such a capture costs a blocked /stop, and risks
+// typing whatever the model makes of room tone into the focused window.
+//
+// Two rules keep it from eating real dictation. Only short captures are judged
+// at all -- anything past speechGateSeconds was deliberate, and a long recording
+// wrongly dropped costs the user far more than an unnecessary upload. And the
+// gate errs toward uploading: a digitally silent frame pins the estimated floor
+// to zero and the gate falls back to trimMinGate, which speech clears by a wide
+// margin. Same asymmetry as trimSilence -- over-sending costs a fraction of a
+// cent, over-dropping costs the user their words.
+func worthUploading(samples []int16) bool {
+	if wavDurationSeconds(samples) < minCaptureSeconds {
+		return false
+	}
+	if wavDurationSeconds(samples) >= speechGateSeconds {
+		return true
+	}
+	return hasSpeech(samples)
+}
+
+// hasSpeech reports whether any frame clears the noise gate estimated over the
+// whole capture. Unlike trimSilence this needs no per-end estimate: it asks
+// whether the clip contains an utterance at all, not where one begins.
+func hasSpeech(samples []int16) bool {
+	frames := len(samples) / trimFrameSamples
+	if frames == 0 {
+		return false
+	}
+
+	rms := make([]float64, frames)
+	for i := range rms {
+		rms[i] = frameRMS(samples[i*trimFrameSamples : (i+1)*trimFrameSamples])
+	}
+
+	return slices.Max(rms) >= silenceGate(rms)
+}
 
 // trimSilence returns the span of samples between the first and last frame that
 // clears the noise gate, padded by trimPadSamples on each side. The result

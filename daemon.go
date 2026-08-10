@@ -14,7 +14,7 @@ import (
 //
 //	idle --/start--> recording --/stop--> transcribing --> idle
 //	                     |                      |
-//	                     +--- max_duration ------+
+//	                     +--- duration cap ------+
 type sessionState int
 
 const (
@@ -43,7 +43,7 @@ type daemon struct {
 
 	mu    sync.Mutex
 	state sessionState
-	// capTimer force-stops a session that hits max_duration.
+	// capTimer force-stops a session at the fixed duration cap.
 	capTimer *time.Timer
 
 	exitOnce sync.Once
@@ -53,7 +53,7 @@ func newDaemon(cfg Config, res *resources) *daemon {
 	return &daemon{
 		cfg:  cfg,
 		res:  res,
-		stt:  newSTTClient(configAPIKey(cfg), cfg.Model),
+		stt:  newSTTClient(configAPIKey(cfg), sttModel),
 		done: make(chan struct{}),
 	}
 }
@@ -84,11 +84,9 @@ func (d *daemon) startSession() (int, string) {
 		return http.StatusInternalServerError, err.Error()
 	}
 
-	// Hard duration cap: without silence detection, a forgotten hotkey would
-	// otherwise record (and bill) indefinitely.
 	d.mu.Lock()
-	d.capTimer = time.AfterFunc(time.Duration(d.cfg.MaxDuration)*time.Second, func() {
-		logf("AUDIO", "max_duration of %ds reached -- stopping", d.cfg.MaxDuration)
+	d.capTimer = time.AfterFunc(maxDurationSeconds*time.Second, func() {
+		logf("AUDIO", "duration cap of %ds reached -- stopping", maxDurationSeconds)
 		d.stopSession()
 	})
 	d.mu.Unlock()
@@ -128,9 +126,12 @@ func (d *daemon) stopSession() (int, string) {
 	}
 	logf("AUDIO", "captured %.2fs (%d samples)", captured, len(samples))
 
-	if d.cfg.TrimSilence {
-		samples = trimSilence(samples)
+	if !worthUploading(samples) {
+		logf("AUDIO", "no speech in %.2fs -- discarded", captured)
+		return http.StatusOK, "no speech detected"
 	}
+
+	samples = trimSilence(samples)
 	duration := wavDurationSeconds(samples)
 	if duration < captured {
 		logf("AUDIO", "trimmed %.2fs of silence -> %.2fs", captured-duration, duration)
@@ -147,16 +148,17 @@ func (d *daemon) stopSession() (int, string) {
 		duration, len(result.Text), time.Since(t0).Round(time.Millisecond), result.Seconds, result.Cost)
 
 	if result.Text == "" {
-		logf("STT", "empty transcript -- nothing to paste")
+		logf("STT", "empty transcript -- nothing to type")
 		return http.StatusOK, ""
 	}
 
-	if err := d.res.Typer.Paste(result.Text); err != nil {
-		logf("OUTPUT", "paste failed: %v", err)
-		return http.StatusInternalServerError, fmt.Sprintf("paste failed: %v", err)
+	outputStart := time.Now()
+	if err := d.res.Typer.Type(result.Text); err != nil {
+		logf("OUTPUT", "typing failed: %v", err)
+		return http.StatusInternalServerError, fmt.Sprintf("typing failed: %v", err)
 	}
 
-	logf("OUTPUT", "pasted: %s", truncate(result.Text, 120))
+	logf("OUTPUT", "typed in %v: %s", time.Since(outputStart).Round(time.Millisecond), truncate(result.Text, 120))
 	return http.StatusOK, result.Text
 }
 
@@ -170,8 +172,7 @@ func (d *daemon) handleSTTError(err error, wav []byte) (int, string) {
 			logf("STT", "authentication rejected (%d): %s", se.Status, se.Error())
 			logf("STT", "check OPENROUTER_API_KEY or the api_key field in %s", configFilePath())
 		case se.Status == http.StatusRequestEntityTooLarge:
-			logf("STT", "audio rejected as too large (%d). Lower max_duration (currently %ds) in %s",
-				se.Status, d.cfg.MaxDuration, configFilePath())
+			logf("STT", "audio rejected as too large (%d) -- dictate in shorter takes", se.Status)
 		case se.Retryable():
 			if path, werr := retainWAV(wav); werr == nil {
 				logf("STT", "transient failure (%d): %s -- audio retained at %s", se.Status, se.Error(), path)
@@ -258,7 +259,7 @@ func (d *daemon) Run() error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		logf("DAEMON", "listening on http://127.0.0.1:%d (model %s)", d.cfg.Port, d.cfg.Model)
+		logf("DAEMON", "listening on http://127.0.0.1:%d (model %s)", d.cfg.Port, sttModel)
 		if err := d.srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}

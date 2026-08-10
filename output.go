@@ -1,146 +1,168 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"strings"
-	"syscall"
+	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bendahl/uinput"
 )
 
-// keyChord is a set of modifiers held around a single key.
-type keyChord struct {
-	Modifiers []int
-	Key       int
+type keyStroke struct {
+	modifiers []int
+	key       int
 }
 
-var chordModifiers = map[string]int{
-	"ctrl":    uinput.KeyLeftctrl,
-	"control": uinput.KeyLeftctrl,
-	"shift":   uinput.KeyLeftshift,
-	"alt":     uinput.KeyLeftalt,
-	"super":   uinput.KeyLeftmeta,
-	"meta":    uinput.KeyLeftmeta,
-	"cmd":     uinput.KeyLeftmeta,
-}
+const (
+	typeKeyHold  = 8 * time.Millisecond
+	typeKeyDelay = 2 * time.Millisecond
+)
 
-var chordKeys = map[string]int{
-	"a": uinput.KeyA, "b": uinput.KeyB, "c": uinput.KeyC, "d": uinput.KeyD,
-	"e": uinput.KeyE, "f": uinput.KeyF, "g": uinput.KeyG, "h": uinput.KeyH,
-	"i": uinput.KeyI, "j": uinput.KeyJ, "k": uinput.KeyK, "l": uinput.KeyL,
-	"m": uinput.KeyM, "n": uinput.KeyN, "o": uinput.KeyO, "p": uinput.KeyP,
-	"q": uinput.KeyQ, "r": uinput.KeyR, "s": uinput.KeyS, "t": uinput.KeyT,
-	"u": uinput.KeyU, "v": uinput.KeyV, "w": uinput.KeyW, "x": uinput.KeyX,
-	"y": uinput.KeyY, "z": uinput.KeyZ,
-	"insert": uinput.KeyInsert,
-	"enter":  uinput.KeyEnter,
-	"space":  uinput.KeySpace,
-}
+// typeKeyMap is the fixed US layout used by direct typing. The map is built
+// from the physical keyboard rows so every shifted symbol shares its key with
+// the corresponding unshifted symbol.
+var typeKeyMap = buildTypeKeyMap()
 
-// parseKeyChord turns "ctrl+shift+v" into modifiers plus a final key.
-func parseKeyChord(s string) (keyChord, error) {
-	parts := strings.Split(strings.ToLower(strings.TrimSpace(s)), "+")
-	if len(parts) == 0 || parts[len(parts)-1] == "" {
-		return keyChord{}, fmt.Errorf("empty key chord %q", s)
+func buildTypeKeyMap() map[rune]keyStroke {
+	type keyRow struct {
+		unshifted string
+		shifted   string
+		keys      []int
 	}
 
-	var chord keyChord
-	for i, p := range parts {
-		p = strings.TrimSpace(p)
-		last := i == len(parts)-1
+	rows := []keyRow{
+		{
+			unshifted: "`1234567890-=",
+			shifted:   "~!@#$%^&*()_+",
+			keys: []int{
+				uinput.KeyGrave,
+				uinput.Key1, uinput.Key2, uinput.Key3, uinput.Key4, uinput.Key5,
+				uinput.Key6, uinput.Key7, uinput.Key8, uinput.Key9, uinput.Key0,
+				uinput.KeyMinus, uinput.KeyEqual,
+			},
+		},
+		{
+			unshifted: "qwertyuiop[]\\",
+			shifted:   "QWERTYUIOP{}|",
+			keys: []int{
+				uinput.KeyQ, uinput.KeyW, uinput.KeyE, uinput.KeyR, uinput.KeyT,
+				uinput.KeyY, uinput.KeyU, uinput.KeyI, uinput.KeyO, uinput.KeyP,
+				uinput.KeyLeftbrace, uinput.KeyRightbrace, uinput.KeyBackslash,
+			},
+		},
+		{
+			unshifted: "asdfghjkl;'",
+			shifted:   "ASDFGHJKL:\"",
+			keys: []int{
+				uinput.KeyA, uinput.KeyS, uinput.KeyD, uinput.KeyF, uinput.KeyG,
+				uinput.KeyH, uinput.KeyJ, uinput.KeyK, uinput.KeyL,
+				uinput.KeySemicolon, uinput.KeyApostrophe,
+			},
+		},
+		{
+			unshifted: "zxcvbnm,./",
+			shifted:   "ZXCVBNM<>?",
+			keys: []int{
+				uinput.KeyZ, uinput.KeyX, uinput.KeyC, uinput.KeyV, uinput.KeyB,
+				uinput.KeyN, uinput.KeyM, uinput.KeyComma, uinput.KeyDot, uinput.KeySlash,
+			},
+		},
+	}
 
-		if !last {
-			mod, ok := chordModifiers[p]
-			if !ok {
-				return keyChord{}, fmt.Errorf("unknown modifier %q in %q", p, s)
+	keyMap := make(map[rune]keyStroke, 95)
+	shift := []int{uinput.KeyLeftshift}
+	for _, row := range rows {
+		unshifted := []rune(row.unshifted)
+		shifted := []rune(row.shifted)
+		if len(unshifted) != len(shifted) || len(unshifted) != len(row.keys) {
+			panic("invalid static US keyboard row")
+		}
+		for i, key := range row.keys {
+			keyMap[unshifted[i]] = keyStroke{key: key}
+			keyMap[shifted[i]] = keyStroke{modifiers: shift, key: key}
+		}
+	}
+	keyMap[' '] = keyStroke{key: uinput.KeySpace}
+
+	if len(keyMap) != 95 {
+		panic("incomplete static US keyboard map")
+	}
+	return keyMap
+}
+
+func typeCompile(text string) ([]keyStroke, error) {
+	if text == "" {
+		return nil, nil
+	}
+	if !utf8.ValidString(text) {
+		return nil, fmt.Errorf("invalid UTF-8 input")
+	}
+
+	runes := []rune(text)
+	strokes := make([]keyStroke, 0, len(runes))
+	logicalPosition := 0
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		logicalPosition++
+
+		if r == '\r' {
+			if i+1 < len(runes) && runes[i+1] == '\n' {
+				i++
 			}
-			chord.Modifiers = append(chord.Modifiers, mod)
+			strokes = append(strokes, keyStroke{key: uinput.KeyEnter})
+			continue
+		}
+		if r == '\n' {
+			strokes = append(strokes, keyStroke{key: uinput.KeyEnter})
 			continue
 		}
 
-		key, ok := chordKeys[p]
-		if !ok {
-			return keyChord{}, fmt.Errorf("unknown key %q in %q", p, s)
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return nil, fmt.Errorf("unsupported control code point %U at rune position %d", r, logicalPosition)
 		}
-		chord.Key = key
+
+		if r <= 0x7e {
+			stroke, ok := typeKeyMap[r]
+			if !ok {
+				panic(fmt.Sprintf("missing US keyboard mapping for %U", r))
+			}
+			strokes = append(strokes, stroke)
+			continue
+		}
+
+		strokes = append(strokes, keyStroke{
+			modifiers: []int{uinput.KeyLeftctrl, uinput.KeyLeftshift},
+			key:       uinput.KeyU,
+		})
+		for _, digit := range strconv.FormatInt(int64(r), 16) {
+			stroke, ok := typeKeyMap[digit]
+			if !ok {
+				panic(fmt.Sprintf("missing hexadecimal US keyboard mapping for %q", digit))
+			}
+			strokes = append(strokes, stroke)
+		}
+		strokes = append(strokes, keyStroke{key: uinput.KeyEnter})
 	}
 
-	return chord, nil
+	return strokes, nil
 }
 
-// clipboardTool describes how to read and write the selection for the current
-// session type.
-type clipboardTool struct {
-	Name     string
-	CopyCmd  []string // extended with --sensitive when supported
-	PasteCmd []string
-	Wayland  bool
-}
-
-var waylandClipboard = clipboardTool{
-	Name:     "wl-copy",
-	CopyCmd:  []string{"wl-copy"},
-	PasteCmd: []string{"wl-paste", "--no-newline"},
-	Wayland:  true,
-}
-
-var x11Clipboard = clipboardTool{
-	Name:     "xclip",
-	CopyCmd:  []string{"xclip", "-selection", "clipboard"},
-	PasteCmd: []string{"xclip", "-selection", "clipboard", "-o"},
-	Wayland:  false,
-}
-
-// detectClipboardTool prefers Wayland when the session advertises it.
-func detectClipboardTool() clipboardTool {
-	if os.Getenv("WAYLAND_DISPLAY") != "" || strings.EqualFold(os.Getenv("XDG_SESSION_TYPE"), "wayland") {
-		return waylandClipboard
-	}
-	return x11Clipboard
-}
-
-// clipboardCopyArgs builds the copy command. --sensitive asks clipboard managers
-// that implement CLIPBOARD_STATE to keep the transcript out of history; it is
-// Wayland-only. --paste-once is deliberately never used: it breaks pasting into
-// XWayland windows (Electron, JetBrains, Steam).
-func clipboardCopyArgs(tool clipboardTool, sensitive bool) []string {
-	args := append([]string(nil), tool.CopyCmd...)
-	if sensitive && tool.Wayland {
-		args = append(args, "--sensitive")
-	}
-	return args
-}
-
-// Typer holds the virtual keyboard, created once at daemon start (~201 ms) and
-// reused for every dictation.
+// Typer owns the virtual keyboard created during preflight and reuses it for
+// every dictation. Timing is deliberately fixed rather than configurable.
 type Typer struct {
-	kb    uinput.Keyboard
-	tool  clipboardTool
-	chord keyChord
-	delay time.Duration
+	kb       uinput.Keyboard
+	keyHold  time.Duration
+	keyDelay time.Duration
 }
 
-func newTyper(cfg Config) (*Typer, error) {
-	chord, err := parseKeyChord(cfg.PasteKey)
-	if err != nil {
-		return nil, err
-	}
-
+func newTyper() (*Typer, error) {
 	kb, err := uinput.CreateKeyboard("/dev/uinput", []byte("voice-type-vkbd"))
 	if err != nil {
 		return nil, fmt.Errorf("create virtual keyboard: %w", err)
 	}
 
-	return &Typer{
-		kb:    kb,
-		tool:  detectClipboardTool(),
-		chord: chord,
-		delay: time.Duration(cfg.PasteDelayMs) * time.Millisecond,
-	}, nil
+	return &Typer{kb: kb, keyHold: typeKeyHold, keyDelay: typeKeyDelay}, nil
 }
 
 func (t *Typer) Close() {
@@ -149,117 +171,97 @@ func (t *Typer) Close() {
 	}
 }
 
-// clipboardTimeout bounds every clipboard subprocess. The Wayland clipboard is
-// client-owned, so wl-paste blocks indefinitely if the owning process is mid
-// handoff or wedged -- without this, a single bad handoff would freeze /stop
-// forever. Observed in testing.
-const clipboardTimeout = 3 * time.Second
-
-func (t *Typer) clipboardRead() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), clipboardTimeout)
-	defer cancel()
-
-	out, err := exec.CommandContext(ctx, t.tool.PasteCmd[0], t.tool.PasteCmd[1:]...).Output()
-	if ctx.Err() != nil {
-		return "", fmt.Errorf("%s timed out after %v", t.tool.PasteCmd[0], clipboardTimeout)
+func (t *Typer) sendStroke(stroke keyStroke) error {
+	type modifierState struct {
+		key          int
+		attempted    bool
+		needsRelease bool
 	}
+
+	modifiers := make([]modifierState, len(stroke.modifiers))
+	var firstErr error
+	recordErr := func(operation string, key int, err error) {
+		if err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("%s key %d: %w", operation, key, err)
+		}
+	}
+
+	for i, key := range stroke.modifiers {
+		modifiers[i] = modifierState{key: key, attempted: true, needsRelease: true}
+		if err := t.kb.KeyDown(key); err != nil {
+			recordErr("key down", key, err)
+			break
+		}
+	}
+
+	primaryAttempted := false
+	primaryNeedsRelease := false
+	if firstErr == nil {
+		primaryAttempted = true
+		primaryNeedsRelease = true
+		if err := t.kb.KeyDown(stroke.key); err != nil {
+			recordErr("key down", stroke.key, err)
+		} else {
+			time.Sleep(t.keyHold)
+		}
+	}
+
+	releasePrimary := func() {
+		if !primaryAttempted || !primaryNeedsRelease {
+			return
+		}
+		if err := t.kb.KeyUp(stroke.key); err != nil {
+			recordErr("key up", stroke.key, err)
+		} else {
+			primaryNeedsRelease = false
+		}
+	}
+	releaseModifier := func(mod *modifierState) {
+		if !mod.attempted || !mod.needsRelease {
+			return
+		}
+		if err := t.kb.KeyUp(mod.key); err != nil {
+			recordErr("key up", mod.key, err)
+		} else {
+			mod.needsRelease = false
+		}
+	}
+
+	if firstErr != nil {
+		releasePrimary()
+	}
+	// Release modifiers before the chord key. This matches dotool's proven
+	// sequence and lets terminal input methods finish Ctrl+Shift+U cleanly.
+	for i := range modifiers {
+		releaseModifier(&modifiers[i])
+	}
+	releasePrimary()
+
+	// A failed release can leave a key held. Retry only keys still marked as
+	// needing release; never retry the whole stroke or any already released key.
+	if firstErr != nil {
+		releasePrimary()
+		for i := range modifiers {
+			releaseModifier(&modifiers[i])
+		}
+	}
+
+	return firstErr
+}
+
+func (t *Typer) Type(text string) error {
+	strokes, err := typeCompile(text)
 	if err != nil {
-		// An empty clipboard makes wl-paste exit non-zero; that is not an error
-		// worth failing the paste over.
-		return "", err
-	}
-	return string(out), nil
-}
-
-// clipboardWrite sets the selection. On Wayland wl-copy forks a process that
-// must stay alive to serve the selection, so this waits only for the parent.
-func (t *Typer) clipboardWrite(s string, sensitive bool) error {
-	ctx, cancel := context.WithTimeout(context.Background(), clipboardTimeout)
-	defer cancel()
-
-	// wl-copy refuses empty input, so clearing needs its own flag. This is the
-	// restore path when the clipboard started out empty.
-	if s == "" && t.tool.Wayland {
-		return exec.CommandContext(ctx, "wl-copy", "--clear").Run()
-	}
-
-	args := clipboardCopyArgs(t.tool, sensitive)
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-	cmd.Stdin = strings.NewReader(s)
-	cmd.Stderr = os.Stderr
-
-	// wl-copy forks a process that must stay alive to serve the selection.
-	// Cancel must not kill that survivor, so only the parent is waited on and
-	// the context is used purely as a deadline on the parent's own exit.
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return fmt.Errorf("%s timed out after %v", args[0], clipboardTimeout)
-		}
-		return err
-	}
-	return nil
-}
-
-// sendChord presses the configured paste keystroke.
-func (t *Typer) sendChord() error {
-	for _, m := range t.chord.Modifiers {
-		if err := t.kb.KeyDown(m); err != nil {
-			return fmt.Errorf("key down: %w", err)
-		}
-	}
-	err := t.kb.KeyPress(t.chord.Key)
-	// Release modifiers even if the key press failed, so the desktop is never
-	// left with a stuck Ctrl.
-	for i := len(t.chord.Modifiers) - 1; i >= 0; i-- {
-		if uerr := t.kb.KeyUp(t.chord.Modifiers[i]); uerr != nil && err == nil {
-			err = fmt.Errorf("key up: %w", uerr)
-		}
-	}
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// Paste puts text on the clipboard, sends the paste keystroke, then restores
-// whatever was on the clipboard before.
-func (t *Typer) Paste(text string) error {
-	if text == "" {
-		return nil
-	}
-
-	original, readErr := t.clipboardRead()
-	if readErr != nil {
-		logf("OUTPUT", "could not read existing clipboard (treating as empty): %v", readErr)
-	}
-
-	if err := t.clipboardWrite(text, true); err != nil {
-		return fmt.Errorf("set clipboard: %w", err)
-	}
-
-	// Give the clipboard owner a moment to be ready to serve the selection
-	// before the target app asks for it.
-	time.Sleep(50 * time.Millisecond)
-
-	if err := t.sendChord(); err != nil {
 		return err
 	}
 
-	// The receiving app fetches clipboard data asynchronously after the
-	// keystroke; restoring too early hands it the old contents.
-	time.Sleep(t.delay)
-
-	if readErr == nil {
-		if err := t.clipboardWrite(original, false); err != nil {
-			logf("OUTPUT", "clipboard restore failed, retrying: %v", err)
-			if err := t.clipboardWrite(original, false); err != nil {
-				// Worst case the transcript stays on the clipboard.
-				logf("OUTPUT", "clipboard restore failed again: %v", err)
-			}
+	for i, stroke := range strokes {
+		if err := t.sendStroke(stroke); err != nil {
+			return fmt.Errorf("partial output at stroke %d: %w", i, err)
+		}
+		if i+1 < len(strokes) {
+			time.Sleep(t.keyDelay)
 		}
 	}
-
 	return nil
 }

@@ -38,7 +38,7 @@ func TestLiveTranscribe(t *testing.T) {
 
 	model := os.Getenv("VOICE_TYPE_MODEL")
 	if model == "" {
-		model = defaultModel
+		model = sttModel
 	}
 
 	for _, mode := range []struct {

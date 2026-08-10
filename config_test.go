@@ -48,14 +48,14 @@ func TestStripTrailingCommas(t *testing.T) {
 func TestStrippersCompose(t *testing.T) {
 	in := `{
     "port": 3232, // the port
-    "model": "x" // the model
+    "api_key": "sk-or-x" // the key
 }`
 	cfg, err := configParse([]byte(in))
 	if err != nil {
 		t.Fatalf("configParse: %v", err)
 	}
-	if cfg.Port != 3232 || cfg.Model != "x" {
-		t.Errorf("got port=%d model=%q", cfg.Port, cfg.Model)
+	if cfg.Port != 3232 || cfg.APIKey != "sk-or-x" {
+		t.Errorf("got port=%d api_key=%q", cfg.Port, cfg.APIKey)
 	}
 }
 
@@ -90,8 +90,26 @@ func TestConfigToleratesV4Fields(t *testing.T) {
 	if cfg.Port != 3232 {
 		t.Errorf("port = %d, want 3232", cfg.Port)
 	}
-	if cfg.Model != defaultModel {
-		t.Errorf("model = %q, want default", cfg.Model)
+}
+
+// Configs written by earlier v5 installers set knobs that are constants now.
+// They must load exactly like a v4 config: no error, no warning path, ignored.
+func TestConfigToleratesRetiredV5Fields(t *testing.T) {
+	old := `{
+    "api_key": "sk-or-x",
+    "port": 4000,
+    "model": "some/other-model",
+    "max_duration": 60,
+    "paste_key": "ctrl+shift+v",
+    "paste_delay_ms": 900,
+    "trim_silence": false
+}`
+	cfg, err := configParse([]byte(old))
+	if err != nil {
+		t.Fatalf("retired fields must parse, got %v", err)
+	}
+	if cfg.Port != 4000 || cfg.APIKey != "sk-or-x" {
+		t.Errorf("got %+v, want port=4000 api_key=sk-or-x", cfg)
 	}
 }
 
@@ -106,7 +124,7 @@ func TestConfigIgnoresUnknownFields(t *testing.T) {
 }
 
 func TestConfigRejectsBadValues(t *testing.T) {
-	cfg, err := configParse([]byte(`{"port": 80, "max_duration": -5, "paste_key": "ctrl+nope", "model": ""}`))
+	cfg, err := configParse([]byte(`{"port": 80, "api_key": 42}`))
 	if err != nil {
 		t.Fatalf("configParse: %v", err)
 	}
@@ -114,36 +132,18 @@ func TestConfigRejectsBadValues(t *testing.T) {
 	if cfg.Port != def.Port {
 		t.Errorf("out-of-range port should fall back to %d, got %d", def.Port, cfg.Port)
 	}
-	if cfg.MaxDuration != def.MaxDuration {
-		t.Errorf("negative max_duration should fall back to %d, got %d", def.MaxDuration, cfg.MaxDuration)
-	}
-	if cfg.PasteKey != def.PasteKey {
-		t.Errorf("unparseable paste_key should fall back to %q, got %q", def.PasteKey, cfg.PasteKey)
-	}
-	if cfg.Model != def.Model {
-		t.Errorf("empty model should fall back to %q, got %q", def.Model, cfg.Model)
+	if cfg.APIKey != def.APIKey {
+		t.Errorf("non-string api_key should fall back to %q, got %q", def.APIKey, cfg.APIKey)
 	}
 }
 
-func TestConfigTrimSilence(t *testing.T) {
-	if !configDefaults().TrimSilence {
-		t.Error("trim_silence should default to on")
+// The constants that replace user-facing knobs still have to be usable values.
+func TestTunedConstantsAreValid(t *testing.T) {
+	if maxDurationSeconds <= 0 {
+		t.Errorf("maxDurationSeconds = %d, want positive", maxDurationSeconds)
 	}
-
-	cfg, err := configParse([]byte(`{"trim_silence": false}`))
-	if err != nil {
-		t.Fatalf("configParse: %v", err)
-	}
-	if cfg.TrimSilence {
-		t.Error("trim_silence: false should disable trimming")
-	}
-
-	cfg, err = configParse([]byte(`{"trim_silence": "yes"}`))
-	if err != nil {
-		t.Fatalf("configParse: %v", err)
-	}
-	if !cfg.TrimSilence {
-		t.Error("a non-boolean trim_silence should fall back to the default")
+	if sttModel == "" {
+		t.Error("sttModel is empty")
 	}
 }
 

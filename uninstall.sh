@@ -4,8 +4,8 @@
 #   curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/uninstall.sh | sh
 #
 # Removes the binary, the config, and any retained audio. Deliberately leaves
-# your 'input' group membership and the clipboard package alone -- both are
-# system-wide and other software may rely on them.
+# your 'input' group membership alone because it is system-wide and other
+# software may rely on it.
 #
 # For v4 (Chrome-based, deprecated), use v4/uninstall.sh: it also handles dotool
 # and the notification sound packages.
@@ -133,7 +133,7 @@ main() {
     remove_config
     remove_retained_audio
     printf '\n' >&2
-    log_info "Done. Your 'input' group membership and clipboard package were left in place."
+    log_info "Done. Your 'input' group membership was left in place."
 }
 
 while [ $# -gt 0 ]; do

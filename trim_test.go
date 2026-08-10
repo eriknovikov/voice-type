@@ -208,3 +208,51 @@ func TestFrameRMS(t *testing.T) {
 		t.Errorf("square rms = %v, want 100", got)
 	}
 }
+
+func TestWorthUploadingRejectsFumbledHotkey(t *testing.T) {
+	cases := map[string][]int16{
+		"instant toggle":  silence(0.2, 300),
+		"brief room tone": silence(1, 300),
+		"digital silence": silence(1.5, 0),
+		"loud room tone":  silence(1.5, 4000),
+	}
+
+	for name, in := range cases {
+		if worthUploading(in) {
+			t.Errorf("%s: uploaded, want discarded", name)
+		}
+	}
+}
+
+func TestWorthUploadingKeepsSpeech(t *testing.T) {
+	cases := map[string][]int16{
+		// The short ones are the reason there is no hard multi-second floor:
+		// "yes" and "no" are real dictation.
+		"one short word":  concat(silence(0.2, 200), speech(0.4, 6000)),
+		"quiet speaker":   concat(silence(0.3, 50), speech(0.6, 800)),
+		"normal sentence": concat(silence(0.5, 200), speech(1.2, 6000), silence(0.3, 200)),
+	}
+
+	for name, in := range cases {
+		if !worthUploading(in) {
+			t.Errorf("%s: discarded, want uploaded", name)
+		}
+	}
+}
+
+func TestWorthUploadingNeverJudgesLongCaptures(t *testing.T) {
+	// Past the ceiling the capture was deliberate. Even if the gate reads it as
+	// silence, dropping it would cost the user their words.
+	if !worthUploading(silence(speechGateSeconds+0.5, 0)) {
+		t.Error("long silent capture discarded, want uploaded unjudged")
+	}
+}
+
+func TestHasSpeechEmptyInput(t *testing.T) {
+	if hasSpeech(nil) {
+		t.Error("nil reported as speech")
+	}
+	if hasSpeech(make([]int16, trimFrameSamples-1)) {
+		t.Error("sub-frame capture reported as speech")
+	}
+}

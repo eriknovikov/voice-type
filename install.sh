@@ -2,9 +2,8 @@
 # voice-type v5 installer.
 #
 # Fetches the static Go binary for this architecture from GitHub Releases,
-# verifies its checksum, installs it, and writes a config. Distro-agnostic by
-# construction: the binary is static with no libc dependency, so the only
-# package work is the clipboard tool.
+# verifies its checksum, installs it, and writes a config. It only removes
+# leftovers from the deprecated v4 install; runtime setup belongs elsewhere.
 #
 #   curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/install.sh | sh
 #
@@ -19,8 +18,6 @@ PORT=3232
 MODE="prod"          # prod | version | local
 VERSION_TAG=""
 PREFIX="/usr/local"
-SKIP_SYSTEM=0
-NEEDS_RELOGIN=0
 API_KEY=""
 CONFIG_CREATED=0
 
@@ -46,13 +43,10 @@ link_path() {
 
 usage() {
     cat >&2 << EOF
-Usage: install.sh [options]
+Usage: install.sh [--version vX.Y.Z | --local]
 
-  --version vX.Y.Z   install a specific release instead of the latest
+  --version vX.Y.Z   install a specific v5 release
   --local            build from the working tree with the Go toolchain
-  --prefix DIR       install under DIR/bin (default: /usr/local)
-  --skip-system      skip uinput / clipboard / audio setup, and v4 cleanup
-  -h, --help         show this message
 EOF
 }
 
@@ -114,111 +108,6 @@ detect_arch() {
     esac
 }
 
-detect_pkg_manager() {
-    if command -v dnf > /dev/null 2>&1; then echo "dnf"
-    elif command -v apt-get > /dev/null 2>&1; then echo "apt"
-    elif command -v pacman > /dev/null 2>&1; then echo "pacman"
-    elif command -v zypper > /dev/null 2>&1; then echo "zypper"
-    elif command -v apk > /dev/null 2>&1; then echo "apk"
-    elif command -v xbps-install > /dev/null 2>&1; then echo "xbps"
-    elif command -v nix-env > /dev/null 2>&1; then echo "nix"
-    else echo "none"; fi
-}
-
-install_pkg() {
-    _pkg="$1"
-    case "$(detect_pkg_manager)" in
-        dnf) as_root dnf install -y "$_pkg" ;;
-        apt) as_root apt-get install -y "$_pkg" ;;
-        pacman) as_root pacman -S --noconfirm "$_pkg" ;;
-        zypper) as_root zypper install -y "$_pkg" ;;
-        apk) as_root apk add "$_pkg" ;;
-        xbps) as_root xbps-install -y "$_pkg" ;;
-        nix) nix-env -iA "nixpkgs.$_pkg" ;;
-        *)
-            log_warn "Unknown package manager -- install '$_pkg' manually."
-            return 1
-            ;;
-    esac
-}
-
-user_in_input_group() {
-    id -nG 2> /dev/null | tr ' ' '\n' | grep -qx input
-}
-
-# v5 sends the paste keystroke itself through /dev/uinput, which is owned by the
-# 'input' group. This is a hard requirement -- there is no fallback input path.
-setup_uinput() {
-    _changed=0
-
-    if [ ! -e /dev/uinput ]; then
-        log_warn "/dev/uinput does not exist. Loading the uinput module..."
-        as_root modprobe uinput || log_warn "Could not load the uinput module."
-        echo uinput | as_root tee /etc/modules-load.d/uinput.conf > /dev/null 2>&1 || true
-        _changed=1
-    fi
-
-    if ! user_in_input_group; then
-        log_warn "Adding $USER to the 'input' group."
-        as_root usermod -aG input "$USER"
-        NEEDS_RELOGIN=1
-        _changed=1
-    fi
-
-    # Only reload udev when something actually changed. Otherwise a reinstall on
-    # an already-configured machine asks for a sudo password to do nothing.
-    if [ "$_changed" = "1" ]; then
-        as_root udevadm control --reload || true
-        as_root udevadm trigger || true
-    fi
-}
-
-# Wayland needs wl-clipboard, X11 needs xclip. v5 picks at runtime from the
-# session type, so install whichever matches this one.
-setup_clipboard() {
-    if [ -n "${WAYLAND_DISPLAY:-}" ] || [ "${XDG_SESSION_TYPE:-}" = "wayland" ]; then
-        _clip_cmd="wl-copy"; _clip_pkg="wl-clipboard"
-    else
-        _clip_cmd="xclip"; _clip_pkg="xclip"
-    fi
-
-    command -v "$_clip_cmd" > /dev/null 2>&1 && return 0
-
-    log_warn "'$_clip_cmd' not found -- voice-type cannot paste without it."
-    case "$(prompt_yn "Install $_clip_pkg?" "Y")" in
-        [Yy]*) install_pkg "$_clip_pkg" || log_warn "Install '$_clip_pkg' manually before first use." ;;
-        *) log_warn "Skipped. Install '$_clip_pkg' manually before first use." ;;
-    esac
-}
-
-check_audio() {
-    if ! command -v pactl > /dev/null 2>&1 || ! pactl info > /dev/null 2>&1; then
-        log_warn "Could not reach PulseAudio/pipewire-pulse. voice-type needs one of them for capture."
-    fi
-}
-
-# v4 and v5 share port 3232 and are mutually exclusive. A daemon still holding
-# the port would make the freshly installed hotkey silently no-op.
-stop_running_daemon() {
-    command -v curl > /dev/null 2>&1 || return 0
-    _health=$(curl -s -m 1 "http://localhost:$PORT/health" 2>/dev/null) || return 0
-    [ -n "$_health" ] || return 0
-
-    # Only v5 reports a session state; v4's /health does not.
-    case "$_health" in
-        *'"state"'*) log_warn "A voice-type v5 daemon is running on port $PORT." ;;
-        *) log_warn "Something is already listening on port $PORT -- probably voice-type v4." ;;
-    esac
-
-    case "$(prompt_yn "Stop it now?" "Y")" in
-        [Yy]*)
-            curl -s -m 2 "http://localhost:$PORT/exit" > /dev/null 2>&1 || true
-            log_info "Sent /exit to the running daemon."
-            ;;
-        *) log_warn "Leave it running and v5 will not be able to bind port $PORT." ;;
-    esac
-}
-
 get_latest_tag() {
     curl -sSfL "https://api.github.com/repos/${REPO}/releases/latest" \
         | grep '"tag_name":' \
@@ -226,10 +115,8 @@ get_latest_tag() {
         | head -n 1
 }
 
-# v4 and v5 releases live in the same repo. Installing a v4 tag with this script
-# would drop a Bun/Chrome binary onto a v5 config, so refuse it by name -- but
-# say something useful about *why*, which differs between an explicitly pinned v4
-# tag and a repo where v5 simply has not been published yet.
+# v4 and v5 releases live in the same repo. Installing a v4 release with this
+# script would drop a Bun/Chrome binary onto a v5 config, so refuse it by name.
 guard_major_version() {
     _tag="$1"
     _major=$(echo "${_tag#v}" | cut -d. -f1)
@@ -251,8 +138,7 @@ guard_major_version() {
     if [ -f go.mod ] && [ -f main.go ]; then
         log_error "You are in a source tree; build and install it with:  ./install.sh --local"
     else
-        log_error "Pin one once it ships with --version v5.0.0, or install the"
-        log_error "deprecated v4: curl -sSL https://raw.githubusercontent.com/${REPO}/main/v4/install.sh | sh"
+        log_error "This installer only installs v5; retry after its first release is published."
     fi
     exit 1
 }
@@ -339,10 +225,10 @@ download_release() {
     install_binary_file "$TMP_DIR/${BINARY_NAME}-${ARCH}/${BINARY_NAME}"
 }
 
-# Leftovers v5 has no use for. Always prompted, never automatic: dotool is a
-# general-purpose tool the user may drive from their own scripts, and the log
-# directory may hold output they still want.
-cleanup_v4() {
+# Remove leftovers from the deprecated v4 install. dotool may be used by other
+# software, and the old log directory may contain useful output, so both are
+# offered rather than removed silently.
+cleanup_junk() {
     _log_dir="${XDG_DATA_HOME:-$HOME/.local/share}/voice-type"
     if [ -d "$_log_dir" ]; then
         log_warn "v4 left logs in $_log_dir. v5 logs to stderr only and never writes there."
@@ -372,17 +258,7 @@ cleanup_v4() {
     fi
 }
 
-# The one case worth interrupting for: another copy earlier in PATH means the
-# binary just written is not the one that runs.
-check_shadowing() {
-    _target="$PREFIX/bin/$BINARY_NAME"
-    _resolved=$(command -v "$BINARY_NAME" 2> /dev/null || true)
-    if [ -n "$_resolved" ] && [ "$_resolved" != "$_target" ]; then
-        log_warn "'$BINARY_NAME' runs from $_resolved, not the copy just installed at $_target."
-    fi
-}
-
-# Only called when writing a fresh config -- an existing file is never edited to
+# Called when creating or replacing a config. An existing file is never edited to
 # add a key.
 #
 # The key is a credential, so it is read with terminal echo off and echoed back
@@ -396,7 +272,7 @@ ask_api_key() {
     has_tty || return 0
 
     # Echo goes off *before* the prompt is printed. Anything arriving between the
-    # two -- a paste, a fast typist, an automated answer -- would otherwise be
+    # two -- unexpected input, a fast typist, an automated answer -- would otherwise be
     # echoed by the line discipline in that window.
     _stty_saved=$(stty -g < /dev/tty 2> /dev/null) || _stty_saved=""
     if [ -n "$_stty_saved" ]; then
@@ -417,16 +293,21 @@ ask_api_key() {
     fi
 }
 
-# Writes a config only when there is none. An existing file is never rewritten,
-# moved, or backed up: it is the user's file, v5 tolerates every v4 field in it,
-# and silently overwriting configs is the bug that started all of this.
+# Writes a config, offering to skip when one already exists. The safe default is
+# to keep it; declining the prompt explicitly replaces it without a backup.
 write_config() {
     CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
     CONFIG_FILE="$CONFIG_DIR/voice-type.jsonc"
+    _config_action="Wrote"
 
     if [ -f "$CONFIG_FILE" ]; then
-        log_info "Keeping existing config at $(link_path "$CONFIG_FILE")"
-        return 0
+        case "$(prompt_yn "Skip creating the existing config at $(link_path "$CONFIG_FILE")?" "Y")" in
+            [Yy]*)
+                log_info "Keeping existing config at $(link_path "$CONFIG_FILE")"
+                return 0
+                ;;
+            *) _config_action="Replaced" ;;
+        esac
     fi
 
     ask_api_key
@@ -437,12 +318,9 @@ write_config() {
         umask 077
         printf '{\n    "api_key": "%s", // or set OPENROUTER_API_KEY, which wins\n' "$API_KEY" > "$CONFIG_FILE"
         cat >> "$CONFIG_FILE" << 'EOF'
-    "port": 3232, // int 1024-65535
-    "model": "nvidia/parakeet-tdt-0.6b-v3", // any OpenRouter STT slug
-    "max_duration": 600, // int seconds, hard cap on one dictation
-    "paste_key": "ctrl+v", // terminals usually need "ctrl+shift+v"
-    "paste_delay_ms": 300, // wait before restoring the previous clipboard
-    "trim_silence": true // cut leading/trailing silence before upload
+    "port": 3232 // int 1024-65535
+    // These two are the whole config. Everything else is a tuned default.
+    //
     // Keyboard shortcuts, set in your desktop environment:
     //   Dictate:            curl -s http://localhost:3232/toggle
     //   Start/stop daemon:  sh -c "curl -s http://localhost:3232/exit || voice-type"
@@ -451,7 +329,7 @@ EOF
     )
     chmod 600 "$CONFIG_FILE"
     CONFIG_CREATED=1
-    log_info "Wrote $(link_path "$CONFIG_FILE")"
+    log_info "$_config_action $(link_path "$CONFIG_FILE")"
 }
 
 # Read from the file rather than from what this run happened to type: on a
@@ -473,9 +351,6 @@ print_summary() {
     if [ -z "${OPENROUTER_API_KEY:-}" ] && ! config_has_key; then
         log_warn "No API key yet. Set OPENROUTER_API_KEY, or add \"api_key\" to $(link_path "$CONFIG_FILE")"
     fi
-    if [ "$NEEDS_RELOGIN" = "1" ]; then
-        log_warn "Log out and back in (or run: newgrp input) before first use."
-    fi
 }
 
 main() {
@@ -484,25 +359,13 @@ main() {
     TMP_DIR=$(mktemp -d)
     trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 
-    if [ "$SKIP_SYSTEM" = "0" ]; then
-        setup_uinput
-        setup_clipboard
-        check_audio
-        stop_running_daemon
-    fi
+    cleanup_junk
 
     if [ "$MODE" = "local" ]; then
         build_local
     else
         download_release
     fi
-
-    # Only after the new binary is in place: a failed download must never leave
-    # the machine with v4's pieces removed and nothing installed.
-    if [ "$SKIP_SYSTEM" = "0" ]; then
-        cleanup_v4
-    fi
-    check_shadowing
 
     write_config
     print_summary
@@ -515,12 +378,6 @@ while [ $# -gt 0 ]; do
             VERSION_TAG="$2"; MODE="version"; shift 2
             ;;
         --local) MODE="local"; shift ;;
-        --prefix)
-            [ $# -ge 2 ] || { log_error "--prefix needs a directory"; exit 1; }
-            PREFIX="$2"; shift 2
-            ;;
-        --skip-system) SKIP_SYSTEM=1; shift ;;
-        -h | --help) usage; exit 0 ;;
         *) log_error "Unknown option: $1"; usage; exit 1 ;;
     esac
 done
