@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - VERSION
+      - .github/workflows/release.yml
 
 concurrency:
   group: release-${{ github.ref }}
@@ -116,19 +117,21 @@ jobs:
           CGO_ENABLED: "0"
           VERSION: ${{ needs.check-version.outputs.version }}
         run: |
+          BUILD_ROOT="${RUNNER_TEMP}/voice-type-release"
+          mkdir -p "$BUILD_ROOT"
+
           for SPEC in x64:amd64 arm64:arm64; do
             ARCH=${SPEC%%:*}
             GOARCH=${SPEC##*:}
             DIR="voice-type-${ARCH}"
-            ARCHIVE="voice-type-v5-linux-${ARCH}.tar.gz"
 
-            mkdir -p "$DIR"
+            mkdir -p "$BUILD_ROOT/$DIR"
             GOOS=linux GOARCH="$GOARCH" go build \
               -ldflags="-s -w -X main.version=${VERSION}" \
-              -o "$DIR/voice-type" .
-            file "$DIR/voice-type"
+              -o "$BUILD_ROOT/$DIR/voice-type" .
+            file "$BUILD_ROOT/$DIR/voice-type"
 
-            BUILD_INFO=$(go version -m "$DIR/voice-type")
+            BUILD_INFO=$(go version -m "$BUILD_ROOT/$DIR/voice-type")
             printf '%s\n' "$BUILD_INFO"
             printf '%s\n' "$BUILD_INFO" | grep -F "main.version=${VERSION}"
             printf '%s\n' "$BUILD_INFO" | grep -F "GOARCH=${GOARCH}"
@@ -136,10 +139,14 @@ jobs:
             printf '%s\n' "$BUILD_INFO" | grep -F "vcs.revision=${GITHUB_SHA}"
             printf '%s\n' "$BUILD_INFO" | grep -F "vcs.modified=false"
             if [ "$GOARCH" = "amd64" ]; then
-              test "$("$DIR/voice-type" version)" = "$VERSION"
+              test "$("$BUILD_ROOT/$DIR/voice-type" version)" = "$VERSION"
             fi
+          done
 
-            tar -czf "$ARCHIVE" "$DIR/"
+          for ARCH in x64 arm64; do
+            DIR="voice-type-${ARCH}"
+            ARCHIVE="voice-type-v5-linux-${ARCH}.tar.gz"
+            tar -czf "$ARCHIVE" -C "$BUILD_ROOT" "$DIR/"
             tar -tzf "$ARCHIVE" | grep -qx "$DIR/voice-type"
           done
 
