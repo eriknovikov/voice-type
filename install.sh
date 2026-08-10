@@ -388,14 +388,39 @@ check_shadowing() {
 
 # Only called when writing a fresh config -- an existing file is never edited to
 # add a key.
+#
+# The key is a credential, so it is read with terminal echo off and echoed back
+# as asterisks: it must not survive in scrollback, in a screen share, or in the
+# terminal's own buffer. `stty -g` captures the exact prior state to restore --
+# and the INT/TERM trap is mandatory, because a Ctrl-C between disabling echo and
+# restoring it would hand the user back a shell that types invisibly.
 ask_api_key() {
     if [ -n "${OPENROUTER_API_KEY:-}" ]; then
         log_info "OPENROUTER_API_KEY is set in the environment; leaving the config key empty."
         return 0
     fi
     has_tty || return 0
-    printf 'OpenRouter API key (blank to set it later): ' > /dev/tty
+
+    # Echo goes off *before* the prompt is printed. Anything arriving between the
+    # two -- a paste, a fast typist, an automated answer -- would otherwise be
+    # echoed by the line discipline in that window.
+    _stty_saved=$(stty -g < /dev/tty 2> /dev/null) || _stty_saved=""
+    if [ -n "$_stty_saved" ]; then
+        trap 'stty "$_stty_saved" < /dev/tty 2> /dev/null; rm -rf "$TMP_DIR"; exit 130' INT TERM
+        stty -echo < /dev/tty 2> /dev/null || _stty_saved=""
+    fi
+
+    printf 'OpenRouter API key (hidden, blank to set it later): ' > /dev/tty
     read -r API_KEY < /dev/tty || API_KEY=""
+
+    if [ -n "$_stty_saved" ]; then
+        stty "$_stty_saved" < /dev/tty 2> /dev/null || true
+        trap 'rm -rf "$TMP_DIR"' INT TERM
+        # Echo off swallowed the user's newline too, so this line both masks the
+        # key and terminates the prompt. With no stty the terminal echoed the key
+        # itself and there is nothing to mask.
+        printf '%s\n' "$(printf '%s' "$API_KEY" | sed 's/./*/g')" > /dev/tty
+    fi
 }
 
 # Writes a config only when there is none. An existing file is never rewritten,
