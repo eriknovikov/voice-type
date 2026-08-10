@@ -22,6 +22,7 @@ PREFIX="/usr/local"
 SKIP_SYSTEM=0
 NEEDS_RELOGIN=0
 API_KEY=""
+PREV_SIZE=""
 
 RED=$(printf '\033[31m'); YELLOW=$(printf '\033[33m')
 GREEN=$(printf '\033[32m'); RESET=$(printf '\033[0m')
@@ -37,7 +38,7 @@ Usage: install.sh [options]
   --version vX.Y.Z   install a specific release instead of the latest
   --local            build from the working tree with the Go toolchain
   --prefix DIR       install under DIR/bin (default: /usr/local)
-  --skip-system      skip uinput / clipboard / audio setup
+  --skip-system      skip uinput / clipboard / audio setup, and v4 cleanup
   -h, --help         show this message
 EOF
 }
@@ -182,13 +183,19 @@ check_audio() {
     fi
 }
 
-# v4 and v5 share port 3232 and are mutually exclusive. A v4 daemon still
-# holding the port would make the v5 hotkey silently no-op.
+# v4 and v5 share port 3232 and are mutually exclusive. A daemon still holding
+# the port would make the freshly installed hotkey silently no-op.
 stop_running_daemon() {
     command -v curl > /dev/null 2>&1 || return 0
-    curl -s -m 1 "http://localhost:$PORT/health" > /dev/null 2>&1 || return 0
+    _health=$(curl -s -m 1 "http://localhost:$PORT/health" 2>/dev/null) || return 0
+    [ -n "$_health" ] || return 0
 
-    log_warn "Something is already listening on port $PORT -- probably voice-type v4."
+    # Only v5 reports a session state; v4's /health does not.
+    case "$_health" in
+        *'"state"'*) log_warn "A voice-type v5 daemon is running on port $PORT." ;;
+        *) log_warn "Something is already listening on port $PORT -- probably voice-type v4." ;;
+    esac
+
     case "$(prompt_yn "Stop it now?" "Y")" in
         [Yy]*)
             curl -s -m 2 "http://localhost:$PORT/exit" > /dev/null 2>&1 || true
@@ -206,7 +213,9 @@ get_latest_tag() {
 }
 
 # v4 and v5 releases live in the same repo. Installing a v4 tag with this script
-# would drop a Bun/Chrome binary onto a v5 config, so refuse it by name.
+# would drop a Bun/Chrome binary onto a v5 config, so refuse it by name -- but
+# say something useful about *why*, which differs between an explicitly pinned v4
+# tag and a repo where v5 simply has not been published yet.
 guard_major_version() {
     _tag="$1"
     _major=$(echo "${_tag#v}" | cut -d. -f1)
@@ -216,11 +225,22 @@ guard_major_version() {
             return 0
             ;;
     esac
-    if [ "$_major" -lt 5 ]; then
+    [ "$_major" -lt 5 ] || return 0
+
+    if [ "$MODE" = "version" ]; then
         log_error "$_tag is a v4 release; this installer only handles v5 and later."
         log_error "Install v4 with: curl -sSL https://raw.githubusercontent.com/${REPO}/main/v4/install.sh | sh"
         exit 1
     fi
+
+    log_error "The latest published release is $_tag -- no v5 release exists yet."
+    if [ -f go.mod ] && [ -f main.go ]; then
+        log_error "You are in a source tree; build and install it with:  ./install.sh --local"
+    else
+        log_error "Pin one once it ships with --version v5.0.0, or install the"
+        log_error "deprecated v4: curl -sSL https://raw.githubusercontent.com/${REPO}/main/v4/install.sh | sh"
+    fi
+    exit 1
 }
 
 install_binary_file() {
@@ -305,6 +325,69 @@ download_release() {
     install_binary_file "$TMP_DIR/${BINARY_NAME}-${ARCH}/${BINARY_NAME}"
 }
 
+# v5 installs over v4's path deliberately, so the old binary is replaced rather
+# than removed. Note its size first: v4 bundled a ~100 MB Bun runtime, and seeing
+# that reclaimed is the clearest signal the swap actually happened.
+note_existing_binary() {
+    _t="$PREFIX/bin/$BINARY_NAME"
+    [ -f "$_t" ] || return 0
+    PREV_SIZE=$(du -h "$_t" 2> /dev/null | cut -f1)
+}
+
+# Leftovers v5 has no use for. Always prompted, never automatic: dotool is a
+# general-purpose tool the user may drive from their own scripts, and the log
+# directory may hold output they still want.
+cleanup_v4() {
+    _log_dir="${XDG_DATA_HOME:-$HOME/.local/share}/voice-type"
+    if [ -d "$_log_dir" ]; then
+        log_warn "v4 left logs in $_log_dir. v5 logs to stderr only and never writes there."
+        case "$(prompt_yn "Remove that directory?" "Y")" in
+            [Yy]*)
+                rm -rf "$_log_dir"
+                log_info "Removed $_log_dir"
+                ;;
+            *) log_info "Kept $_log_dir" ;;
+        esac
+    fi
+
+    if command -v dotool > /dev/null 2>&1; then
+        _dotool=$(command -v dotool)
+        log_warn "v4 built dotool at $_dotool. v5 drives /dev/uinput itself and never calls it."
+        case "$(prompt_yn "Remove dotool? (answer no if your own scripts use it)" "Y")" in
+            [Yy]*)
+                if [ -w "$(dirname "$_dotool")" ]; then
+                    rm -f "$_dotool"
+                else
+                    as_root rm -f "$_dotool"
+                fi
+                log_info "Removed $_dotool"
+                ;;
+            *) log_info "Kept $_dotool" ;;
+        esac
+    fi
+}
+
+# An older binary earlier in PATH keeps winning over the one just installed --
+# v4 at a different prefix, or a pre-release voice-type-go from a source build.
+# These are reported, never deleted: a wrapper script may still point at them.
+check_shadowing() {
+    _target="$PREFIX/bin/$BINARY_NAME"
+    _resolved=$(command -v "$BINARY_NAME" 2> /dev/null || true)
+    if [ -n "$_resolved" ] && [ "$_resolved" != "$_target" ]; then
+        log_warn "'$BINARY_NAME' on your PATH resolves to $_resolved, not $_target."
+        log_warn "Delete that copy, or put $(dirname "$_target") earlier in PATH."
+    fi
+
+    _stale=$(command -v voice-type-go 2> /dev/null || true)
+    if [ -n "$_stale" ]; then
+        log_warn "A pre-5.0 'voice-type-go' binary is still on your PATH at $_stale."
+        log_warn "v5 installs as '$BINARY_NAME'. Repoint any hotkey or wrapper script that"
+        log_warn "launches it, then delete it -- otherwise your hotkey runs the old build."
+    fi
+}
+
+# Only called when writing a fresh config -- an existing file is never edited to
+# add a key.
 ask_api_key() {
     if [ -n "${OPENROUTER_API_KEY:-}" ]; then
         log_info "OPENROUTER_API_KEY is set in the environment; leaving the config key empty."
@@ -315,41 +398,19 @@ ask_api_key() {
     read -r API_KEY < /dev/tty || API_KEY=""
 }
 
-config_is_v4() {
-    sed 's|//.*||g' "$1" 2> /dev/null \
-        | grep -Eq '"(browser_path|browser_type|lang|stream|punctuation)"'
-}
-
-# v5 never rewrites a config at runtime; only this installer does, and only
-# after asking. v4 silently overwriting configs is the bug that started all of
-# this -- do not reintroduce it here.
+# Writes a config only when there is none. An existing file is never rewritten,
+# moved, or backed up: it is the user's file, v5 tolerates every v4 field in it,
+# and silently overwriting configs is the bug that started all of this.
 write_config() {
     CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
     CONFIG_FILE="$CONFIG_DIR/voice-type.jsonc"
 
     if [ -f "$CONFIG_FILE" ]; then
-        if ! config_is_v4 "$CONFIG_FILE"; then
-            log_info "Keeping existing config at $CONFIG_FILE"
-            return 0
-        fi
-
-        log_warn "$CONFIG_FILE looks like a v4 config (Chrome/language fields)."
-        if ! has_tty; then
-            log_warn "No terminal to ask on -- keeping it. v5 ignores the v4 fields and uses defaults."
-            return 0
-        fi
-        case "$(prompt_yn "Replace it with a v5 config? (a backup is written first)" "Y")" in
-            [Yy]*)
-                cp "$CONFIG_FILE" "$CONFIG_FILE.v4.bak"
-                log_info "Backed up to $CONFIG_FILE.v4.bak"
-                ;;
-            *)
-                log_info "Keeping it. v5 ignores the v4 fields and uses defaults."
-                return 0
-                ;;
-        esac
+        log_info "Keeping existing config at $CONFIG_FILE (v5 ignores fields it does not use)."
+        return 0
     fi
 
+    ask_api_key
     mkdir -p "$CONFIG_DIR"
     # The key lands on disk, so create the file private from the first byte
     # rather than chmod-ing after the write.
@@ -376,6 +437,9 @@ EOF
 print_summary() {
     printf '\n' >&2
     log_info "voice-type v5 installed."
+    if [ -n "$PREV_SIZE" ]; then
+        log_info "Replaced the previous $PREV_SIZE binary at $PREFIX/bin/$BINARY_NAME."
+    fi
     log_info "Config: $CONFIG_FILE"
     if [ -z "$API_KEY" ] && [ -z "${OPENROUTER_API_KEY:-}" ]; then
         log_warn "No API key yet. Set OPENROUTER_API_KEY, or add \"api_key\" to the config."
@@ -403,13 +467,21 @@ main() {
         stop_running_daemon
     fi
 
+    note_existing_binary
+
     if [ "$MODE" = "local" ]; then
         build_local
     else
         download_release
     fi
 
-    ask_api_key
+    # Only after the new binary is in place: a failed download must never leave
+    # the machine with v4's pieces removed and nothing installed.
+    if [ "$SKIP_SYSTEM" = "0" ]; then
+        cleanup_v4
+    fi
+    check_shadowing
+
     write_config
     print_summary
 }

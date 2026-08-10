@@ -90,9 +90,9 @@ remove_config() {
     _dir="${XDG_CONFIG_HOME:-$HOME/.config}"
     _cfg="$_dir/voice-type.jsonc"
     [ -e "$_cfg" ] || return 0
-    case "$(prompt_yn "Remove the config ($_cfg and any .bak files)?" "N")" in
+    case "$(prompt_yn "Remove the config ($_cfg)?" "N")" in
         [Yy]*)
-            rm -f "$_cfg" "$_cfg.bak" "$_cfg.v4.bak"
+            rm -f "$_cfg"
             log_info "Removed $_cfg"
             ;;
         *) log_info "Kept $_cfg" ;;

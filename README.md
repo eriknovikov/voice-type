@@ -44,8 +44,9 @@ toggle off, and the transcript is pasted a second or two later.
 
 ## Config
 
-`~/.config/voice-type.jsonc` — JSON with `//` comments. Written by the
-installer; **never** rewritten by the daemon. Restart the daemon after editing.
+`~/.config/voice-type.jsonc` — JSON with `//` comments. The installer writes it
+only when absent; an existing file is **never** modified, by the installer or the
+daemon. Restart the daemon after editing.
 
 ```jsonc
 {
