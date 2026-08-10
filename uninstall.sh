@@ -1,158 +1,168 @@
 #!/bin/sh
-set -e
+# voice-type v5 uninstaller.
+#
+#   curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/uninstall.sh | sh
+#
+# Removes the binary, the config, and any retained audio. Deliberately leaves
+# your 'input' group membership alone because it is system-wide and other
+# software may rely on it.
+#
+# For v4 (Chrome-based, deprecated), use v4/uninstall.sh: it also handles dotool
+# and the notification sound packages.
+set -eu
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-NC='\033[0m'
+BINARY_NAME="voice-type"
+PREFIX="/usr/local"
+PORT=3232
 
-log_info() {
-    printf "${GREEN}[INFO]${NC} %s\n" "$1" >&2
-}
+RED=$(printf '\033[31m'); YELLOW=$(printf '\033[33m')
+GREEN=$(printf '\033[32m'); RESET=$(printf '\033[0m')
 
-log_error() {
-    printf "${RED}[ERROR]${NC} %s\n" "$1" >&2
+log_info() { printf '%s==>%s %s\n' "$GREEN" "$RESET" "$1" >&2; }
+log_warn() { printf '%s!!%s  %s\n' "$YELLOW" "$RESET" "$1" >&2; }
+log_error() { printf '%sxx%s  %s\n' "$RED" "$RESET" "$1" >&2; }
+
+# /dev/tty exists but cannot be opened without a controlling terminal, so test
+# the open rather than the device node's permissions.
+# Probed in a subshell with `true`: a redirection failure on the special built-in
+# `:` would terminate the shell outright, uncatchable by `||`.
+has_tty() {
+    ( true < /dev/tty ) 2> /dev/null || return 1
+    ( true > /dev/tty ) 2> /dev/null
 }
 
 prompt_yn() {
-    _msg="$1"
-    _default="$2"
-    case "$_default" in
-        [Yy]*) _opts="Y/n"; _bracket="y" ;;
-        [Nn]*) _opts="y/N"; _bracket="n" ;;
-        *) log_error "prompt_yn: default must be Y or N"; exit 1 ;;
-    esac
-    printf "%s (%s) [%s] " "$_msg" "$_opts" "$_bracket" >&2
-    read -r _answer < /dev/tty || _answer=""
-    if [ -z "$_answer" ]; then
+    _msg="$1"; _default="$2"
+    if ! has_tty; then
         echo "$_default"
+        return 0
+    fi
+    case "$_default" in
+        [Yy]*) _opts="Y/n" ;;
+        *) _opts="y/N" ;;
+    esac
+    printf '%s (%s) ' "$_msg" "$_opts" > /dev/tty
+    read -r _answer < /dev/tty || _answer=""
+    [ -z "$_answer" ] && _answer="$_default"
+    echo "$_answer"
+}
+
+as_root() {
+    if [ "$(id -u)" = "0" ]; then
+        "$@"
     else
-        echo "$_answer"
+        command -v sudo > /dev/null 2>&1 || {
+            log_error "'sudo' is required to remove $PREFIX/bin/$BINARY_NAME."
+            exit 1
+        }
+        sudo "$@"
     fi
 }
 
-detect_pkg_manager() {
-    if command -v apt-get >/dev/null 2>&1; then echo "apt"; return; fi
-    if command -v dnf >/dev/null 2>&1; then echo "dnf"; return; fi
-    if command -v pacman >/dev/null 2>&1; then echo "pacman"; return; fi
-    if command -v apk >/dev/null 2>&1; then echo "apk"; return; fi
-    if command -v xbps-install >/dev/null 2>&1; then echo "xbps"; return; fi
-    if command -v nix-env >/dev/null 2>&1; then echo "nix"; return; fi
-    echo "none"
-}
-
-DETECTED_PM=$(detect_pkg_manager)
-
-config_sound_was_enabled() {
-    CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/voice-type.jsonc"
-    if [ -f "$CONFIG_FILE" ]; then
-        stripped=$(sed 's|//.*||g' "$CONFIG_FILE")
-        echo "$stripped" | grep -Eq '"sound"[[:space:]]*:[[:space:]]*true'
-        return $?
-    fi
-    return 1
-}
-
-remove_voice_type_binary() {
-    TARGET="/usr/local/bin/voice-type"
-    [ -e "$TARGET" ] || return 0
-    ANSWER=$(prompt_yn "Remove voice-type binary ($TARGET)?" "Y")
-    case "$ANSWER" in
-        [Yy]*)
-            if [ -w /usr/local/bin ]; then rm -f "$TARGET"; else sudo rm -f "$TARGET"; fi
-            ;;
-    esac
-}
-
-remove_config_and_logs() {
-    CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
-    CONFIG_FILE="$CONFIG_DIR/voice-type.jsonc"
-    CONFIG_BAK="$CONFIG_FILE.bak"
-    LOG_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/voice-type"
-
-    if [ -f "$CONFIG_FILE" ]; then
-        ANSWER=$(prompt_yn "Remove config ($CONFIG_FILE)?" "Y")
-        case "$ANSWER" in [Yy]*) rm -f "$CONFIG_FILE" ;; esac
-    fi
-    if [ -f "$CONFIG_BAK" ]; then
-        ANSWER=$(prompt_yn "Remove config backup ($CONFIG_BAK)?" "Y")
-        case "$ANSWER" in [Yy]*) rm -f "$CONFIG_BAK" ;; esac
-    fi
-    if [ -d "$LOG_DIR" ]; then
-        ANSWER=$(prompt_yn "Remove log directory ($LOG_DIR)?" "Y")
-        case "$ANSWER" in [Yy]*) rm -rf "$LOG_DIR" ;; esac
+stop_daemon() {
+    command -v curl > /dev/null 2>&1 || return 0
+    if curl -s -m 1 "http://localhost:$PORT/health" > /dev/null 2>&1; then
+        log_info "Stopping the running daemon..."
+        curl -s -m 2 "http://localhost:$PORT/exit" > /dev/null 2>&1 || true
     fi
 }
 
-remove_dotool() {
-    _present=0
-    for f in /usr/local/bin/dotool /usr/local/bin/dotoolc /usr/local/bin/dotoold \
-             /etc/udev/rules.d/80-dotool.rules; do
-        [ -e "$f" ] && _present=1 && break
-    done
-    [ "$_present" = "1" ] || return 0
-    ANSWER=$(prompt_yn "Remove dotool (binaries + man page + udev rule)?" "Y")
-    case "$ANSWER" in
-        [Yy]*)
-            for f in /usr/local/bin/dotool /usr/local/bin/dotoolc /usr/local/bin/dotoold \
-                     /etc/udev/rules.d/80-dotool.rules /usr/share/man/man1/dotool.1 \
-                     /usr/share/man/man1/dotool.1.gz; do
-                if [ -e "$f" ]; then
-                    if [ -w "$(dirname "$f")" ]; then rm -f "$f"; else sudo rm -f "$f"; fi
-                fi
-            done
-            if command -v udevadm >/dev/null 2>&1; then
-                sudo udevadm control --reload 2>/dev/null || true
-                sudo udevadm trigger 2>/dev/null || true
-            fi
-            ;;
-    esac
-}
-
-remove_sound_deps() {
-    if ! config_sound_was_enabled; then return 0; fi
-    DEPS=""
-    case "$DETECTED_PM" in
-        apt) DEPS="pulseaudio-utils libcanberra-gtk3-module" ;;
-        dnf) DEPS="pulseaudio-utils libcanberra-gtk3" ;;
-        pacman) DEPS="libpulse libcanberra" ;;
-        apk) DEPS="pulseaudio-utils libcanberra" ;;
-        xbps) DEPS="pulseaudio-utils libcanberra" ;;
+load_config_port() {
+    _binary="$PREFIX/bin/$BINARY_NAME"
+    [ -x "$_binary" ] || return 0
+    _version=$("$_binary" version 2> /dev/null) || return 0
+    case "$_version" in
+        5.*) ;;
         *) return 0 ;;
     esac
-    ANY_PRESENT=0
-    for dep in $DEPS; do
-        if dpkg -s "$dep" >/dev/null 2>&1 || rpm -q "$dep" >/dev/null 2>&1 || \
-           pacman -Qi "$dep" >/dev/null 2>&1 || apk info "$dep" >/dev/null 2>&1 || \
-           xbps-query "$dep" >/dev/null 2>&1; then
-            ANY_PRESENT=1
-            break
-        fi
-    done
-    if [ "$ANY_PRESENT" = "0" ]; then return 0; fi
-    ANSWER=$(prompt_yn "Remove sound notification deps ($DEPS)?" "Y")
-    case "$ANSWER" in
-        [Yy]*)
-            case "$DETECTED_PM" in
-                apt) sudo apt-get remove -y $DEPS 2>/dev/null || true ;;
-                dnf) sudo dnf remove -y $DEPS 2>/dev/null || true ;;
-                pacman) sudo pacman -Rs --noconfirm $DEPS 2>/dev/null || true ;;
-                apk) sudo apk del $DEPS 2>/dev/null || true ;;
-                xbps) sudo xbps-remove -y $DEPS 2>/dev/null || true ;;
-            esac
-            ;;
+    _port=$("$_binary" config-port 2> /dev/null) || return 0
+    case "$_port" in
+        '' | *[!0-9]*) return 0 ;;
     esac
+    if [ "$_port" -ge 1024 ] && [ "$_port" -le 65535 ]; then
+        PORT="$_port"
+    fi
+}
+
+remove_binary() {
+    _target="$PREFIX/bin/$BINARY_NAME"
+    [ -e "$_target" ] || {
+        log_info "No binary at $_target."
+        return 0
+    }
+    case "$(prompt_yn "Remove $_target?" "Y")" in
+        [Yy]*)
+            if [ -w "$PREFIX/bin" ]; then
+                rm -f "$_target"
+            else
+                as_root rm -f "$_target"
+            fi
+            log_info "Removed $_target"
+            ;;
+        *) log_info "Kept $_target" ;;
+    esac
+}
+
+remove_config() {
+    _dir="${XDG_CONFIG_HOME:-$HOME/.config}"
+    _cfg="$_dir/voice-type.jsonc"
+    [ -e "$_cfg" ] || return 0
+    case "$(prompt_yn "Remove the config ($_cfg)?" "N")" in
+        [Yy]*)
+            rm -f "$_cfg"
+            log_info "Removed $_cfg"
+            ;;
+        *) log_info "Kept $_cfg" ;;
+    esac
+}
+
+# Audio that failed to transcribe is retained here rather than discarded, so it
+# may hold speech the user never got back as text. Never delete it unasked.
+remove_retained_audio() {
+    _dir="${TMPDIR:-/tmp}/voice-type"
+    [ -d "$_dir" ] || return 0
+    _count=$(find "$_dir" -name '*.wav' 2> /dev/null | wc -l | tr -d ' ')
+    [ "$_count" -gt 0 ] || {
+        rmdir "$_dir" 2> /dev/null || true
+        return 0
+    }
+    log_warn "$_count retained recording(s) in $_dir (audio that failed to transcribe)."
+    case "$(prompt_yn "Delete them?" "N")" in
+        [Yy]*)
+            rm -rf "$_dir"
+            log_info "Removed $_dir"
+            ;;
+        *) log_info "Kept $_dir" ;;
+    esac
+}
+
+usage() {
+    cat >&2 << EOF
+Usage: uninstall.sh [--prefix DIR]
+
+  --prefix DIR   where the binary was installed (default: /usr/local)
+EOF
 }
 
 main() {
-    if [ ! -t 1 ] && [ ! -e /dev/tty ]; then
-        log_error "Run from a terminal: bash uninstall.sh"
-        exit 1
-    fi
-    remove_voice_type_binary
-    remove_config_and_logs
-    remove_dotool
-    remove_sound_deps
-    log_info "Voice Type uninstalled."
+    load_config_port
+    stop_daemon
+    remove_binary
+    remove_config
+    remove_retained_audio
+    printf '\n' >&2
+    log_info "Done. Your 'input' group membership was left in place."
 }
 
-main "$@"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --prefix)
+            [ $# -ge 2 ] || { log_error "--prefix needs a directory"; exit 1; }
+            PREFIX="$2"; shift 2
+            ;;
+        -h | --help) usage; exit 0 ;;
+        *) log_error "Unknown option: $1"; usage; exit 1 ;;
+    esac
+done
+
+main

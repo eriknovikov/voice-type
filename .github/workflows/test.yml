@@ -6,21 +6,57 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
-  test:
+  go:
+    name: v5 (Go)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          bun-version: "latest"
+          go-version-file: go.mod
 
-      - name: Install dependencies
-        run: bun install
+      - name: gofmt
+        run: |
+          UNFORMATTED=$(gofmt -l *.go)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "Not gofmt'd:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
 
-      - name: Run tests
-        run: bun test tests
-        continue-on-error: true
+      - name: Vet
+        run: go vet ./...
+
+      # Hermetic: no audio hardware, no network, no /dev/uinput.
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+        run: go build -o /dev/null .
+
+  shell:
+    name: Installer syntax
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # sh -n takes one script per invocation; extra arguments become $1, $2...
+      - name: sh -n
+        run: |
+          for f in install.sh uninstall.sh v4/install.sh v4/uninstall.sh; do
+            echo "checking $f"
+            sh -n "$f"
+          done
+
+      - name: shellcheck
+        run: shellcheck -s sh install.sh uninstall.sh
