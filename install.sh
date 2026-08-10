@@ -31,6 +31,19 @@ log_info() { printf '%s==>%s %s\n' "$GREEN" "$RESET" "$1" >&2; }
 log_warn() { printf '%s!!%s  %s\n' "$YELLOW" "$RESET" "$1" >&2; }
 log_error() { printf '%sxx%s  %s\n' "$RED" "$RESET" "$1" >&2; }
 
+# Wraps a path in an OSC 8 hyperlink so the config is click-to-open in terminals
+# that support them (GNOME Terminal, Kitty, WezTerm, iTerm2, Konsole). Emitted
+# only when stderr is a terminal, so redirected output keeps plain paths instead
+# of escape sequences. Spaces are the one character that must be encoded for the
+# file:// URL to survive.
+link_path() {
+    if [ ! -t 2 ]; then
+        printf '%s' "$1"
+        return 0
+    fi
+    printf '\033]8;;file://%s\007%s\033]8;;\007' "$(printf '%s' "$1" | sed 's/ /%20/g')" "$1"
+}
+
 usage() {
     cat >&2 << EOF
 Usage: install.sh [options]
@@ -412,7 +425,7 @@ write_config() {
     CONFIG_FILE="$CONFIG_DIR/voice-type.jsonc"
 
     if [ -f "$CONFIG_FILE" ]; then
-        log_info "Keeping existing config at $CONFIG_FILE"
+        log_info "Keeping existing config at $(link_path "$CONFIG_FILE")"
         return 0
     fi
 
@@ -438,7 +451,7 @@ EOF
     )
     chmod 600 "$CONFIG_FILE"
     CONFIG_CREATED=1
-    log_info "Wrote $CONFIG_FILE"
+    log_info "Wrote $(link_path "$CONFIG_FILE")"
 }
 
 # Read from the file rather than from what this run happened to type: on a
@@ -458,7 +471,7 @@ print_summary() {
 
     # Both of these leave voice-type unable to work, so they stay.
     if [ -z "${OPENROUTER_API_KEY:-}" ] && ! config_has_key; then
-        log_warn "No API key yet. Set OPENROUTER_API_KEY, or add \"api_key\" to $CONFIG_FILE."
+        log_warn "No API key yet. Set OPENROUTER_API_KEY, or add \"api_key\" to $(link_path "$CONFIG_FILE")"
     fi
     if [ "$NEEDS_RELOGIN" = "1" ]; then
         log_warn "Log out and back in (or run: newgrp input) before first use."
