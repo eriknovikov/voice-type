@@ -1,43 +1,56 @@
 # Voice Type
 
 System-wide speech-to-text for Linux. Press a key, speak, press again — the text
-appears wherever your cursor is.
+appears wherever your cursor is in the system. Super accurate and cheap.
 
-> **v4 is deprecated.** The Chrome + Web Speech API version has been replaced by
-> v5, a single 6 MB static Go binary: no browser, no 400 MB Chromium, ~4 MB idle
-> instead of ~440 MB. v5 needs an [OpenRouter](https://openrouter.ai) API key
-> (~$0.0015/min). The deprecated v4 source remains in [`v4/`](./v4) and can be
-> installed instead of v5 with the command below. The two versions share the
-> binary name, config path, and port, so back up your config before switching.
->
-> ```bash
-> curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/v4/install.sh | sh
-> ```
+# Straight to the point 
+Nobody wants to read a __long-as-f** README__, let alone an AI-generated one. So these will be fully my words.
 
-## Install
+## Why would you care?
+You can speak MUCH faster than what you can type, that's a fact. So if you 
+
+1. Want to be more productive (e.g: waste less time typing) or;
+2. Want less wrist pain
+
+Then definitely give voice typing a try.
+
+
+## Why voice-type specifically?
+I genuinely don't care whether you use `voice-type`, something else, or nothing at all. Most devs are too obsessed about creating something (i.e: tech for tech's sake). Don't be like that. Always prefer solving a real problem. That's what I did. 
+There are other alternatives to `voice-type`, but given my constraints, I found no effective solution. So I built it.
+
+My constraints: 
+1. Linux (Arch Linux and Fedora) on GNOME Wayland
+2. Low RAM (at least, not willing to allocate more than 1GB of RAM to a local model)
+3. Need for high quality transcription (a shitty model misinterprets everything, to the point that you would have been better off just typing yourself)
+4. Cost effective / free (__voice-type v5 costs me pennies/mo__)
+
+## Alternatives out there?
+- There are a few, though not satisfying all the requirements above. Google / Chatgpt them if you wish.
+
+
+## How Voice Type V5 works
+1. Single go binary (daemon). While idle, it uses ~6 MB of RAM. On start, it uses the system's mic via [github.com/jfreymuth/pulse](https://github.com/jfreymuth/pulse). 
+2. Audio is then sent to openrouter, model __parakeet-tdt-0.6b-v3__, though customizable. 
+3. Provider returns result, we insert it into the system via [github.com/bendahl/uinput](https://github.com/bendahl/uinput), which is the library that dotool uses under the hood. 
+
+It has no notifications at all (there's no need for them). You know if you are transcribing if you press the TRANSCRIPTION_TOGGLE_KEY and see the system mic icon ON. V4's approach of notifying via text and sound was redundant, and definitely not needed. Less is more.
+
+__How to use it__: Install it, [get an API KEY on openrouter.ai](https://openrouter.ai/), configure the hotkeys for toggling the daemon (F10) and toggling the transcription (F9) depending on your system. Then:
+Press F10 (daemon starts); Press F9 (transcription starts); Talk what you want; Press F9 (transcription stops and text is inserted into the system). 
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/install.sh | sh
 ```
 
-Fetches the static binary for your architecture, verifies its checksum and
-embedded version, installs it to `/usr/local/bin/voice-type`, and writes a
-private config. Pin a release with:
+## Voice Type V4 (deprecated!!)
+Before V5, the overall architecture was a headless browser instance (~300 MB of RAM idle) (chrome/chromium) would capture the audio, send it in real time to Google's servers via browser's Web Speech Api (WSA), then stream the responses to the bun daemon in real time. This daemon would then make the corresponding calls to insert the text into the system by emulating a virtual keyboard on input (via dotool). This allowed for streaming the text in real time, which is a nice to have. Main issues: transcription quality and no automatic punctuation. Kinda sucks.
 
-```bash
-curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/v5.0.0/install.sh | sh -s -- --version v5.0.0
-```
+__How to use it__: Similar to v5. 
+ ```bash
+ curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/v4/install.sh | sh
+ ```
 
-Build the current working tree with `./install.sh --local` from the repository
-root.
-
-**Requirements:** Linux, a microphone, PulseAudio or pipewire-pulse, membership
-of the `input` group, and an OpenRouter API key. The installer handles the
-binary and config; it does not install packages or change group membership.
-
-The `input` group is a hard requirement because it permits direct virtual-keyboard
-events into the focused application. Membership takes effect only after you log
-out and back in, or run `newgrp input`.
 
 ## Keyboard shortcuts
 
@@ -46,71 +59,15 @@ System Settings → Shortcuts):
 
 | Action            | Command                                                      |
 | ----------------- | ------------------------------------------------------------ |
-| Dictate           | `curl -s http://localhost:3232/toggle`                       |
-| Start/stop daemon | `sh -c "curl -s http://localhost:3232/exit \|\| voice-type"` |
+| TRANSCRIPTION TOGGLE           | `curl -s http://localhost:3232/toggle`                       |
+| DAEMON TOGGLE | `sh -c "curl -s http://localhost:3232/exit \|\| voice-type"` |
 
-Press the daemon key once, then dictate as often as you like: toggle on, speak,
-toggle off, and the transcript is typed a second or two later. Longer transcripts
-take additional time because every character is emitted as keyboard input.
 
-## Config
+## FAQ
 
-`~/.config/voice-type.jsonc` — JSON with `//` comments. The installer writes it
-on a fresh install. If it already exists, the installer offers to skip creation
-and keeps it by default; declining replaces it without a backup. The daemon
-never modifies it. Restart the daemon after editing.
+1. Where's the config file? `~/.config/voice-type.jsonc`
+2. Uninstall v5? `curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/uninstall.sh | sh`
+3. Something else? ChatGPT/Claude the issue, or [DM me on telegram](https://t.me/erik_nkv) if you want. 
 
-```jsonc
-{
-    "api_key": "sk-or-...", // or OPENROUTER_API_KEY, which wins
-    "port": 3232 // int 1024-65535
-}
-```
 
-That is the entire config. The model, duration cap, keyboard timing, US layout,
-and silence handling are tuned defaults compiled into the binary, not knobs —
-every option is one more thing to get wrong, and none of these earned that.
 
-Any other field is ignored, so both v4 configs (`lang`, `browser_path`,
-`stream`, `punctuation`, …) and configs from earlier v5 installs still load.
-Historical v5 fields such as `model`, `max_duration`, `paste_key`,
-`paste_delay_ms`, and `trim_silence` are ignored rather than rejected.
-
-## Troubleshooting
-
-| Symptom | Fix |
-| --- | --- |
-| `/dev/uinput` permission denied | `sudo usermod -aG input $USER`, then `newgrp input` |
-| Nothing happens on the hotkey | the daemon is not running — press the daemon shortcut |
-| `no speech detected` | the capture was under ~0.35 s, or held nothing but room tone — nothing was uploaded |
-| `no audio captured` | the press-to-press gap was under ~100 ms |
-| Transcription failed | audio is kept in `$TMPDIR/voice-type/`, never discarded |
-| Punctuation is wrong | voice-type targets a US active keyboard layout; switch the desktop layout to US |
-| Unicode is missing or literal | the focused app must support Linux `Ctrl+Shift+U` Unicode composition |
-
-Logs go to stderr. Run `voice-type` in a terminal to watch them.
-
-## Uninstall
-
-```bash
-curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/uninstall.sh | sh
-```
-
-## Build from source
-
-```bash
-make build     # ./voice-type
-make check     # fmt + vet + test
-make dist      # static linux/amd64 + linux/arm64
-make install   # build from this tree and install it
-```
-
-Go 1.24+, `CGO_ENABLED=0`, two pure-Go dependencies (PulseAudio protocol,
-uinput). `go test ./...` is hermetic — no audio hardware, no network, no
-`/dev/uinput`.
-
-## More
-
-- [AGENTS.md](./AGENTS.md) — architecture, HTTP API, and the design invariants
-- [How I built Voice Type](https://dev.to/eriknovikov/how-i-built-voice-type-3i2p) (v4-era)
-- [v4/](./v4) — the deprecated Chrome version

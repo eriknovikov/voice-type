@@ -50,11 +50,10 @@ link_path() {
 
 usage() {
     cat >&2 << EOF
-Usage: install.sh [--version vX.Y.Z | --local] [--prefix DIR]
+Usage: install.sh [--version vX.Y.Z | --local]
 
   --version vX.Y.Z   install a specific v5 release
   --local            build from the working tree with the Go toolchain
-  --prefix DIR       install under DIR instead of /usr/local
 EOF
 }
 
@@ -370,10 +369,6 @@ while [ $# -gt 0 ]; do
             VERSION_TAG="$2"; MODE="version"; shift 2
             ;;
         --local) MODE="local"; shift ;;
-        --prefix)
-            [ $# -ge 2 ] || { log_error "--prefix needs a directory"; exit 1; }
-            PREFIX="$2"; shift 2
-            ;;
         *) log_error "Unknown option: $1"; usage; exit 1 ;;
     esac
 done
