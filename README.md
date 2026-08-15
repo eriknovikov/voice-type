@@ -3,6 +3,8 @@
 System-wide speech-to-text for Linux. Press a key, speak, press again — the text
 appears wherever your cursor is in the system. Super accurate and cheap.
 
+v5.1.0 requires `wl-copy` and `wl-paste`.
+
 # Straight to the point 
 Nobody wants to read a __long-as-f** README__, let alone an AI-generated one. So these will be fully my words.
 
@@ -68,6 +70,5 @@ System Settings → Shortcuts):
 1. Where's the config file? `~/.config/voice-type.jsonc`
 2. Uninstall v5? `curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/uninstall.sh | sh`
 3. Something else? ChatGPT/Claude the issue, or [DM me on telegram](https://t.me/erik_nkv) if you want. 
-
 
 

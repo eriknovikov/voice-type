@@ -165,9 +165,9 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 	}
 
 	outputStart := time.Now()
-	if err := d.res.Typer.Type(result.Text); err != nil {
-		logf("OUTPUT", "typing failed: %v", err)
-		return http.StatusInternalServerError, fmt.Sprintf("typing failed: %v", err)
+	if err := d.res.Typer.Paste(result.Text); err != nil {
+		logf("OUTPUT", "paste failed: %v", err)
+		return http.StatusInternalServerError, fmt.Sprintf("paste failed: %v", err)
 	}
 
 	logf("OUTPUT", "typed in %v: %s", time.Since(outputStart).Round(time.Millisecond), truncate(result.Text, 120))
