@@ -7,4 +7,5 @@ releases
 .cursor
 .env
 .env.*
-/voice-type
+/v5/voice-type
+tools 

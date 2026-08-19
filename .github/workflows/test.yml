@@ -13,6 +13,9 @@ jobs:
   go:
     name: v5 (Go)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: v5
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -20,7 +23,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version-file: go.mod
+          go-version-file: v5/go.mod
 
       - name: gofmt
         run: |
@@ -53,10 +56,11 @@ jobs:
       # sh -n takes one script per invocation; extra arguments become $1, $2...
       - name: sh -n
         run: |
-          for f in install.sh uninstall.sh v4/install.sh v4/uninstall.sh; do
+          for f in install.sh uninstall.sh v5/install.sh v5/uninstall.sh \
+                   v4/install.sh v4/uninstall.sh; do
             echo "checking $f"
             sh -n "$f"
           done
 
       - name: shellcheck
-        run: shellcheck -s sh install.sh uninstall.sh
+        run: shellcheck -s sh install.sh uninstall.sh v5/install.sh v5/uninstall.sh
