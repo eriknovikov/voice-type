@@ -1,4 +1,4 @@
-package main
+package voicetype
 
 import (
 	"context"
@@ -143,13 +143,13 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 		return http.StatusOK, "no speech detected"
 	}
 
-	samples = trimSilence(samples)
+	samples = TrimSilence(samples)
 	duration := wavDurationSeconds(samples)
 	if duration < captured {
 		logf("AUDIO", "trimmed %.2fs of silence -> %.2fs", captured-duration, duration)
 	}
 
-	wav := wavEncode(samples)
+	wav := WavEncode(samples)
 
 	t0 := time.Now()
 	result, err := d.stt.Transcribe(wav)

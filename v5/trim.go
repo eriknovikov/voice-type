@@ -1,4 +1,4 @@
-package main
+package voicetype
 
 import (
 	"math"
@@ -20,9 +20,17 @@ import (
 // is why trimPadSamples leaves a margin at each end instead of cutting flush to
 // the first and last loud frame: clipping the trailing pause costs the terminal
 // period.
+//
+// The pad is 400 ms rather than a tighter figure because the gate is estimated
+// from the quietest frames of the first and last second, and a soft unvoiced
+// onset -- the "s" of "send", a whispered first syllable -- is itself one of
+// those quiet frames. It raises the floor, fails to clear the gate it just
+// raised, and the scan runs on to the first voiced frame. The pad is what walks
+// that back, so it has to be wider than a leading consonant. Widening it costs
+// $0.000004 per dictation; getting it wrong costs the user the word.
 const (
 	trimFrameSamples = 320  // 20 ms at 16 kHz
-	trimPadSamples   = 4000 // 250 ms kept outside the detected speech
+	trimPadSamples   = 6400 // 400 ms kept outside the detected speech
 	trimWindowFrames = 50   // 1 s at each end, used to estimate the noise floor
 	trimGateRatio    = 4.0  // gate sits this far above the estimated noise floor
 	trimMinGate      = 80.0 // absolute RMS gate, for a digitally silent capture
@@ -49,7 +57,7 @@ const (
 // wrongly dropped costs the user far more than an unnecessary upload. And the
 // gate errs toward uploading: a digitally silent frame pins the estimated floor
 // to zero and the gate falls back to trimMinGate, which speech clears by a wide
-// margin. Same asymmetry as trimSilence -- over-sending costs a fraction of a
+// margin. Same asymmetry as TrimSilence -- over-sending costs a fraction of a
 // cent, over-dropping costs the user their words.
 func worthUploading(samples []int16) bool {
 	if wavDurationSeconds(samples) < minCaptureSeconds {
@@ -62,7 +70,7 @@ func worthUploading(samples []int16) bool {
 }
 
 // hasSpeech reports whether any frame clears the noise gate estimated over the
-// whole capture. Unlike trimSilence this needs no per-end estimate: it asks
+// whole capture. Unlike TrimSilence this needs no per-end estimate: it asks
 // whether the clip contains an utterance at all, not where one begins.
 func hasSpeech(samples []int16) bool {
 	frames := len(samples) / trimFrameSamples
@@ -104,7 +112,7 @@ func hasVoicedCadence(samples []int16) bool {
 	return transitions > 0 && float64(crossings)/float64(transitions) <= speechMaxZeroCrossingRate
 }
 
-// trimSilence returns the span of samples between the first and last frame that
+// TrimSilence returns the span of samples between the first and last frame that
 // clears the noise gate, padded by trimPadSamples on each side. The result
 // aliases the input slice; callers must not mutate it afterwards.
 //
@@ -113,7 +121,7 @@ func hasVoicedCadence(samples []int16) bool {
 // capture that contains any digitally silent frame -- a noise-gating mic, a
 // Bluetooth headset using DTX, a synthesised test fixture -- pins the estimate
 // at zero, and a noisy room then reads as speech from the first frame on.
-func trimSilence(samples []int16) []int16 {
+func TrimSilence(samples []int16) []int16 {
 	// Too short to estimate a noise floor from. A capture this brief is all
 	// onset anyway.
 	if len(samples) < trimFrameSamples*2 {

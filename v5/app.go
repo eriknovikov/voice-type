@@ -1,4 +1,4 @@
-package main
+package voicetype
 
 import (
 	"flag"
@@ -10,12 +10,6 @@ import (
 	"syscall"
 	"time"
 )
-
-// version is stamped at build time from the VERSION file, which is the single
-// source of truth the Makefile and release CI both read:
-// -ldflags "-X main.version=$(cat VERSION)". An unstamped `go build` reports
-// "dev" rather than claiming a release number it may not be.
-var version = "dev"
 
 func init() {
 	log.SetFlags(0)
@@ -55,7 +49,13 @@ func retainWAV(wav []byte) (string, error) {
 	return path, nil
 }
 
-func main() {
+// Run is the whole application: flag dispatch, preflight, daemon loop. It
+// lives in the library package so the entry point under cmd/ stays a stub
+// and this stays reachable from in-package tests.
+//
+// version arrives from package main, which is where the linker stamps it --
+// keeping that variable in main is what lets -X main.version stay unchanged.
+func Run(version string) {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 

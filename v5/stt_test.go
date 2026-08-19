@@ -1,4 +1,4 @@
-package main
+package voicetype
 
 import (
 	"encoding/json"
@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func testWAV() []byte { return wavEncode([]int16{1, 2, 3, 4}) }
+func testWAV() []byte { return WavEncode([]int16{1, 2, 3, 4}) }
 
 // The multipart field names are the ones Phase 0 validated against the live
 // endpoint: an OpenAI-style "file" part plus a "model" field.

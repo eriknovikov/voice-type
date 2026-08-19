@@ -188,7 +188,7 @@ build_local() {
     _ver="dev"
     [ -f VERSION ] && _ver=$(cat VERSION)
     log_info "Building $BINARY_NAME $_ver from source..."
-    CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=$_ver" -o "$TMP_DIR/$BINARY_NAME" .
+    CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=$_ver" -o "$TMP_DIR/$BINARY_NAME" ./cmd/voice-type
     install_binary_file "$TMP_DIR/$BINARY_NAME"
 }
 

@@ -1,4 +1,4 @@
-package main
+package voicetype
 
 import (
 	"fmt"
@@ -73,7 +73,7 @@ func runPreflight(cfg Config) (preflightResult, *resources, error) {
 	}
 
 	// 4. PulseAudio reachable.
-	rec, err := newRecorder()
+	rec, err := NewRecorder()
 	if err != nil {
 		typer.Close()
 		return preflightFailed, nil, fmt.Errorf(

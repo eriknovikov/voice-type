@@ -79,7 +79,7 @@ jobs:
 
       - name: Check formatting
         run: |
-          UNFORMATTED=$(gofmt -l *.go)
+          UNFORMATTED=$(gofmt -l .)
           if [ -n "$UNFORMATTED" ]; then
             echo "Not gofmt'd:"
             echo "$UNFORMATTED"
@@ -136,7 +136,7 @@ jobs:
             mkdir -p "$BUILD_ROOT/$DIR"
             GOOS=linux GOARCH="$GOARCH" go build \
               -ldflags="-s -w -X main.version=${VERSION}" \
-              -o "$BUILD_ROOT/$DIR/voice-type" .
+              -o "$BUILD_ROOT/$DIR/voice-type" ./cmd/voice-type
             file "$BUILD_ROOT/$DIR/voice-type"
 
             BUILD_INFO=$(go version -m "$BUILD_ROOT/$DIR/voice-type")

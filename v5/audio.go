@@ -1,4 +1,4 @@
-package main
+package voicetype
 
 import (
 	"fmt"
@@ -30,7 +30,7 @@ type audioRecorder interface {
 	Close()
 }
 
-func newRecorder() (*Recorder, error) {
+func NewRecorder() (*Recorder, error) {
 	client, err := pulse.NewClient(pulse.ClientApplicationName("voice-type"))
 	if err != nil {
 		return nil, fmt.Errorf("connect to PulseAudio: %w", err)

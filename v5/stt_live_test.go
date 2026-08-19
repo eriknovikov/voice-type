@@ -1,4 +1,4 @@
-package main
+package voicetype
 
 import (
 	"encoding/binary"
@@ -33,7 +33,7 @@ func TestLiveTranscribe(t *testing.T) {
 		samples[i] = int16(binary.LittleEndian.Uint16(raw[i*2:]))
 	}
 
-	wav := wavEncode(samples)
+	wav := WavEncode(samples)
 	t.Logf("audio: %.2fs, wav %d bytes", wavDurationSeconds(samples), len(wav))
 
 	model := os.Getenv("VOICE_TYPE_MODEL")
