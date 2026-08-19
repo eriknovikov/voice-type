@@ -1,10 +1,13 @@
 #!/bin/sh
 # voice-type v4 installer (DEPRECATED).
 #
-# v4 is the Chrome + Web Speech API version, superseded by the v5 Go daemon in
-# the repository root. It still installs and runs; it is no longer developed.
+# v4 is the Chrome + Web Speech API version. It still installs and runs; it is
+# no longer developed.
 #
 #   curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/v4/install.sh | sh
+#
+# Installs one voice-type: the binary, config, and port are shared across
+# majors, so this replaces whatever is already installed.
 set -e
 
 REPO="eriknovikov/voice-type"
@@ -312,9 +315,10 @@ print_summary() {
     fi
 }
 
-# v5 ships from this same repository, so /releases/latest now points at a Go
-# binary. v4 must resolve the newest v4.x.y tag explicitly -- otherwise this
-# installer would download v5 and then configure it as if it were v4.
+# This repository publishes several majors from one release stream, so
+# /releases/latest is not necessarily a v4 tag. Resolve the newest v4.x.y
+# explicitly -- following 'latest' would fetch a different runtime and then
+# configure it as if it were v4.
 get_latest_version() {
     _tags=$(curl -sS "https://api.github.com/repos/${REPO}/releases?per_page=100" | \
         grep '"tag_name":' | \

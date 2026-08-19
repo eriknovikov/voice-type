@@ -265,3 +265,16 @@ func (t *Typer) Type(text string) error {
 	}
 	return nil
 }
+
+// Paste temporarily owns CLIPBOARD, pastes the transcript, and restores what
+// was there. When those contents cannot be handed back -- an unrecognised or
+// oversized flavour -- the clipboard is left untouched and the transcript is
+// typed instead: losing what the user copied costs more than the extra second.
+// Type remains the low-level keyboard compiler.
+func (t *Typer) Paste(text string) error {
+	old, ok := saveClipboard()
+	if !ok {
+		return t.Type(text)
+	}
+	return t.pasteClipboard(text, old)
+}

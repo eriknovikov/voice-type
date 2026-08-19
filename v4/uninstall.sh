@@ -1,4 +1,12 @@
 #!/bin/sh
+# voice-type v4 uninstaller (DEPRECATED).
+#
+#   curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/v4/uninstall.sh | sh
+#
+# Removes the binary, the config and its backup, the log directory, dotool, and
+# the notification sound packages -- each behind its own prompt. Deliberately
+# leaves your 'input' group membership alone because it is system-wide and other
+# software may rely on it.
 set -e
 
 RED='\033[0;31m'
@@ -145,7 +153,7 @@ remove_sound_deps() {
 
 main() {
     if [ ! -t 1 ] && [ ! -e /dev/tty ]; then
-        log_error "Run from a terminal: bash uninstall.sh"
+        log_error "Run from a terminal: sh v4/uninstall.sh"
         exit 1
     fi
     remove_voice_type_binary
