@@ -18,9 +18,9 @@ other; do not reintroduce cross-references between them.
 
 Binaries live under `v5/cmd/`: `cmd/voice-type` is the shipped daemon, and
 anything else there is a diagnostic that exercises one stage of the pipeline
-without a provider round trip (`cmd/audio-audit`). Keep `version` in
-`cmd/voice-type` -- the linker stamps `-X main.version`, and release CI verifies
-that exact string in the built binary.
+without a provider round trip. Keep `version` in `cmd/voice-type` -- the linker
+stamps `-X main.version`, and release CI verifies that exact string in the built
+binary.
 
 `v5/VERSION` is the only place the v5 version number lives. A push to `main`
 that changes it publishes a release, so treat it as a deploy trigger.

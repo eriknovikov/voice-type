@@ -149,6 +149,27 @@ func TestTrimSilenceSpeechFromFirstFrame(t *testing.T) {
 	}
 }
 
+// A quiet unvoiced onset -- the "s" of "send", a whispered first syllable --
+// is itself one of the quietest frames of the first second, so silenceGate
+// takes it for the noise floor and sets a gate above it. The scan then skips
+// the consonant entirely and stops at the first voiced frame; only the pad
+// walks that back. The pad therefore has to be wider than a leading consonant,
+// which is the whole reason trimPadSamples is 400 ms and not 250.
+func TestTrimSilenceKeepsSoftOnset(t *testing.T) {
+	const lead, onset = 1.0, 0.35
+	in := concat(silence(lead, 300), speech(onset, 700), speech(1, 6000), silence(1, 300))
+
+	got := TrimSilence(in)
+
+	// Nothing of the consonant may be cut: the kept span has to start inside
+	// the room tone that precedes it.
+	headCut := float64(cap(in)-cap(got)) / wavSampleRate
+	if headCut > lead {
+		t.Errorf("cut %.3fs from the head, past the %.2fs lead-in -- %.0f ms of the soft onset was clipped",
+			headCut, lead, (headCut-lead)*1000)
+	}
+}
+
 func TestTrimSilenceAllSilentIsUnchanged(t *testing.T) {
 	in := silence(3, 0)
 
