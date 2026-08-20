@@ -8,7 +8,7 @@ import (
 	"unicode"
 )
 
-// Config holds the only two things a user gets to set. Everything else is a
+// Config holds the four things a user gets to set. Everything else is a
 // tuned constant below: an option the user has to reason about is a cost, and
 // none of these were ever worth that cost. Every other field found in the file
 // -- v5's own earlier knobs, and all of v4's browser/language settings -- is
@@ -16,6 +16,10 @@ import (
 type Config struct {
 	Port   int
 	APIKey string
+	// Model is an sttModels ID. Vocabulary travels with the audio, so names
+	// come out spelled right instead of being corrected afterwards.
+	Model      string
+	Vocabulary []string
 }
 
 const defaultPort = 3232
@@ -23,19 +27,54 @@ const defaultPort = 3232
 // Tuned once, on purpose, and not user-facing. Changing one means editing this
 // block and shipping a release -- which is the point.
 const (
-	// sttModel is Parakeet: 16 kHz mono PCM16 native, so nothing resamples.
-	sttModel = "nvidia/parakeet-tdt-0.6b-v3"
 	// maxDurationSeconds caps one dictation. Without silence auto-stop, a
 	// forgotten hotkey would otherwise record -- and bill -- indefinitely.
 	maxDurationSeconds = 600
 )
 
+// sttSpec is one allowed model. Provider is pinned on every request because
+// OpenRouter keys provider options by provider slug and reroutes freely, so an
+// unpinned request can land where the vocabulary is dropped; Vocabulary records
+// where it measurably is not.
+type sttSpec struct {
+	ID, Slug, Provider string
+	Vocabulary         bool
+}
+
+const defaultModelID = "gpt-4o-transcribe"
+
+// sttModels is the allowlist: those that read a vocabulary, then the cheaper
+// ones that ignore it. The config file documents what each costs.
+var sttModels = []sttSpec{
+	{"gpt-4o-transcribe", "openai/gpt-4o-transcribe", "openai", true},
+	{"gpt-transcribe", "openai/gpt-transcribe", "openai", true},
+	{"whisper-large-v3", "openai/whisper-large-v3", "deepinfra", true},
+	{"whisper-1", "openai/whisper-1", "openai", true},
+	{"whisper-large-v3-turbo", "openai/whisper-large-v3-turbo", "deepinfra", true},
+	{"gpt-4o-mini-transcribe", "openai/gpt-4o-mini-transcribe", "openai", true},
+	{"parakeet-v3", "nvidia/parakeet-tdt-0.6b-v3", "together", false},
+	{"whisper-large-v3-turbo-groq", "openai/whisper-large-v3-turbo", "groq", false},
+}
+
+func sttLookup(id string) (sttSpec, bool) {
+	for _, m := range sttModels {
+		if m.ID == id {
+			return m, true
+		}
+	}
+	return sttSpec{}, false
+}
+
 func configDefaults() Config {
 	return Config{
 		Port:   defaultPort,
 		APIKey: "",
+		Model:  defaultModelID,
 	}
 }
+
+// modelSpec is always found: validation only ever stores an allowlisted ID.
+func (c Config) modelSpec() sttSpec { m, _ := sttLookup(c.Model); return m }
 
 // configFilePath honours XDG_CONFIG_HOME, matching v4's resolution order.
 func configFilePath() string {
@@ -154,7 +193,7 @@ func configWarn(field, reason string) {
 	logf("CONFIG", "%s: %s", field, reason)
 }
 
-// configValidate applies the two known fields over the defaults, warning about
+// configValidate applies the four known fields over the defaults, warning about
 // (and then ignoring) values of the wrong type or out of range. Every other
 // field is not touched at all, so both v4 configs and configs written by
 // earlier v5 installers load cleanly.
@@ -177,6 +216,28 @@ func configValidate(raw map[string]json.RawMessage) Config {
 		} else {
 			configWarn("api_key", "must be a string, using default")
 		}
+	}
+
+	if v, ok := raw["model"]; ok {
+		var s string
+		json.Unmarshal(v, &s) // anything but an allowlisted ID warns below
+		if _, found := sttLookup(s); found {
+			cfg.Model = s
+		} else {
+			configWarn("model", fmt.Sprintf("%q is not one of the choices listed in %s, using %s", s, configFilePath(), cfg.Model))
+		}
+	}
+
+	if v, ok := raw["vocabulary"]; ok {
+		if err := json.Unmarshal(v, &cfg.Vocabulary); err != nil {
+			configWarn("vocabulary", "must be an array of strings, ignoring it")
+			cfg.Vocabulary = nil
+		}
+	}
+
+	// A vocabulary the model discards is billed on every dictation for nothing.
+	if spec := cfg.modelSpec(); len(cfg.Vocabulary) > 0 && !spec.Vocabulary {
+		configWarn("vocabulary", spec.ID+" ignores it -- see the model list in "+configFilePath())
 	}
 
 	return cfg

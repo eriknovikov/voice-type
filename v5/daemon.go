@@ -56,7 +56,7 @@ func newDaemon(cfg Config, res *resources) *daemon {
 	return &daemon{
 		cfg:  cfg,
 		res:  res,
-		stt:  newSTTClient(configAPIKey(cfg), sttModel),
+		stt:  newSTTClient(configAPIKey(cfg), cfg.modelSpec(), cfg.Vocabulary),
 		done: make(chan struct{}),
 	}
 }
@@ -280,7 +280,8 @@ func (d *daemon) Run() error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		logf("DAEMON", "listening on http://127.0.0.1:%d (model %s)", d.cfg.Port, sttModel)
+		logf("DAEMON", "listening on http://127.0.0.1:%d (model %s, %d vocabulary terms)",
+			d.cfg.Port, d.cfg.Model, len(d.cfg.Vocabulary))
 		if err := d.srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}

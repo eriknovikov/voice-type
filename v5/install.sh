@@ -313,8 +313,15 @@ write_config() {
         _json_key=$(printf '%s' "$API_KEY" | sed 's/\\/\\\\/g; s/"/\\"/g')
         printf '{\n    "api_key": "%s", // or set OPENROUTER_API_KEY, which wins\n' "$_json_key" > "$CONFIG_TMP"
         cat >> "$CONFIG_TMP" << 'EOF'
-    "port": 3232 // int 1024-65535
-    // These two are the whole config. Everything else is a tuned default.
+    "port": 3232, // int 1024-65535
+    // These models read "vocabulary": gpt-4o-transcribe (~$0.22/hr, the most
+    // accurate), whisper-large-v3 (~$0.03/hr, ~1s slower), gpt-transcribe,
+    // whisper-1, whisper-large-v3-turbo, gpt-4o-mini-transcribe. These ignore
+    // it, for less: parakeet-v3 (v5.1's model), whisper-large-v3-turbo-groq.
+    "model": "gpt-4o-transcribe",
+    // Names and jargon, sent with the audio so they are spelled right as they
+    // are transcribed. Every term is billed on every dictation.
+    "vocabulary": [] // e.g. ["Numbero", "kubectl", "Erik Novikov"]
     //
     // Keyboard shortcuts, set in your desktop environment:
     //   Dictate:            curl -s http://localhost:3232/toggle

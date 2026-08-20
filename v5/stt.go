@@ -60,27 +60,30 @@ func (e *sttError) Retryable() bool {
 }
 
 type sttClient struct {
-	apiKey   string
-	model    string
-	endpoint string
-	http     *http.Client
-	// useJSON selects the base64 JSON encoding instead of multipart. Multipart
-	// is preferred -- base64 inflates the payload by 33% -- but both encodings
-	// are documented, so the fallback stays available.
+	apiKey     string
+	model      sttSpec
+	vocabulary []string
+	endpoint   string
+	http       *http.Client
+	// useJSON selects the base64 JSON encoding instead of multipart. It costs
+	// 33% payload, but OpenRouter reads the provider block only from JSON.
 	useJSON bool
 }
 
-func newSTTClient(apiKey, model string) *sttClient {
+func newSTTClient(apiKey string, model sttSpec, vocabulary []string) *sttClient {
 	return &sttClient{
-		apiKey:   apiKey,
-		model:    model,
-		endpoint: sttEndpoint,
-		http:     &http.Client{Timeout: 120 * time.Second},
+		apiKey:     apiKey,
+		model:      model,
+		vocabulary: vocabulary,
+		endpoint:   sttEndpoint,
+		http:       &http.Client{Timeout: 120 * time.Second},
+		useJSON:    true,
 	}
 }
 
-// sttBuildMultipart produces an OpenAI-style file upload.
-func sttBuildMultipart(model string, wav []byte) (body *bytes.Buffer, contentType string, err error) {
+// sttBuildMultipart produces an OpenAI-style file upload. It cannot carry the
+// provider block, so it is a diagnostic path, not the one dictation takes.
+func sttBuildMultipart(model sttSpec, wav []byte) (body *bytes.Buffer, contentType string, err error) {
 	body = &bytes.Buffer{}
 	w := multipart.NewWriter(body)
 
@@ -91,7 +94,7 @@ func sttBuildMultipart(model string, wav []byte) (body *bytes.Buffer, contentTyp
 	if _, err := fw.Write(wav); err != nil {
 		return nil, "", err
 	}
-	if err := w.WriteField("model", model); err != nil {
+	if err := w.WriteField("model", model.Slug); err != nil {
 		return nil, "", err
 	}
 	if err := w.WriteField("language", "en"); err != nil {
@@ -107,14 +110,27 @@ func sttBuildMultipart(model string, wav []byte) (body *bytes.Buffer, contentTyp
 }
 
 // sttBuildJSON produces the input_audio encoding: raw base64, no data: prefix.
-func sttBuildJSON(model string, wav []byte) ([]byte, error) {
+// The vocabulary goes in the provider's own prompt option, framed as a labelled
+// list because a bare one measurably regressed accuracy.
+func sttBuildJSON(model sttSpec, vocabulary []string, wav []byte) ([]byte, error) {
+	provider := map[string]any{"only": []string{model.Provider}}
+	if model.Vocabulary && len(vocabulary) > 0 {
+		provider["options"] = map[string]any{model.Provider: map[string]any{
+			"prompt": "Vocabulary: " + strings.Join(vocabulary, ", ") + ".",
+		}}
+	}
+
 	payload := map[string]any{
-		"model": model,
+		"model": model.Slug,
 		"input_audio": map[string]string{
 			"data":   base64.StdEncoding.EncodeToString(wav),
 			"format": "wav",
 		},
 		"language": "en",
+		// LLM transcribers sample, so the same audio would otherwise come back
+		// worded differently from one dictation to the next.
+		"temperature": 0,
+		"provider":    provider,
 	}
 	return json.Marshal(payload)
 }
@@ -178,7 +194,7 @@ func (c *sttClient) transcribeOnce(wav []byte) (sttResult, error) {
 
 	if c.useJSON {
 		var payload []byte
-		payload, err = sttBuildJSON(c.model, wav)
+		payload, err = sttBuildJSON(c.model, c.vocabulary, wav)
 		if err != nil {
 			return sttResult{}, &sttBuildError{err}
 		}

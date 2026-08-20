@@ -36,9 +36,13 @@ func TestLiveTranscribe(t *testing.T) {
 	wav := WavEncode(samples)
 	t.Logf("audio: %.2fs, wav %d bytes", wavDurationSeconds(samples), len(wav))
 
-	model := os.Getenv("VOICE_TYPE_MODEL")
-	if model == "" {
-		model = sttModel
+	cfg := configLoad()
+	if id := os.Getenv("VOICE_TYPE_MODEL"); id != "" {
+		cfg.Model = id
+	}
+	model, ok := sttLookup(cfg.Model)
+	if !ok {
+		t.Fatalf("model %q is not on the allowlist", cfg.Model)
 	}
 
 	for _, mode := range []struct {
@@ -49,7 +53,7 @@ func TestLiveTranscribe(t *testing.T) {
 		{"json-base64", true},
 	} {
 		t.Run(mode.name, func(t *testing.T) {
-			c := newSTTClient(key, model)
+			c := newSTTClient(key, model, cfg.Vocabulary)
 			c.useJSON = mode.useJSON
 
 			t0 := time.Now()
