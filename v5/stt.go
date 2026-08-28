@@ -2,12 +2,12 @@ package voicetype
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"strings"
 	"time"
@@ -65,9 +65,6 @@ type sttClient struct {
 	vocabulary []string
 	endpoint   string
 	http       *http.Client
-	// useJSON selects the base64 JSON encoding instead of multipart. It costs
-	// 33% payload, but OpenRouter reads the provider block only from JSON.
-	useJSON bool
 }
 
 func newSTTClient(apiKey string, model sttSpec, vocabulary []string) *sttClient {
@@ -77,46 +74,32 @@ func newSTTClient(apiKey string, model sttSpec, vocabulary []string) *sttClient 
 		vocabulary: vocabulary,
 		endpoint:   sttEndpoint,
 		http:       &http.Client{Timeout: 120 * time.Second},
-		useJSON:    true,
 	}
 }
 
-// sttBuildMultipart produces an OpenAI-style file upload. It cannot carry the
-// provider block, so it is a diagnostic path, not the one dictation takes.
-func sttBuildMultipart(model sttSpec, wav []byte) (body *bytes.Buffer, contentType string, err error) {
-	body = &bytes.Buffer{}
-	w := multipart.NewWriter(body)
-
-	fw, err := w.CreateFormFile("file", "audio.wav")
-	if err != nil {
-		return nil, "", err
+func sttVocabularyPrompt(model sttSpec, vocabulary []string) string {
+	if !model.Vocabulary || len(vocabulary) == 0 {
+		return ""
 	}
-	if _, err := fw.Write(wav); err != nil {
-		return nil, "", err
-	}
-	if err := w.WriteField("model", model.Slug); err != nil {
-		return nil, "", err
-	}
-	if err := w.WriteField("language", "en"); err != nil {
-		return nil, "", err
-	}
-	if err := w.WriteField("response_format", "json"); err != nil {
-		return nil, "", err
-	}
-	if err := w.Close(); err != nil {
-		return nil, "", err
-	}
-	return body, w.FormDataContentType(), nil
+	return "Vocabulary: " + strings.Join(vocabulary, ", ") + "."
 }
 
-// sttBuildJSON produces the input_audio encoding: raw base64, no data: prefix.
-// The vocabulary goes in the provider's own prompt option, framed as a labelled
-// list because a bare one measurably regressed accuracy.
+func normalizeTranscript(text string) string {
+	return strings.ToLower(strings.Join(strings.Fields(text), " "))
+}
+
+// vocabularyEcho reports whole responses that contain only the vocabulary
+// conditioning text. A vocabulary word inside real prose is never enough.
+func vocabularyEcho(text, prompt string) bool {
+	return prompt != "" && normalizeTranscript(text) == normalizeTranscript(prompt)
+}
+
+// OpenRouter reads provider options only from its base64 JSON encoding.
 func sttBuildJSON(model sttSpec, vocabulary []string, wav []byte) ([]byte, error) {
 	provider := map[string]any{"only": []string{model.Provider}}
-	if model.Vocabulary && len(vocabulary) > 0 {
+	if prompt := sttVocabularyPrompt(model, vocabulary); prompt != "" {
 		provider["options"] = map[string]any{model.Provider: map[string]any{
-			"prompt": "Vocabulary: " + strings.Join(vocabulary, ", ") + ".",
+			"prompt": prompt,
 		}}
 	}
 
@@ -135,18 +118,21 @@ func sttBuildJSON(model sttSpec, vocabulary []string, wav []byte) ([]byte, error
 	return json.Marshal(payload)
 }
 
-// sttMaxAttempts bounds retries. The upstream provider returns intermittent
-// 503s -- measured roughly 1 in 3 requests during Phase 0 -- so a single
-// attempt would drop dictations the user already spoke.
+// Retry transient failures rather than dropping an already-spoken dictation.
 const sttMaxAttempts = 4
 
 // Transcribe uploads a WAV and returns the transcript, retrying transient
 // failures with backoff.
 func (c *sttClient) Transcribe(wav []byte) (sttResult, error) {
+	return c.TranscribeContext(context.Background(), wav)
+}
+
+// TranscribeContext is Transcribe with cancellation for daemon shutdown.
+func (c *sttClient) TranscribeContext(ctx context.Context, wav []byte) (sttResult, error) {
 	var lastErr error
 
 	for attempt := 1; attempt <= sttMaxAttempts; attempt++ {
-		res, err := c.transcribeOnce(wav)
+		res, err := c.transcribeOnce(ctx, wav)
 		if err == nil {
 			if attempt > 1 {
 				logf("STT", "succeeded on attempt %d", attempt)
@@ -154,6 +140,9 @@ func (c *sttClient) Transcribe(wav []byte) (sttResult, error) {
 			return res, nil
 		}
 		lastErr = err
+		if ctx.Err() != nil {
+			return sttResult{}, ctx.Err()
+		}
 
 		if !sttShouldRetry(err) || attempt == sttMaxAttempts {
 			break
@@ -162,7 +151,13 @@ func (c *sttClient) Transcribe(wav []byte) (sttResult, error) {
 		// 400ms, 800ms, 1600ms
 		backoff := time.Duration(400*(1<<(attempt-1))) * time.Millisecond
 		logf("STT", "attempt %d/%d failed (%v) -- retrying in %v", attempt, sttMaxAttempts, err, backoff)
-		time.Sleep(backoff)
+		timer := time.NewTimer(backoff)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return sttResult{}, ctx.Err()
+		}
 	}
 
 	return sttResult{}, lastErr
@@ -188,34 +183,16 @@ func (e *sttBuildError) Error() string { return e.err.Error() }
 func (e *sttBuildError) Unwrap() error { return e.err }
 
 // transcribeOnce performs a single upload attempt.
-func (c *sttClient) transcribeOnce(wav []byte) (sttResult, error) {
-	var req *http.Request
-	var err error
-
-	if c.useJSON {
-		var payload []byte
-		payload, err = sttBuildJSON(c.model, c.vocabulary, wav)
-		if err != nil {
-			return sttResult{}, &sttBuildError{err}
-		}
-		req, err = http.NewRequest(http.MethodPost, c.endpoint, bytes.NewReader(payload))
-		if err != nil {
-			return sttResult{}, &sttBuildError{err}
-		}
-		req.Header.Set("Content-Type", "application/json")
-	} else {
-		var body *bytes.Buffer
-		var ct string
-		body, ct, err = sttBuildMultipart(c.model, wav)
-		if err != nil {
-			return sttResult{}, &sttBuildError{err}
-		}
-		req, err = http.NewRequest(http.MethodPost, c.endpoint, body)
-		if err != nil {
-			return sttResult{}, &sttBuildError{err}
-		}
-		req.Header.Set("Content-Type", ct)
+func (c *sttClient) transcribeOnce(ctx context.Context, wav []byte) (sttResult, error) {
+	payload, err := sttBuildJSON(c.model, c.vocabulary, wav)
+	if err != nil {
+		return sttResult{}, &sttBuildError{err}
 	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return sttResult{}, &sttBuildError{err}
+	}
+	req.Header.Set("Content-Type", "application/json")
 
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 

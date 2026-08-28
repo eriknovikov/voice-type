@@ -13,6 +13,7 @@ set -eu
 
 REPO="eriknovikov/voice-type"
 BINARY_NAME="voice-type"
+MAIN_PKG="cmd/voice-type"
 PORT=3232
 
 MODE="prod"          # prod | version | local
@@ -145,7 +146,7 @@ guard_major_version() {
     fi
 
     log_error "The latest published release is $_tag -- no v5 release exists yet."
-    if [ -f go.mod ] && [ -f main.go ]; then
+    if [ -f go.mod ] && [ -f "$MAIN_PKG/main.go" ]; then
         log_error "You are in a source tree; build and install it with:  v5/install.sh --local"
     else
         log_error "This installer only installs v5; retry after its first release is published."
@@ -181,14 +182,14 @@ build_local() {
     if [ -f "$_dir/go.mod" ]; then
         cd "$_dir"
     fi
-    if [ ! -f "go.mod" ] || [ ! -f "main.go" ]; then
-        log_error "--local must run from the v5 source tree (no go.mod/main.go here)."
+    if [ ! -f "go.mod" ] || [ ! -f "$MAIN_PKG/main.go" ]; then
+        log_error "--local must run from the v5 source tree (no go.mod/$MAIN_PKG/main.go here)."
         exit 1
     fi
     _ver="dev"
     [ -f VERSION ] && _ver=$(cat VERSION)
     log_info "Building $BINARY_NAME $_ver from source..."
-    CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=$_ver" -o "$TMP_DIR/$BINARY_NAME" ./cmd/voice-type
+    CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=$_ver" -o "$TMP_DIR/$BINARY_NAME" "./$MAIN_PKG"
     install_binary_file "$TMP_DIR/$BINARY_NAME"
 }
 
@@ -313,19 +314,15 @@ write_config() {
         _json_key=$(printf '%s' "$API_KEY" | sed 's/\\/\\\\/g; s/"/\\"/g')
         printf '{\n    "api_key": "%s", // or set OPENROUTER_API_KEY, which wins\n' "$_json_key" > "$CONFIG_TMP"
         cat >> "$CONFIG_TMP" << 'EOF'
-    "port": 3232, // int 1024-65535
-    // These models read "vocabulary": gpt-4o-transcribe (~$0.22/hr, the most
-    // accurate), whisper-large-v3 (~$0.03/hr, ~1s slower), gpt-transcribe,
-    // whisper-1, whisper-large-v3-turbo, gpt-4o-mini-transcribe. These ignore
-    // it, for less: parakeet-v3 (v5.1's model), whisper-large-v3-turbo-groq.
+    "port": 3232,           // int 1024-65535
+
+    // Run `voice-type models` for choices, prices, and vocabulary support.
     "model": "gpt-4o-transcribe",
-    // Names and jargon, sent with the audio so they are spelled right as they
-    // are transcribed. Every term is billed on every dictation.
-    "vocabulary": [] // e.g. ["Numbero", "kubectl", "Erik Novikov"]
-    //
-    // Keyboard shortcuts, set in your desktop environment:
-    //   Dictate:            curl -s http://localhost:3232/toggle
-    //   Start/stop daemon:  sh -c "curl -s http://localhost:3232/exit || voice-type"
+
+    // Names and jargon the model would otherwise misspell. Keep this short.
+    "vocabulary": [],
+
+    // Hand edits take effect on the next dictation; voice-type never writes it.
 }
 EOF
     )

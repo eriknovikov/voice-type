@@ -6,25 +6,29 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
 
 // sessionState is the dictation state machine:
 //
-//	idle --/start--> recording --/stop--> transcribing --> idle
-//	                     |                      |
-//	                     +--- duration cap ------+
+//	idle --/start--> checking --> recording --/stop--> transcribing --> idle
+//	                                   |                      |
+//	                                   +--- duration cap ------+
 type sessionState int
 
 const (
 	stateIdle sessionState = iota
+	stateChecking
 	stateRecording
 	stateTranscribing
 )
 
 func (s sessionState) String() string {
 	switch s {
+	case stateChecking:
+		return "checking"
 	case stateRecording:
 		return "recording"
 	case stateTranscribing:
@@ -44,21 +48,50 @@ type daemon struct {
 	mu    sync.Mutex
 	state sessionState
 	// capTimer force-stops a session at the fixed duration cap.
-	capTimer     *time.Timer
-	shuttingDown bool
-	sessionWG    sync.WaitGroup
-	sessionID    uint64
+	capTimer      *time.Timer
+	shuttingDown  bool
+	sessionWG     sync.WaitGroup
+	sessionID     uint64
+	sessionCtx    context.Context
+	sessionCancel context.CancelFunc
+	checkOnline   func(context.Context) error
 
 	exitOnce sync.Once
 }
 
 func newDaemon(cfg Config, res *resources) *daemon {
 	return &daemon{
-		cfg:  cfg,
-		res:  res,
-		stt:  newSTTClient(configAPIKey(cfg), cfg.modelSpec(), cfg.Vocabulary),
-		done: make(chan struct{}),
+		cfg:         cfg,
+		res:         res,
+		stt:         newSTTClient(configAPIKey(cfg), cfg.modelSpec(), cfg.Vocabulary),
+		done:        make(chan struct{}),
+		checkOnline: checkConnectivity,
 	}
+}
+
+const connectivityURL = "https://connectivitycheck.gstatic.com/generate_204"
+
+var connectivityClient = &http.Client{
+	Timeout: time.Second,
+	CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
+func checkConnectivity(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, connectivityURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := connectivityClient.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("connectivity check returned HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
@@ -71,33 +104,120 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 // already in flight.
 func (d *daemon) startSession() (int, string) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if d.shuttingDown {
+		d.mu.Unlock()
 		return http.StatusConflict, "shutting down"
 	}
 	if d.state != stateIdle {
-		return http.StatusConflict, fmt.Sprintf("already %s", d.state)
+		state := d.state
+		d.mu.Unlock()
+		return http.StatusConflict, fmt.Sprintf("already %s", state)
 	}
 
-	if err := d.res.Recorder.Start(); err != nil {
+	d.reloadConfig()
+	d.state = stateChecking
+	d.sessionID++
+	sessionID := d.sessionID
+	ctx, cancel := context.WithCancel(context.Background())
+	d.sessionCtx = ctx
+	d.sessionCancel = cancel
+	d.sessionWG.Add(1)
+	d.mu.Unlock()
+
+	started := false
+	defer func() {
+		if !started {
+			d.mu.Lock()
+			if d.sessionID == sessionID && d.state == stateChecking {
+				d.state = stateIdle
+				d.sessionCtx = nil
+				d.sessionCancel = nil
+			}
+			d.mu.Unlock()
+			cancel()
+		}
+		d.sessionWG.Done()
+	}()
+
+	if err := d.checkOnline(ctx); err != nil {
+		d.mu.Lock()
+		cancelled := ctx.Err() != nil || d.shuttingDown || d.sessionID != sessionID
+		d.mu.Unlock()
+		if cancelled {
+			return http.StatusConflict, "shutting down"
+		}
+		logf("NETWORK", "offline: %v", err)
+
+		typeErr := d.res.Typer.TypeContext(ctx, "?")
+		if ctx.Err() != nil {
+			return http.StatusConflict, "shutting down"
+		}
+		if typeErr != nil {
+			logf("OUTPUT", "offline marker failed: %v", typeErr)
+			return http.StatusInternalServerError, fmt.Sprintf("offline; type marker: %v", typeErr)
+		}
+		return http.StatusServiceUnavailable, "offline"
+	}
+
+	d.mu.Lock()
+	if d.shuttingDown || ctx.Err() != nil || d.sessionID != sessionID || d.state != stateChecking {
+		d.mu.Unlock()
+		return http.StatusConflict, "shutting down"
+	}
+	d.mu.Unlock()
+
+	err := d.res.Recorder.Start()
+	d.mu.Lock()
+	if err != nil {
+		d.mu.Unlock()
 		logf("AUDIO", "start failed: %v", err)
 		return http.StatusInternalServerError, err.Error()
 	}
+	if d.shuttingDown || ctx.Err() != nil || d.sessionID != sessionID || d.state != stateChecking {
+		d.mu.Unlock()
+		d.res.Recorder.Stop()
+		return http.StatusConflict, "shutting down"
+	}
 
 	d.state = stateRecording
-	d.sessionID++
-	sessionID := d.sessionID
 	d.capTimer = time.AfterFunc(maxDurationSeconds*time.Second, func() {
 		d.stopSessionFor(sessionID)
 	})
+	started = true
+	d.mu.Unlock()
 
 	logf("AUDIO", "recording")
 	return http.StatusOK, "recording"
 }
 
+// reloadConfig re-reads the config file so a hand edit applies to this
+// dictation without a restart. Callers hold d.mu. The bound port is the one
+// exception: the listener is already up on the old one.
+func (d *daemon) reloadConfig() {
+	cfg, err := configReadStrict()
+	if err != nil {
+		configWarn("file", err.Error()+" -- keeping current configuration")
+		return
+	}
+	lastWarning.Delete("file")
+	cfg.Port = d.cfg.Port
+	d.cfg = cfg
+
+	d.stt.apiKey, d.stt.model, d.stt.vocabulary = configAPIKey(cfg), cfg.modelSpec(), cfg.Vocabulary
+}
+
 // stopSession moves recording -> transcribing -> idle. It runs on the caller's
 // goroutine so /stop returns only once the text has landed.
 func (d *daemon) stopSession() (int, string) {
+	d.mu.Lock()
+	if d.state == stateChecking {
+		if d.sessionCancel != nil {
+			d.sessionCancel()
+		}
+		d.mu.Unlock()
+		return http.StatusOK, "cancelled"
+	}
+	d.mu.Unlock()
 	return d.stopSessionFor(0)
 }
 
@@ -114,6 +234,8 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 	}
 	d.sessionWG.Add(1)
 	d.state = stateTranscribing
+	ctx := d.sessionCtx
+	stt := d.stt
 	if sessionID != 0 {
 		logf("AUDIO", "duration cap of %ds reached -- stopping", maxDurationSeconds)
 	}
@@ -126,17 +248,28 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 	defer func() {
 		d.mu.Lock()
 		d.state = stateIdle
+		if d.sessionCancel != nil {
+			d.sessionCancel()
+		}
+		d.sessionCtx = nil
+		d.sessionCancel = nil
 		d.mu.Unlock()
 		d.sessionWG.Done()
 	}()
 
 	samples := d.res.Recorder.Stop()
+	if err := ctx.Err(); err != nil {
+		logf("AUDIO", "recording discarded during shutdown")
+		return http.StatusOK, "cancelled"
+	}
 	captured := wavDurationSeconds(samples)
 	if len(samples) == 0 {
 		logf("AUDIO", "no audio captured")
 		return http.StatusOK, "no audio captured"
 	}
-	logf("AUDIO", "captured %.2fs (%d samples)", captured, len(samples))
+	levels := measureAudioLevels(samples)
+	logf("AUDIO", "captured %.2fs (%d samples); peak RMS %.0f, noise floor %.0f",
+		captured, len(samples), levels.peakRMS, levels.noiseFloor)
 
 	if !worthUploading(samples) {
 		logf("AUDIO", "no speech in %.2fs -- discarded", captured)
@@ -150,10 +283,18 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 	}
 
 	wav := WavEncode(samples)
+	if err := ctx.Err(); err != nil {
+		logf("STT", "cancelled before upload")
+		return http.StatusOK, "cancelled"
+	}
 
 	t0 := time.Now()
-	result, err := d.stt.Transcribe(wav)
+	result, err := stt.TranscribeContext(ctx, wav)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			logf("STT", "cancelled during shutdown")
+			return http.StatusOK, "cancelled"
+		}
 		return d.handleSTTError(err, wav)
 	}
 	logf("STT", "%.2fs audio -> %d chars in %v (billed %.0fs, $%.6f)",
@@ -164,8 +305,32 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 		return http.StatusOK, ""
 	}
 
+	prompt := sttVocabularyPrompt(stt.model, stt.vocabulary)
+	if vocabularyEcho(result.Text, prompt) {
+		retained := ""
+		if path, retainErr := retainWAV(wav); retainErr == nil {
+			retained = "audio retained at " + path
+		} else {
+			retained = fmt.Sprintf("could not retain audio: %v", retainErr)
+		}
+		logf("STT", "rejected vocabulary echo after %.2fs capture (peak RMS %.0f, noise floor %.0f) -- %s",
+			captured, levels.peakRMS, levels.noiseFloor, retained)
+		return http.StatusBadGateway, "transcription matched the vocabulary prompt; " + retained
+	}
+	if strings.HasPrefix(normalizeTranscript(result.Text), "vocabulary:") {
+		logf("STT", "possible vocabulary echo contained other words; preserving transcript: %s", truncate(result.Text, 120))
+	}
+	if err := ctx.Err(); err != nil {
+		logf("OUTPUT", "cancelled before insertion")
+		return http.StatusOK, "cancelled"
+	}
+
 	outputStart := time.Now()
-	if err := d.res.Typer.Paste(result.Text); err != nil {
+	if err := d.res.Typer.PasteContext(ctx, result.Text); err != nil {
+		if errors.Is(err, context.Canceled) {
+			logf("OUTPUT", "cancelled before insertion")
+			return http.StatusOK, "cancelled"
+		}
 		logf("OUTPUT", "paste failed: %v", err)
 		return http.StatusInternalServerError, fmt.Sprintf("paste failed: %v", err)
 	}
@@ -214,7 +379,13 @@ func (d *daemon) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "state": d.currentState().String()})
+		d.mu.Lock()
+		cfg, state := d.cfg, d.state
+		d.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": "ok", "state": state.String(),
+			"model": cfg.Model, "vocabulary": len(cfg.Vocabulary),
+		})
 	})
 
 	mux.HandleFunc("/start", func(w http.ResponseWriter, r *http.Request) {
@@ -228,7 +399,8 @@ func (d *daemon) routes() *http.ServeMux {
 	})
 
 	mux.HandleFunc("/toggle", func(w http.ResponseWriter, r *http.Request) {
-		if d.currentState() == stateRecording {
+		state := d.currentState()
+		if state == stateChecking || state == stateRecording {
 			status, msg := d.stopSession()
 			writeJSON(w, status, map[string]string{"status": statusWord(status), "text": msg})
 			return
@@ -261,10 +433,22 @@ func (d *daemon) shutdown() {
 		d.mu.Lock()
 		d.shuttingDown = true
 		state := d.state
+		if d.sessionCancel != nil {
+			d.sessionCancel()
+		}
+		if d.capTimer != nil {
+			d.capTimer.Stop()
+			d.capTimer = nil
+		}
+		if state == stateRecording || state == stateChecking {
+			d.state = stateIdle
+			d.sessionID++
+		}
 		d.mu.Unlock()
 
 		if state == stateRecording {
-			d.stopSession()
+			d.res.Recorder.Stop()
+			logf("AUDIO", "recording discarded during shutdown")
 		}
 		d.sessionWG.Wait()
 		close(d.done)

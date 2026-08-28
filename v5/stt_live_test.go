@@ -45,31 +45,17 @@ func TestLiveTranscribe(t *testing.T) {
 		t.Fatalf("model %q is not on the allowlist", cfg.Model)
 	}
 
-	for _, mode := range []struct {
-		name    string
-		useJSON bool
-	}{
-		{"multipart", false},
-		{"json-base64", true},
-	} {
-		t.Run(mode.name, func(t *testing.T) {
-			c := newSTTClient(key, model, cfg.Vocabulary)
-			c.useJSON = mode.useJSON
+	c := newSTTClient(key, model, cfg.Vocabulary)
+	t0 := time.Now()
+	res, err := c.Transcribe(wav)
+	if err != nil {
+		t.Fatalf("transcribe: %v", err)
+	}
 
-			t0 := time.Now()
-			res, err := c.Transcribe(wav)
-			elapsed := time.Since(t0)
-			if err != nil {
-				t.Fatalf("transcribe: %v", err)
-			}
-
-			t.Logf("latency: %v", elapsed.Round(time.Millisecond))
-			t.Logf("billed:  %.0fs  $%.6f", res.Seconds, res.Cost)
-			t.Logf("text:    %q", res.Text)
-
-			if res.Text == "" {
-				t.Error("empty transcript")
-			}
-		})
+	t.Logf("latency: %v", time.Since(t0).Round(time.Millisecond))
+	t.Logf("billed:  %.0fs  $%.6f", res.Seconds, res.Cost)
+	t.Logf("text:    %q", res.Text)
+	if res.Text == "" {
+		t.Error("empty transcript")
 	}
 }

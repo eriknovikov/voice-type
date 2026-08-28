@@ -3,6 +3,7 @@ package voicetype
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/jfreymuth/pulse"
 )
@@ -31,7 +32,10 @@ type audioRecorder interface {
 }
 
 func NewRecorder() (*Recorder, error) {
-	client, err := pulse.NewClient(pulse.ClientApplicationName("voice-type"))
+	client, err := pulse.NewClient(
+		pulse.ClientApplicationName("voice-type"),
+		pulse.ClientTimeout(time.Second),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("connect to PulseAudio: %w", err)
 	}
@@ -105,11 +109,4 @@ func (r *Recorder) Stop() []int16 {
 	copy(out, r.samples)
 	r.samples = r.samples[:0]
 	return out
-}
-
-// SampleCount is the live length of the capture buffer, used for the duration cap.
-func (r *Recorder) SampleCount() int {
-	r.bufMu.Lock()
-	defer r.bufMu.Unlock()
-	return len(r.samples)
 }

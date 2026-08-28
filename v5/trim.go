@@ -41,9 +41,12 @@ const (
 // worthUploading.
 const (
 	minCaptureSeconds = 0.35 // shorter than any real word: a fumbled hotkey
-	speechGateSeconds = 2.0  // above this a capture is intentional, always upload
+	// A single loud frame can be a click or a bumped microphone. Requiring 80 ms
+	// still admits short words while rejecting isolated transients.
+	speechMinActiveFrames = 4
 	// Voiced speech crosses zero much less often than broadband room noise. This
 	// rescues an utterance that starts before the capture has a quiet floor.
+	speechMinZeroCrossingRate = 0.004
 	speechMaxZeroCrossingRate = 0.20
 )
 
@@ -52,26 +55,41 @@ const (
 // pointing at a quiet room. Such a capture costs a blocked /stop, and risks
 // typing whatever the model makes of room tone into the focused window.
 //
-// Two rules keep it from eating real dictation. Only short captures are judged
-// at all -- anything past speechGateSeconds was deliberate, and a long recording
-// wrongly dropped costs the user far more than an unnecessary upload. And the
-// gate errs toward uploading: a digitally silent frame pins the estimated floor
-// to zero and the gate falls back to trimMinGate, which speech clears by a wide
-// margin. Same asymmetry as TrimSilence -- over-sending costs a fraction of a
-// cent, over-dropping costs the user their words.
+// The speech check runs on every capture. Duration alone never makes room tone
+// worth uploading: a forgotten open microphone must not reach OpenRouter.
 func worthUploading(samples []int16) bool {
 	if wavDurationSeconds(samples) < minCaptureSeconds {
 		return false
 	}
-	if wavDurationSeconds(samples) >= speechGateSeconds {
-		return true
-	}
 	return hasSpeech(samples)
 }
 
-// hasSpeech reports whether any frame clears the noise gate estimated over the
-// whole capture. Unlike TrimSilence this needs no per-end estimate: it asks
-// whether the clip contains an utterance at all, not where one begins.
+type audioLevels struct {
+	peakRMS    float64
+	noiseFloor float64
+}
+
+// measureAudioLevels uses the same 20 ms frames and quiet-frame rank as the
+// speech gate, making its log output directly comparable to that decision.
+func measureAudioLevels(samples []int16) audioLevels {
+	if len(samples) == 0 {
+		return audioLevels{}
+	}
+	frames := (len(samples) + trimFrameSamples - 1) / trimFrameSamples
+	rms := make([]float64, 0, frames)
+	for start := 0; start < len(samples); start += trimFrameSamples {
+		end := min(start+trimFrameSamples, len(samples))
+		rms = append(rms, frameRMS(samples[start:end]))
+	}
+	peak := slices.Max(rms)
+	slices.Sort(rms)
+	floor := rms[min(trimFloorRank, len(rms)-1)]
+	return audioLevels{peakRMS: peak, noiseFloor: floor}
+}
+
+// hasSpeech reports whether sustained frames clear the noise gate estimated
+// over the whole capture. Unlike TrimSilence this needs no per-end estimate: it
+// asks whether the clip contains an utterance at all, not where one begins.
 func hasSpeech(samples []int16) bool {
 	frames := len(samples) / trimFrameSamples
 	if frames == 0 {
@@ -84,14 +102,24 @@ func hasSpeech(samples []int16) bool {
 	}
 
 	peak := slices.Max(rms)
-	if peak >= silenceGate(rms) {
-		return true
+	gate := silenceGate(rms)
+	activeFrames := 0
+	for i, level := range rms {
+		if level >= gate {
+			activeFrames++
+			if activeFrames >= speechMinActiveFrames {
+				start := (i - activeFrames + 1) * trimFrameSamples
+				end := (i + 1) * trimFrameSamples
+				return hasVoicedCadence(samples[start:end])
+			}
+		} else {
+			activeFrames = 0
+		}
 	}
-
 	// A clip that begins immediately with sustained speech has no quiet frames
 	// from which to estimate a floor. Voiced cadence provides a conservative
 	// fallback without treating all steady room noise as speech.
-	return peak >= trimMinGate && hasVoicedCadence(samples)
+	return gate > peak && peak >= trimMinGate && hasVoicedCadence(samples)
 }
 
 func hasVoicedCadence(samples []int16) bool {
@@ -109,7 +137,11 @@ func hasVoicedCadence(samples []int16) bool {
 		}
 		previous = sample
 	}
-	return transitions > 0 && float64(crossings)/float64(transitions) <= speechMaxZeroCrossingRate
+	if transitions == 0 {
+		return false
+	}
+	rate := float64(crossings) / float64(transitions)
+	return rate >= speechMinZeroCrossingRate && rate <= speechMaxZeroCrossingRate
 }
 
 // TrimSilence returns the span of samples between the first and last frame that

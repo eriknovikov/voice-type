@@ -267,6 +267,7 @@ func TestWorthUploadingKeepsSpeech(t *testing.T) {
 		"no quiet lead-in": speech(0.6, 800),
 		"very quiet onset": speech(0.6, 200),
 		"normal sentence":  concat(silence(0.5, 200), speech(1.2, 6000), silence(0.3, 200)),
+		"noisy lead-in":    concat(silence(10, 500), speech(0.6, 6000)),
 	}
 
 	for name, in := range cases {
@@ -276,11 +277,31 @@ func TestWorthUploadingKeepsSpeech(t *testing.T) {
 	}
 }
 
-func TestWorthUploadingNeverJudgesLongCaptures(t *testing.T) {
-	// Past the ceiling the capture was deliberate. Even if the gate reads it as
-	// silence, dropping it would cost the user their words.
-	if !worthUploading(silence(speechGateSeconds+0.5, 0)) {
-		t.Error("long silent capture discarded, want uploaded unjudged")
+func TestLongSilentCaptureIsDiscarded(t *testing.T) {
+	for name, samples := range map[string][]int16{
+		"digital silence": silence(30, 0),
+		"room tone":       silence(30, 300),
+		"loud room tone":  silence(30, 4000),
+	} {
+		if worthUploading(samples) {
+			t.Errorf("%s uploaded despite containing no speech", name)
+		}
+	}
+}
+
+func TestIsolatedTransientIsNotSpeech(t *testing.T) {
+	for name, frames := range map[string]int{
+		"single frame":         1,
+		"80ms microphone bump": speechMinActiveFrames,
+	} {
+		samples := silence(3, 0)
+		start := wavSampleRate
+		for i := start; i < start+frames*trimFrameSamples; i++ {
+			samples[i] = 12000
+		}
+		if worthUploading(samples) {
+			t.Errorf("%s reported as speech", name)
+		}
 	}
 }
 
@@ -290,5 +311,15 @@ func TestHasSpeechEmptyInput(t *testing.T) {
 	}
 	if hasSpeech(make([]int16, trimFrameSamples-1)) {
 		t.Error("sub-frame capture reported as speech")
+	}
+}
+
+func TestMeasureAudioLevels(t *testing.T) {
+	levels := measureAudioLevels(concat(silence(0.1, 0), speech(0.1, 5000)))
+	if levels.peakRMS != 5000 {
+		t.Errorf("peak RMS = %.0f, want 5000", levels.peakRMS)
+	}
+	if levels.noiseFloor != 0 {
+		t.Errorf("noise floor = %.0f, want 0", levels.noiseFloor)
 	}
 }

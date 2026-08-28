@@ -3,6 +3,7 @@ package voicetype
 import (
 	"os"
 	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -134,6 +135,26 @@ func TestConfigRejectsBadValues(t *testing.T) {
 	}
 	if cfg.APIKey != def.APIKey {
 		t.Errorf("non-string api_key should fall back to %q, got %q", def.APIKey, cfg.APIKey)
+	}
+}
+
+func TestConfigWarningReturnsAfterFieldIsFixed(t *testing.T) {
+	lastWarning = sync.Map{}
+	t.Cleanup(func() { lastWarning = sync.Map{} })
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", home)
+
+	configParse([]byte(`{"port": 80}`))
+	if _, warned := lastWarning.Load("port"); !warned {
+		t.Fatal("invalid port did not record a warning")
+	}
+	configLoad() // A missing file is a valid all-default configuration.
+	if _, warned := lastWarning.Load("port"); warned {
+		t.Fatal("missing config did not clear the warning state")
+	}
+	configParse([]byte(`{"port": 80}`))
+	if _, warned := lastWarning.Load("port"); !warned {
+		t.Fatal("reintroduced invalid port did not record a warning")
 	}
 }
 

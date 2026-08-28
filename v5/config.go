@@ -5,17 +5,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"unicode"
 )
 
-// Config holds the four things a user gets to set. Everything else is a
-// tuned constant below: an option the user has to reason about is a cost, and
-// none of these were ever worth that cost. Every other field found in the file
-// -- v5's own earlier knobs, and all of v4's browser/language settings -- is
-// ignored silently, so any existing config keeps loading.
+// Config holds the four user-facing settings. Unknown fields are ignored so
+// older config files keep loading.
 type Config struct {
-	Port   int
 	APIKey string
+	Port   int
 	// Model is an sttModels ID. Vocabulary travels with the audio, so names
 	// come out spelled right instead of being corrected afterwards.
 	Model      string
@@ -37,23 +35,25 @@ const (
 // unpinned request can land where the vocabulary is dropped; Vocabulary records
 // where it measurably is not.
 type sttSpec struct {
-	ID, Slug, Provider string
-	Vocabulary         bool
+	ID         string
+	Slug       string
+	Provider   string
+	Vocabulary bool
+	USDPerHour float64
 }
 
 const defaultModelID = "gpt-4o-transcribe"
 
-// sttModels is the allowlist: those that read a vocabulary, then the cheaper
-// ones that ignore it. The config file documents what each costs.
+// sttModels is the model allowlist shown by `voice-type models`.
 var sttModels = []sttSpec{
-	{"gpt-4o-transcribe", "openai/gpt-4o-transcribe", "openai", true},
-	{"gpt-transcribe", "openai/gpt-transcribe", "openai", true},
-	{"whisper-large-v3", "openai/whisper-large-v3", "deepinfra", true},
-	{"whisper-1", "openai/whisper-1", "openai", true},
-	{"whisper-large-v3-turbo", "openai/whisper-large-v3-turbo", "deepinfra", true},
-	{"gpt-4o-mini-transcribe", "openai/gpt-4o-mini-transcribe", "openai", true},
-	{"parakeet-v3", "nvidia/parakeet-tdt-0.6b-v3", "together", false},
-	{"whisper-large-v3-turbo-groq", "openai/whisper-large-v3-turbo", "groq", false},
+	{"gpt-4o-transcribe", "openai/gpt-4o-transcribe", "openai", true, 0.224},
+	{"gpt-transcribe", "openai/gpt-transcribe", "openai", true, 0.273},
+	{"whisper-large-v3", "openai/whisper-large-v3", "deepinfra", true, 0.027},
+	{"whisper-1", "openai/whisper-1", "openai", true, 0.364},
+	{"whisper-large-v3-turbo", "openai/whisper-large-v3-turbo", "deepinfra", true, 0.012},
+	{"gpt-4o-mini-transcribe", "openai/gpt-4o-mini-transcribe", "openai", true, 0.111},
+	{"parakeet-v3", "nvidia/parakeet-tdt-0.6b-v3", "together", false, 0.090},
+	{"whisper-large-v3-turbo-groq", "openai/whisper-large-v3-turbo", "groq", false, 0.012},
 }
 
 func sttLookup(id string) (sttSpec, bool) {
@@ -189,7 +189,19 @@ func stripTrailingCommas(text string) string {
 	return string(out)
 }
 
+// lastWarning suppresses repeats. The config is re-read on every dictation, so
+// a warning that fires once per read would bury the log in the same line.
+var lastWarning sync.Map
+
 func configWarn(field, reason string) {
+	if reason == "" {
+		lastWarning.Delete(field)
+		return
+	}
+	if prev, seen := lastWarning.Load(field); seen && prev == reason {
+		return
+	}
+	lastWarning.Store(field, reason)
 	logf("CONFIG", "%s: %s", field, reason)
 }
 
@@ -200,45 +212,53 @@ func configWarn(field, reason string) {
 func configValidate(raw map[string]json.RawMessage) Config {
 	cfg := configDefaults()
 
+	portWarning := ""
 	if v, ok := raw["port"]; ok {
 		var n int
 		if err := json.Unmarshal(v, &n); err == nil && n >= 1024 && n <= 65535 {
 			cfg.Port = n
 		} else {
-			configWarn("port", fmt.Sprintf("invalid value, using default %d", cfg.Port))
+			portWarning = fmt.Sprintf("invalid value, using default %d", cfg.Port)
 		}
 	}
+	configWarn("port", portWarning)
 
+	apiKeyWarning := ""
 	if v, ok := raw["api_key"]; ok {
 		var s string
 		if err := json.Unmarshal(v, &s); err == nil {
 			cfg.APIKey = s
 		} else {
-			configWarn("api_key", "must be a string, using default")
+			apiKeyWarning = "must be a string, using default"
 		}
 	}
+	configWarn("api_key", apiKeyWarning)
 
+	modelWarning := ""
 	if v, ok := raw["model"]; ok {
 		var s string
 		json.Unmarshal(v, &s) // anything but an allowlisted ID warns below
 		if _, found := sttLookup(s); found {
 			cfg.Model = s
 		} else {
-			configWarn("model", fmt.Sprintf("%q is not one of the choices listed in %s, using %s", s, configFilePath(), cfg.Model))
+			modelWarning = fmt.Sprintf("%q is not a model voice-type ships with, using %s -- see `voice-type models`", s, cfg.Model)
 		}
 	}
+	configWarn("model", modelWarning)
 
+	vocabularyWarning := ""
 	if v, ok := raw["vocabulary"]; ok {
 		if err := json.Unmarshal(v, &cfg.Vocabulary); err != nil {
-			configWarn("vocabulary", "must be an array of strings, ignoring it")
+			vocabularyWarning = "must be an array of strings, ignoring it"
 			cfg.Vocabulary = nil
 		}
 	}
 
 	// A vocabulary the model discards is billed on every dictation for nothing.
 	if spec := cfg.modelSpec(); len(cfg.Vocabulary) > 0 && !spec.Vocabulary {
-		configWarn("vocabulary", spec.ID+" ignores it -- see the model list in "+configFilePath())
+		vocabularyWarning = spec.ID + " ignores it -- see `voice-type models`"
 	}
+	configWarn("vocabulary", vocabularyWarning)
 
 	return cfg
 }
@@ -256,26 +276,33 @@ func configParse(data []byte) (Config, error) {
 	return configValidate(raw), nil
 }
 
-// configLoad reads the config file. The daemon never writes it: a missing file
-// simply means defaults, so migration can never clobber a v4 config.
+// configLoad reads the config file. Nothing writes it: voice-type only ever
+// reads this file. A missing file simply means defaults.
 func configLoad() Config {
-	path := configFilePath()
-
-	data, err := os.ReadFile(path)
+	cfg, err := configReadStrict()
 	if err != nil {
-		if !os.IsNotExist(err) {
-			logf("CONFIG", "could not read %s: %v -- using defaults", path, err)
-		}
+		configWarn("file", err.Error()+" -- using defaults")
 		return configDefaults()
 	}
+	lastWarning.Delete("file")
+	return cfg
+}
 
+// configReadStrict is configLoad without fallback, for commands that need to
+// report a malformed file rather than silently continue with defaults.
+func configReadStrict() (Config, error) {
+	data, err := os.ReadFile(configFilePath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return configValidate(nil), nil
+		}
+		return Config{}, fmt.Errorf("could not read %s: %w", configFilePath(), err)
+	}
 	cfg, err := configParse(data)
 	if err != nil {
-		logf("CONFIG", "%v -- using defaults", err)
-		return cfg
+		return cfg, fmt.Errorf("%s: %w", configFilePath(), err)
 	}
-
-	return cfg
+	return cfg, nil
 }
 
 // configAPIKey prefers the environment over the config file.

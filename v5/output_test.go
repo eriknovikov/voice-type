@@ -1,6 +1,7 @@
 package voicetype
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -171,6 +172,20 @@ func TestEmptyInputEmitsNothing(t *testing.T) {
 	}
 }
 
+func TestCancelledOutputEmitsNothing(t *testing.T) {
+	kb := newFakeKeyboard()
+	typer := &Typer{kb: kb}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := typer.TypeContext(ctx, "must not appear"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("TypeContext error = %v, want context canceled", err)
+	}
+	if len(kb.events) != 0 {
+		t.Fatalf("cancelled output events = %#v, want none", kb.events)
+	}
+}
+
 func TestInvalidUTF8EmitsNothing(t *testing.T) {
 	kb := newFakeKeyboard()
 	typer := &Typer{kb: kb}
@@ -201,7 +216,7 @@ func TestControlRejectionPrevalidatesEntireInput(t *testing.T) {
 func TestSendStrokeEventOrder(t *testing.T) {
 	kb := newFakeKeyboard()
 	typer := &Typer{kb: kb}
-	if err := typer.sendStroke(stroke(uinput.KeyA, uinput.KeyLeftctrl, uinput.KeyLeftshift)); err != nil {
+	if _, err := typer.sendStrokeTrackedContext(context.Background(), stroke(uinput.KeyA, uinput.KeyLeftctrl, uinput.KeyLeftshift)); err != nil {
 		t.Fatalf("sendStroke: %v", err)
 	}
 	want := []testKeyEvent{
@@ -220,11 +235,35 @@ func TestSendStrokeEventOrder(t *testing.T) {
 	}
 }
 
+func TestSendStrokeTrackedDistinguishesFallbackSafety(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		failAt   int
+		wantSent bool
+	}{
+		{name: "modifier failure", failAt: 1, wantSent: false},
+		{name: "failure after primary", failAt: 4, wantSent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kb := newFakeKeyboard()
+			kb.failAt = tc.failAt
+			typer := &Typer{kb: kb}
+			sent, err := typer.sendStrokeTrackedContext(context.Background(), stroke(uinput.KeyV, uinput.KeyLeftctrl, uinput.KeyLeftshift))
+			if err == nil {
+				t.Fatal("sendStrokeTracked returned nil")
+			}
+			if sent != tc.wantSent {
+				t.Errorf("sent = %t, want %t", sent, tc.wantSent)
+			}
+		})
+	}
+}
+
 func TestKeyDownFailureReleasesPreviouslyPressedModifiers(t *testing.T) {
 	kb := newFakeKeyboard()
 	kb.failAt = 2
 	typer := &Typer{kb: kb}
-	if err := typer.sendStroke(stroke(uinput.KeyA, uinput.KeyLeftctrl, uinput.KeyLeftshift)); err == nil {
+	if _, err := typer.sendStrokeTrackedContext(context.Background(), stroke(uinput.KeyA, uinput.KeyLeftctrl, uinput.KeyLeftshift)); err == nil {
 		t.Fatal("sendStroke returned nil")
 	}
 	want := []testKeyEvent{
@@ -245,7 +284,7 @@ func TestKeyUpFailureStillReleasesModifiers(t *testing.T) {
 	kb := newFakeKeyboard()
 	kb.failAt = 4
 	typer := &Typer{kb: kb}
-	if err := typer.sendStroke(stroke(uinput.KeyA, uinput.KeyLeftctrl, uinput.KeyLeftshift)); err == nil {
+	if _, err := typer.sendStrokeTrackedContext(context.Background(), stroke(uinput.KeyA, uinput.KeyLeftctrl, uinput.KeyLeftshift)); err == nil {
 		t.Fatal("sendStroke returned nil")
 	}
 	if len(kb.held) != 0 {
@@ -260,7 +299,7 @@ func TestModifierReleaseFailureContinuesAndRetriesHeldKeys(t *testing.T) {
 	kb := newFakeKeyboard()
 	kb.failAt = 5
 	typer := &Typer{kb: kb}
-	if err := typer.sendStroke(stroke(uinput.KeyA, uinput.KeyLeftctrl, uinput.KeyLeftshift)); err == nil {
+	if _, err := typer.sendStrokeTrackedContext(context.Background(), stroke(uinput.KeyA, uinput.KeyLeftctrl, uinput.KeyLeftshift)); err == nil {
 		t.Fatal("sendStroke returned nil")
 	}
 	if len(kb.held) != 0 {
