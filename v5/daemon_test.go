@@ -440,8 +440,39 @@ func TestLongRoomToneSkipsTranscription(t *testing.T) {
 	if requests.Load() != 0 {
 		t.Errorf("room tone sent %d transcription requests", requests.Load())
 	}
-	if len(kb.events) != 0 {
-		t.Errorf("room tone produced keyboard output: %#v", kb.events)
+	question := typeKeyMap['?']
+	want := []testKeyEvent{
+		{op: "down", key: question.modifiers[0]},
+		{op: "down", key: question.key},
+		{op: "up", key: question.modifiers[0]},
+		{op: "up", key: question.key},
+	}
+	if len(kb.events) != len(want) {
+		t.Fatalf("room-tone marker events = %#v, want %#v", kb.events, want)
+	}
+	for i := range want {
+		if kb.events[i] != want[i] {
+			t.Fatalf("room-tone marker events = %#v, want %#v", kb.events, want)
+		}
+	}
+}
+
+func TestShortCaptureTypesNoSpeechMarker(t *testing.T) {
+	kb := newFakeKeyboard()
+	d := newDaemon(configDefaults(), &resources{
+		Recorder: &fakeRecorder{samples: silence(0.2, 300)},
+		Typer:    &Typer{kb: kb},
+	})
+	d.state = stateRecording
+	d.sessionCtx = context.Background()
+
+	status, message := d.stopSession()
+	if status != http.StatusOK || message != "no speech detected" {
+		t.Fatalf("stop = %d/%q, want 200/no speech detected", status, message)
+	}
+	question := typeKeyMap['?']
+	if len(kb.events) != 4 || kb.events[1].key != question.key {
+		t.Errorf("short-capture marker events = %#v, want question mark", kb.events)
 	}
 }
 
