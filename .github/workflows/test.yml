@@ -27,7 +27,7 @@ jobs:
 
       - name: gofmt
         run: |
-          UNFORMATTED=$(gofmt -l *.go)
+          UNFORMATTED=$(gofmt -l .)
           if [ -n "$UNFORMATTED" ]; then
             echo "Not gofmt'd:"
             echo "$UNFORMATTED"
@@ -44,7 +44,7 @@ jobs:
       - name: Build
         env:
           CGO_ENABLED: "0"
-        run: go build -o /dev/null .
+        run: go build -o /dev/null ./cmd/voice-type
 
   shell:
     name: Installer syntax

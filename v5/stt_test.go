@@ -1,83 +1,21 @@
-package main
+package voicetype
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
-	"mime"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
-func testWAV() []byte { return wavEncode([]int16{1, 2, 3, 4}) }
+func testWAV() []byte { return WavEncode([]int16{1, 2, 3, 4}) }
 
-// The multipart field names are the ones Phase 0 validated against the live
-// endpoint: an OpenAI-style "file" part plus a "model" field.
-func TestSTTMultipartRequestShape(t *testing.T) {
-	var gotModel, gotFilename, gotAuth string
-	var gotFileBytes []byte
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-
-		_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if err != nil {
-			t.Errorf("parse content type: %v", err)
-		}
-		mr := multipart.NewReader(r.Body, params["boundary"])
-		for {
-			part, err := mr.NextPart()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				t.Fatalf("next part: %v", err)
-			}
-			data, _ := io.ReadAll(part)
-			switch part.FormName() {
-			case "model":
-				gotModel = string(data)
-			case "file":
-				gotFilename = part.FileName()
-				gotFileBytes = data
-			}
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"text":  " hello world ",
-			"usage": map[string]any{"seconds": 7, "cost": 0.000176},
-		})
-	}))
-	defer srv.Close()
-
-	c := newSTTClient("test-key", "nvidia/parakeet-tdt-0.6b-v3")
-	c.endpoint = srv.URL
-
-	res, err := c.Transcribe(testWAV())
-	if err != nil {
-		t.Fatalf("transcribe: %v", err)
-	}
-
-	if gotAuth != "Bearer test-key" {
-		t.Errorf("Authorization = %q", gotAuth)
-	}
-	if gotModel != "nvidia/parakeet-tdt-0.6b-v3" {
-		t.Errorf("model = %q", gotModel)
-	}
-	if !strings.HasSuffix(gotFilename, ".wav") {
-		t.Errorf("filename = %q, want a .wav", gotFilename)
-	}
-	if !strings.HasPrefix(string(gotFileBytes), "RIFF") {
-		t.Error("uploaded file is not a RIFF payload")
-	}
-	if res.Text != "hello world" {
-		t.Errorf("text = %q, want trimmed %q", res.Text, "hello world")
-	}
-	if res.Seconds != 7 || res.Cost != 0.000176 {
-		t.Errorf("usage = %v/%v", res.Seconds, res.Cost)
-	}
-}
+func testSpec(id string) sttSpec { m, _ := sttLookup(id); return m }
 
 func TestSTTJSONRequestShape(t *testing.T) {
 	var body map[string]any
@@ -88,9 +26,8 @@ func TestSTTJSONRequestShape(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newSTTClient("k", "m")
+	c := newSTTClient("k", testSpec("parakeet-v3"), nil)
 	c.endpoint = srv.URL
-	c.useJSON = true
 
 	if _, err := c.Transcribe(testWAV()); err != nil {
 		t.Fatalf("transcribe: %v", err)
@@ -112,6 +49,67 @@ func TestSTTJSONRequestShape(t *testing.T) {
 	}
 }
 
+// The provider block is what makes a vocabulary work: OpenRouter keys the
+// options by provider slug, and ignores a prompt on an unpinned request.
+func TestSTTSendsPinnedProviderAndVocabulary(t *testing.T) {
+	var raw []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ = io.ReadAll(r.Body)
+		io.WriteString(w, `{"text":"ok"}`)
+	}))
+	defer srv.Close()
+
+	send := func(id string) {
+		c := newSTTClient("k", testSpec(id), []string{"Numbero", "Erik Novikov"})
+		c.endpoint = srv.URL
+		if _, err := c.Transcribe(testWAV()); err != nil {
+			t.Fatalf("transcribe: %v", err)
+		}
+	}
+
+	send(defaultModelID)
+	for _, want := range []string{
+		`"provider":{"only":["openai"],"options":{"openai":{"prompt":"Vocabulary: Numbero, Erik Novikov."}}}`,
+		`"temperature":0`,
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("request body lacks %s\n%s", want, raw)
+		}
+	}
+
+	// parakeet-v3 discards a vocabulary, so it must not be billed to carry one.
+	send("parakeet-v3")
+	if strings.Contains(string(raw), "prompt") {
+		t.Errorf("vocabulary sent to a model that ignores it: %s", raw)
+	}
+}
+
+func TestVocabularyEchoMatchingIsWholeTranscriptOnly(t *testing.T) {
+	vocabulary := []string{"Numbero", "Erik Novikov"}
+	prompt := sttVocabularyPrompt(testSpec(defaultModelID), vocabulary)
+	for _, text := range []string{
+		prompt,
+		"  VOCABULARY:   Numbero, Erik Novikov.  ",
+	} {
+		if !vocabularyEcho(text, prompt) {
+			t.Errorf("did not flag echo %q", text)
+		}
+	}
+	for _, text := range []string{
+		"Numbero is spelled correctly.",
+		"Vocabulary: Numbero.",
+		"Vocabulary: Numbero is the term I dictated.",
+		"Erik Novikov",
+	} {
+		if vocabularyEcho(text, prompt) {
+			t.Errorf("flagged legitimate transcript %q", text)
+		}
+	}
+	if vocabularyEcho(prompt, "") {
+		t.Error("flagged a prompt for a model that was not sent one")
+	}
+}
+
 // 401 is fatal: retrying a bad key only wastes time.
 func TestSTTUnauthorizedIsFatalAndNotRetried(t *testing.T) {
 	calls := 0
@@ -124,7 +122,7 @@ func TestSTTUnauthorizedIsFatalAndNotRetried(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newSTTClient("bad", "m")
+	c := newSTTClient("bad", testSpec(defaultModelID), nil)
 	c.endpoint = srv.URL
 
 	_, err := c.Transcribe(testWAV())
@@ -155,7 +153,7 @@ func TestSTTPayloadTooLarge(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newSTTClient("k", "m")
+	c := newSTTClient("k", testSpec(defaultModelID), nil)
 	c.endpoint = srv.URL
 
 	_, err := c.Transcribe(testWAV())
@@ -189,7 +187,7 @@ func TestSTTRetriesTransientFailures(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newSTTClient("k", "m")
+	c := newSTTClient("k", testSpec(defaultModelID), nil)
 	c.endpoint = srv.URL
 
 	res, err := c.Transcribe(testWAV())
@@ -212,7 +210,7 @@ func TestSTTGivesUpAfterMaxAttempts(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newSTTClient("k", "m")
+	c := newSTTClient("k", testSpec(defaultModelID), nil)
 	c.endpoint = srv.URL
 
 	if _, err := c.Transcribe(testWAV()); err == nil {
@@ -220,5 +218,40 @@ func TestSTTGivesUpAfterMaxAttempts(t *testing.T) {
 	}
 	if calls != sttMaxAttempts {
 		t.Errorf("attempts = %d, want %d", calls, sttMaxAttempts)
+	}
+}
+
+func TestSTTCancellationInterruptsRetryBackoff(t *testing.T) {
+	var calls atomic.Int32
+	firstAttempt := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			close(firstAttempt)
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	c := newSTTClient("k", testSpec(defaultModelID), nil)
+	c.endpoint = srv.URL
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.TranscribeContext(ctx, testWAV())
+		done <- err
+	}()
+	<-firstAttempt
+	time.Sleep(20 * time.Millisecond)
+
+	started := time.Now()
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
+		t.Errorf("retry cancellation took %v", elapsed)
+	}
+	if calls.Load() != 1 {
+		t.Errorf("requests after cancellation = %d, want 1", calls.Load())
 	}
 }

@@ -1,4 +1,4 @@
-package main
+package voicetype
 
 import (
 	"bytes"
@@ -8,7 +8,7 @@ import (
 
 func TestWavHeaderGolden(t *testing.T) {
 	// 4 samples -> 8 bytes of data
-	got := wavEncode([]int16{0, 1, -1, 32767})
+	got := WavEncode([]int16{0, 1, -1, 32767})
 
 	if len(got) != wavHeaderSize+8 {
 		t.Fatalf("length = %d, want %d", len(got), wavHeaderSize+8)
@@ -44,7 +44,7 @@ func TestWavHeaderGolden(t *testing.T) {
 }
 
 func TestWavEmptyInput(t *testing.T) {
-	got := wavEncode(nil)
+	got := WavEncode(nil)
 	if len(got) != wavHeaderSize {
 		t.Fatalf("length = %d, want bare header %d", len(got), wavHeaderSize)
 	}
@@ -58,7 +58,7 @@ func TestWavEmptyInput(t *testing.T) {
 
 func TestWavSizesTrackSampleCount(t *testing.T) {
 	samples := make([]int16, 16000) // exactly one second
-	got := wavEncode(samples)
+	got := WavEncode(samples)
 
 	if dataSize := binary.LittleEndian.Uint32(got[40:]); dataSize != 32000 {
 		t.Errorf("data size = %d, want 32000", dataSize)

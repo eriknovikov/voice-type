@@ -1,4 +1,4 @@
-package main
+package voicetype
 
 import (
 	"encoding/binary"
@@ -33,39 +33,29 @@ func TestLiveTranscribe(t *testing.T) {
 		samples[i] = int16(binary.LittleEndian.Uint16(raw[i*2:]))
 	}
 
-	wav := wavEncode(samples)
+	wav := WavEncode(samples)
 	t.Logf("audio: %.2fs, wav %d bytes", wavDurationSeconds(samples), len(wav))
 
-	model := os.Getenv("VOICE_TYPE_MODEL")
-	if model == "" {
-		model = sttModel
+	cfg := configLoad()
+	if id := os.Getenv("VOICE_TYPE_MODEL"); id != "" {
+		cfg.Model = id
+	}
+	model, ok := sttLookup(cfg.Model)
+	if !ok {
+		t.Fatalf("model %q is not on the allowlist", cfg.Model)
 	}
 
-	for _, mode := range []struct {
-		name    string
-		useJSON bool
-	}{
-		{"multipart", false},
-		{"json-base64", true},
-	} {
-		t.Run(mode.name, func(t *testing.T) {
-			c := newSTTClient(key, model)
-			c.useJSON = mode.useJSON
+	c := newSTTClient(key, model, cfg.Vocabulary)
+	t0 := time.Now()
+	res, err := c.Transcribe(wav)
+	if err != nil {
+		t.Fatalf("transcribe: %v", err)
+	}
 
-			t0 := time.Now()
-			res, err := c.Transcribe(wav)
-			elapsed := time.Since(t0)
-			if err != nil {
-				t.Fatalf("transcribe: %v", err)
-			}
-
-			t.Logf("latency: %v", elapsed.Round(time.Millisecond))
-			t.Logf("billed:  %.0fs  $%.6f", res.Seconds, res.Cost)
-			t.Logf("text:    %q", res.Text)
-
-			if res.Text == "" {
-				t.Error("empty transcript")
-			}
-		})
+	t.Logf("latency: %v", time.Since(t0).Round(time.Millisecond))
+	t.Logf("billed:  %.0fs  $%.6f", res.Seconds, res.Cost)
+	t.Logf("text:    %q", res.Text)
+	if res.Text == "" {
+		t.Error("empty transcript")
 	}
 }

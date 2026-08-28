@@ -1,4 +1,4 @@
-package main
+package voicetype
 
 import (
 	"math"
@@ -20,9 +20,17 @@ import (
 // is why trimPadSamples leaves a margin at each end instead of cutting flush to
 // the first and last loud frame: clipping the trailing pause costs the terminal
 // period.
+//
+// The pad is 400 ms rather than a tighter figure because the gate is estimated
+// from the quietest frames of the first and last second, and a soft unvoiced
+// onset -- the "s" of "send", a whispered first syllable -- is itself one of
+// those quiet frames. It raises the floor, fails to clear the gate it just
+// raised, and the scan runs on to the first voiced frame. The pad is what walks
+// that back, so it has to be wider than a leading consonant. Widening it costs
+// $0.000004 per dictation; getting it wrong costs the user the word.
 const (
 	trimFrameSamples = 320  // 20 ms at 16 kHz
-	trimPadSamples   = 4000 // 250 ms kept outside the detected speech
+	trimPadSamples   = 6400 // 400 ms kept outside the detected speech
 	trimWindowFrames = 50   // 1 s at each end, used to estimate the noise floor
 	trimGateRatio    = 4.0  // gate sits this far above the estimated noise floor
 	trimMinGate      = 80.0 // absolute RMS gate, for a digitally silent capture
@@ -33,9 +41,12 @@ const (
 // worthUploading.
 const (
 	minCaptureSeconds = 0.35 // shorter than any real word: a fumbled hotkey
-	speechGateSeconds = 2.0  // above this a capture is intentional, always upload
+	// A single loud frame can be a click or a bumped microphone. Requiring 80 ms
+	// still admits short words while rejecting isolated transients.
+	speechMinActiveFrames = 4
 	// Voiced speech crosses zero much less often than broadband room noise. This
 	// rescues an utterance that starts before the capture has a quiet floor.
+	speechMinZeroCrossingRate = 0.004
 	speechMaxZeroCrossingRate = 0.20
 )
 
@@ -44,30 +55,56 @@ const (
 // pointing at a quiet room. Such a capture costs a blocked /stop, and risks
 // typing whatever the model makes of room tone into the focused window.
 //
-// Two rules keep it from eating real dictation. Only short captures are judged
-// at all -- anything past speechGateSeconds was deliberate, and a long recording
-// wrongly dropped costs the user far more than an unnecessary upload. And the
-// gate errs toward uploading: a digitally silent frame pins the estimated floor
-// to zero and the gate falls back to trimMinGate, which speech clears by a wide
-// margin. Same asymmetry as trimSilence -- over-sending costs a fraction of a
-// cent, over-dropping costs the user their words.
+// The speech check runs on every capture. Duration alone never makes room tone
+// worth uploading: a forgotten open microphone must not reach OpenRouter.
 func worthUploading(samples []int16) bool {
 	if wavDurationSeconds(samples) < minCaptureSeconds {
 		return false
 	}
-	if wavDurationSeconds(samples) >= speechGateSeconds {
-		return true
-	}
 	return hasSpeech(samples)
 }
 
-// hasSpeech reports whether any frame clears the noise gate estimated over the
-// whole capture. Unlike trimSilence this needs no per-end estimate: it asks
-// whether the clip contains an utterance at all, not where one begins.
+type audioLevels struct {
+	peakRMS    float64
+	noiseFloor float64
+}
+
+type speechAnalysis struct {
+	detected         bool
+	gate             float64
+	maxActiveFrames  int
+	zeroCrossingRate float64
+}
+
+// measureAudioLevels uses the same 20 ms frames and quiet-frame rank as the
+// speech gate, making its log output directly comparable to that decision.
+func measureAudioLevels(samples []int16) audioLevels {
+	if len(samples) == 0 {
+		return audioLevels{}
+	}
+	frames := (len(samples) + trimFrameSamples - 1) / trimFrameSamples
+	rms := make([]float64, 0, frames)
+	for start := 0; start < len(samples); start += trimFrameSamples {
+		end := min(start+trimFrameSamples, len(samples))
+		rms = append(rms, frameRMS(samples[start:end]))
+	}
+	peak := slices.Max(rms)
+	slices.Sort(rms)
+	floor := rms[min(trimFloorRank, len(rms)-1)]
+	return audioLevels{peakRMS: peak, noiseFloor: floor}
+}
+
+// hasSpeech reports whether sustained frames clear the noise gate estimated
+// over the whole capture. Unlike TrimSilence this needs no per-end estimate: it
+// asks whether the clip contains an utterance at all, not where one begins.
 func hasSpeech(samples []int16) bool {
+	return analyzeSpeech(samples).detected
+}
+
+func analyzeSpeech(samples []int16) speechAnalysis {
 	frames := len(samples) / trimFrameSamples
 	if frames == 0 {
-		return false
+		return speechAnalysis{}
 	}
 
 	rms := make([]float64, frames)
@@ -76,17 +113,41 @@ func hasSpeech(samples []int16) bool {
 	}
 
 	peak := slices.Max(rms)
-	if peak >= silenceGate(rms) {
-		return true
-	}
+	gate := silenceGate(rms)
+	analysis := speechAnalysis{gate: gate}
+	activeFrames := 0
+	for i, level := range rms {
+		if level < gate {
+			activeFrames = 0
+			continue
+		}
+		activeFrames++
+		analysis.maxActiveFrames = max(analysis.maxActiveFrames, activeFrames)
+		if activeFrames < speechMinActiveFrames {
+			continue
+		}
 
+		// Keep scanning after a noise-like onset. The first 80 ms can be an
+		// unvoiced consonant; a later window in the same run may be voiced speech.
+		start := (i - speechMinActiveFrames + 1) * trimFrameSamples
+		end := (i + 1) * trimFrameSamples
+		rate, ok := voicedCadence(samples[start:end])
+		analysis.zeroCrossingRate = rate
+		if ok {
+			analysis.detected = true
+			return analysis
+		}
+	}
 	// A clip that begins immediately with sustained speech has no quiet frames
 	// from which to estimate a floor. Voiced cadence provides a conservative
 	// fallback without treating all steady room noise as speech.
-	return peak >= trimMinGate && hasVoicedCadence(samples)
+	if gate > peak && peak >= trimMinGate {
+		analysis.zeroCrossingRate, analysis.detected = voicedCadence(samples)
+	}
+	return analysis
 }
 
-func hasVoicedCadence(samples []int16) bool {
+func voicedCadence(samples []int16) (float64, bool) {
 	var previous int16
 	crossings, transitions := 0, 0
 	for _, sample := range samples {
@@ -101,10 +162,14 @@ func hasVoicedCadence(samples []int16) bool {
 		}
 		previous = sample
 	}
-	return transitions > 0 && float64(crossings)/float64(transitions) <= speechMaxZeroCrossingRate
+	if transitions == 0 {
+		return 0, false
+	}
+	rate := float64(crossings) / float64(transitions)
+	return rate, rate >= speechMinZeroCrossingRate && rate <= speechMaxZeroCrossingRate
 }
 
-// trimSilence returns the span of samples between the first and last frame that
+// TrimSilence returns the span of samples between the first and last frame that
 // clears the noise gate, padded by trimPadSamples on each side. The result
 // aliases the input slice; callers must not mutate it afterwards.
 //
@@ -113,7 +178,7 @@ func hasVoicedCadence(samples []int16) bool {
 // capture that contains any digitally silent frame -- a noise-gating mic, a
 // Bluetooth headset using DTX, a synthesised test fixture -- pins the estimate
 // at zero, and a noisy room then reads as speech from the first frame on.
-func trimSilence(samples []int16) []int16 {
+func TrimSilence(samples []int16) []int16 {
 	// Too short to estimate a noise floor from. A capture this brief is all
 	// onset anyway.
 	if len(samples) < trimFrameSamples*2 {

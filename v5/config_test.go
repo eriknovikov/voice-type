@@ -1,7 +1,9 @@
-package main
+package voicetype
 
 import (
 	"os"
+	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -65,7 +67,7 @@ func TestConfigDefaults(t *testing.T) {
 		t.Fatalf("configParse: %v", err)
 	}
 	want := configDefaults()
-	if cfg != want {
+	if !reflect.DeepEqual(cfg, want) {
 		t.Errorf("got %+v, want %+v", cfg, want)
 	}
 }
@@ -98,7 +100,6 @@ func TestConfigToleratesRetiredV5Fields(t *testing.T) {
 	old := `{
     "api_key": "sk-or-x",
     "port": 4000,
-    "model": "some/other-model",
     "max_duration": 60,
     "paste_key": "ctrl+shift+v",
     "paste_delay_ms": 900,
@@ -137,13 +138,51 @@ func TestConfigRejectsBadValues(t *testing.T) {
 	}
 }
 
+func TestConfigWarningReturnsAfterFieldIsFixed(t *testing.T) {
+	lastWarning = sync.Map{}
+	t.Cleanup(func() { lastWarning = sync.Map{} })
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", home)
+
+	configParse([]byte(`{"port": 80}`))
+	if _, warned := lastWarning.Load("port"); !warned {
+		t.Fatal("invalid port did not record a warning")
+	}
+	configLoad() // A missing file is a valid all-default configuration.
+	if _, warned := lastWarning.Load("port"); warned {
+		t.Fatal("missing config did not clear the warning state")
+	}
+	configParse([]byte(`{"port": 80}`))
+	if _, warned := lastWarning.Load("port"); !warned {
+		t.Fatal("reintroduced invalid port did not record a warning")
+	}
+}
+
 // The constants that replace user-facing knobs still have to be usable values.
 func TestTunedConstantsAreValid(t *testing.T) {
 	if maxDurationSeconds <= 0 {
 		t.Errorf("maxDurationSeconds = %d, want positive", maxDurationSeconds)
 	}
-	if sttModel == "" {
-		t.Error("sttModel is empty")
+	if _, ok := sttLookup(defaultModelID); !ok {
+		t.Errorf("default model %q is not on the allowlist", defaultModelID)
+	}
+}
+
+// The model is picked from a closed list, and the vocabulary rides with it.
+func TestConfigModelAndVocabulary(t *testing.T) {
+	cfg, err := configParse([]byte(`{"model": "parakeet-v3", "vocabulary": ["Numbero", "Erik Novikov"]}`))
+	if err != nil {
+		t.Fatalf("configParse: %v", err)
+	}
+	if cfg.Model != "parakeet-v3" || len(cfg.Vocabulary) != 2 {
+		t.Errorf("got model=%q vocabulary=%q", cfg.Model, cfg.Vocabulary)
+	}
+
+	// Anything else -- a typo, or the OpenRouter slug -- falls back rather than
+	// posting a model name the endpoint would reject.
+	cfg, _ = configParse([]byte(`{"model": "nvidia/parakeet-tdt-0.6b-v3"}`))
+	if cfg.Model != defaultModelID {
+		t.Errorf("model = %q, want the default %q", cfg.Model, defaultModelID)
 	}
 }
 
@@ -152,7 +191,7 @@ func TestConfigMalformedYieldsDefaults(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a parse error")
 	}
-	if cfg != configDefaults() {
+	if !reflect.DeepEqual(cfg, configDefaults()) {
 		t.Errorf("malformed config should yield defaults, got %+v", cfg)
 	}
 }

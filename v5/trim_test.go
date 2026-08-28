@@ -1,6 +1,17 @@
-package main
+package voicetype
 
 import "testing"
+
+// trimPadSeconds restates trimPadSamples in the unit these assertions use,
+// so retuning the pad does not mean hand-editing every expected duration.
+const trimPadSeconds = float64(trimPadSamples) / wavSampleRate
+
+// sameDuration compares to within half a frame. Expected values are built by
+// summing constants, which does not land exactly on a multiple of 1/16000.
+func sameDuration(got, want float64) bool {
+	d := got - want
+	return d < 0.01 && d > -0.01
+}
 
 // silence returns d seconds of room tone at the given peak amplitude. The
 // pattern is deterministic but not a constant, so every frame is not identical.
@@ -31,6 +42,20 @@ func speech(seconds float64, amplitude int16) []int16 {
 	return out
 }
 
+// fricative is a high-zero-crossing-rate onset, such as the "s" in "send".
+func fricative(seconds float64, amplitude int16) []int16 {
+	n := int(seconds * wavSampleRate)
+	out := make([]int16, n)
+	for i := range out {
+		if i%2 == 0 {
+			out[i] = amplitude
+		} else {
+			out[i] = -amplitude
+		}
+	}
+	return out
+}
+
 func concat(parts ...[]int16) []int16 {
 	var out []int16
 	for _, p := range parts {
@@ -42,11 +67,11 @@ func concat(parts ...[]int16) []int16 {
 func TestTrimSilenceCutsBothEnds(t *testing.T) {
 	in := concat(silence(2, 0), speech(1, 5000), silence(2, 0))
 
-	got := trimSilence(in)
+	got := TrimSilence(in)
 
-	// 1 s of speech plus 250 ms of pad at each end.
-	want := 1.5
-	if d := wavDurationSeconds(got); d != want {
+	// 1 s of speech plus a pad at each end.
+	want := 1.0 + 2*trimPadSeconds
+	if d := wavDurationSeconds(got); !sameDuration(d, want) {
 		t.Errorf("duration = %.3fs, want %.3fs", d, want)
 	}
 }
@@ -54,7 +79,7 @@ func TestTrimSilenceCutsBothEnds(t *testing.T) {
 func TestTrimSilenceKeepsPadBeforeOnset(t *testing.T) {
 	in := concat(silence(2, 0), speech(1, 5000))
 
-	got := trimSilence(in)
+	got := TrimSilence(in)
 
 	// The onset must still have room in front of it: cutting flush loses the
 	// prosodic lead-in the model uses.
@@ -69,10 +94,11 @@ func TestTrimSilenceWithRoomTone(t *testing.T) {
 	// keep everything.
 	in := concat(silence(2, 300), speech(1, 5000), silence(2, 300))
 
-	got := trimSilence(in)
+	got := TrimSilence(in)
 
-	if d := wavDurationSeconds(got); d != 1.5 {
-		t.Errorf("duration = %.3fs, want 1.500s", d)
+	want := 1.0 + 2*trimPadSeconds
+	if d := wavDurationSeconds(got); !sameDuration(d, want) {
+		t.Errorf("duration = %.3fs, want %.3fs", d, want)
 	}
 }
 
@@ -81,10 +107,10 @@ func TestTrimSilencePreservesInternalPause(t *testing.T) {
 	// punctuation off it. Only the endpoints may be cut.
 	in := concat(silence(1, 0), speech(1, 5000), silence(1, 0), speech(1, 5000), silence(1, 0))
 
-	got := trimSilence(in)
+	got := TrimSilence(in)
 
-	want := 3.5 // 3 s span between onsets plus 250 ms of pad at each end
-	if d := wavDurationSeconds(got); d != want {
+	want := 3.0 + 2*trimPadSeconds // span between onsets, plus a pad at each end
+	if d := wavDurationSeconds(got); !sameDuration(d, want) {
 		t.Errorf("duration = %.3fs, want %.3fs -- internal pause was cut", d, want)
 	}
 }
@@ -94,10 +120,10 @@ func TestTrimSilenceShortLeadLongSpeech(t *testing.T) {
 	// share of the capture, but it is still the part worth removing.
 	in := concat(silence(0.5, 200), speech(10, 5000))
 
-	got := trimSilence(in)
+	got := TrimSilence(in)
 
-	want := 10.25
-	if d := wavDurationSeconds(got); d != want {
+	want := 10.0 + trimPadSeconds // lead-in is shorter than the pad, so only the tail pads
+	if d := wavDurationSeconds(got); !sameDuration(d, want) {
 		t.Errorf("duration = %.3fs, want %.3fs", d, want)
 	}
 }
@@ -115,10 +141,10 @@ func TestTrimSilenceNoisyRoomWithInteriorDigitalSilence(t *testing.T) {
 		silence(1.5, 400), //
 	)
 
-	got := trimSilence(in)
+	got := TrimSilence(in)
 
-	want := 2.8 // 2.3 s from first onset to last offset, plus 250 ms each side
-	if d := wavDurationSeconds(got); d != want {
+	want := 2.3 + 2*trimPadSeconds // first onset to last offset, plus a pad each side
+	if d := wavDurationSeconds(got); !sameDuration(d, want) {
 		t.Errorf("duration = %.3fs, want %.3fs", d, want)
 	}
 }
@@ -128,19 +154,40 @@ func TestTrimSilenceNoisyRoomWithInteriorDigitalSilence(t *testing.T) {
 func TestTrimSilenceSpeechFromFirstFrame(t *testing.T) {
 	in := concat(speech(3, 5000), silence(2, 300))
 
-	got := trimSilence(in)
+	got := TrimSilence(in)
 
 	// Every sample of speech survives: 3 s of it, plus the trailing pad.
-	want := 3.25
-	if d := wavDurationSeconds(got); d != want {
+	want := 3.0 + trimPadSeconds // speech from frame zero: nothing to cut at the head
+	if d := wavDurationSeconds(got); !sameDuration(d, want) {
 		t.Errorf("duration = %.3fs, want %.3fs -- speech was cut from the head", d, want)
+	}
+}
+
+// A quiet unvoiced onset -- the "s" of "send", a whispered first syllable --
+// is itself one of the quietest frames of the first second, so silenceGate
+// takes it for the noise floor and sets a gate above it. The scan then skips
+// the consonant entirely and stops at the first voiced frame; only the pad
+// walks that back. The pad therefore has to be wider than a leading consonant,
+// which is the whole reason trimPadSamples is 400 ms and not 250.
+func TestTrimSilenceKeepsSoftOnset(t *testing.T) {
+	const lead, onset = 1.0, 0.35
+	in := concat(silence(lead, 300), speech(onset, 700), speech(1, 6000), silence(1, 300))
+
+	got := TrimSilence(in)
+
+	// Nothing of the consonant may be cut: the kept span has to start inside
+	// the room tone that precedes it.
+	headCut := float64(cap(in)-cap(got)) / wavSampleRate
+	if headCut > lead {
+		t.Errorf("cut %.3fs from the head, past the %.2fs lead-in -- %.0f ms of the soft onset was clipped",
+			headCut, lead, (headCut-lead)*1000)
 	}
 }
 
 func TestTrimSilenceAllSilentIsUnchanged(t *testing.T) {
 	in := silence(3, 0)
 
-	got := trimSilence(in)
+	got := TrimSilence(in)
 
 	// Nothing clears the gate. Upload it whole rather than risk discarding
 	// speech on a bad floor estimate.
@@ -152,7 +199,7 @@ func TestTrimSilenceAllSilentIsUnchanged(t *testing.T) {
 func TestTrimSilenceShortInputIsUnchanged(t *testing.T) {
 	in := make([]int16, trimFrameSamples) // one frame, too short to estimate from
 
-	got := trimSilence(in)
+	got := TrimSilence(in)
 
 	if len(got) != len(in) {
 		t.Errorf("length = %d, want unchanged %d", len(got), len(in))
@@ -160,7 +207,7 @@ func TestTrimSilenceShortInputIsUnchanged(t *testing.T) {
 }
 
 func TestTrimSilenceEmptyInput(t *testing.T) {
-	if got := trimSilence(nil); len(got) != 0 {
+	if got := TrimSilence(nil); len(got) != 0 {
 		t.Errorf("length = %d, want 0", len(got))
 	}
 }
@@ -174,7 +221,7 @@ func TestTrimSilenceNeverGrows(t *testing.T) {
 	}
 
 	for name, in := range cases {
-		if got := trimSilence(in); len(got) > len(in) {
+		if got := TrimSilence(in); len(got) > len(in) {
 			t.Errorf("%s: length = %d, grew past input %d", name, len(got), len(in))
 		}
 	}
@@ -234,6 +281,7 @@ func TestWorthUploadingKeepsSpeech(t *testing.T) {
 		"no quiet lead-in": speech(0.6, 800),
 		"very quiet onset": speech(0.6, 200),
 		"normal sentence":  concat(silence(0.5, 200), speech(1.2, 6000), silence(0.3, 200)),
+		"noisy lead-in":    concat(silence(10, 500), speech(0.6, 6000)),
 	}
 
 	for name, in := range cases {
@@ -243,11 +291,55 @@ func TestWorthUploadingKeepsSpeech(t *testing.T) {
 	}
 }
 
-func TestWorthUploadingNeverJudgesLongCaptures(t *testing.T) {
-	// Past the ceiling the capture was deliberate. Even if the gate reads it as
-	// silence, dropping it would cost the user their words.
-	if !worthUploading(silence(speechGateSeconds+0.5, 0)) {
-		t.Error("long silent capture discarded, want uploaded unjudged")
+func TestWorthUploadingContinuesPastUnvoicedOnset(t *testing.T) {
+	in := concat(silence(0.2, 200), fricative(0.1, 6000), speech(0.6, 6000))
+
+	if !worthUploading(in) {
+		t.Error("voiced speech after a fricative onset was discarded")
+	}
+}
+
+func TestWorthUploadingContinuesPastRejectedActiveSpan(t *testing.T) {
+	in := concat(silence(0.2, 200), fricative(0.1, 6000), silence(0.1, 200), speech(0.6, 6000))
+
+	if !worthUploading(in) {
+		t.Error("later voiced speech was discarded after an earlier noise-like span")
+	}
+}
+
+func TestSustainedHighZeroCrossingNoiseIsDiscarded(t *testing.T) {
+	in := concat(silence(0.2, 200), fricative(1, 6000), silence(0.2, 200))
+
+	if worthUploading(in) {
+		t.Error("sustained high-zero-crossing noise reported as speech")
+	}
+}
+
+func TestLongSilentCaptureIsDiscarded(t *testing.T) {
+	for name, samples := range map[string][]int16{
+		"digital silence": silence(30, 0),
+		"room tone":       silence(30, 300),
+		"loud room tone":  silence(30, 4000),
+	} {
+		if worthUploading(samples) {
+			t.Errorf("%s uploaded despite containing no speech", name)
+		}
+	}
+}
+
+func TestIsolatedTransientIsNotSpeech(t *testing.T) {
+	for name, frames := range map[string]int{
+		"single frame":         1,
+		"80ms microphone bump": speechMinActiveFrames,
+	} {
+		samples := silence(3, 0)
+		start := wavSampleRate
+		for i := start; i < start+frames*trimFrameSamples; i++ {
+			samples[i] = 12000
+		}
+		if worthUploading(samples) {
+			t.Errorf("%s reported as speech", name)
+		}
 	}
 }
 
@@ -257,5 +349,15 @@ func TestHasSpeechEmptyInput(t *testing.T) {
 	}
 	if hasSpeech(make([]int16, trimFrameSamples-1)) {
 		t.Error("sub-frame capture reported as speech")
+	}
+}
+
+func TestMeasureAudioLevels(t *testing.T) {
+	levels := measureAudioLevels(concat(silence(0.1, 0), speech(0.1, 5000)))
+	if levels.peakRMS != 5000 {
+		t.Errorf("peak RMS = %.0f, want 5000", levels.peakRMS)
+	}
+	if levels.noiseFloor != 0 {
+		t.Errorf("noise floor = %.0f, want 0", levels.noiseFloor)
 	}
 }

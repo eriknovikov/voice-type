@@ -1,6 +1,7 @@
-package main
+package voicetype
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"time"
@@ -171,10 +172,9 @@ func (t *Typer) Close() {
 	}
 }
 
-func (t *Typer) sendStroke(stroke keyStroke) error {
+func (t *Typer) sendStrokeTrackedContext(ctx context.Context, stroke keyStroke) (primarySent bool, err error) {
 	type modifierState struct {
 		key          int
-		attempted    bool
 		needsRelease bool
 	}
 
@@ -187,27 +187,40 @@ func (t *Typer) sendStroke(stroke keyStroke) error {
 	}
 
 	for i, key := range stroke.modifiers {
-		modifiers[i] = modifierState{key: key, attempted: true, needsRelease: true}
+		if err := ctx.Err(); err != nil {
+			recordErr("cancelled before key down", key, err)
+			break
+		}
+		modifiers[i] = modifierState{key: key, needsRelease: true}
 		if err := t.kb.KeyDown(key); err != nil {
 			recordErr("key down", key, err)
 			break
 		}
 	}
 
-	primaryAttempted := false
 	primaryNeedsRelease := false
 	if firstErr == nil {
-		primaryAttempted = true
-		primaryNeedsRelease = true
-		if err := t.kb.KeyDown(stroke.key); err != nil {
-			recordErr("key down", stroke.key, err)
+		if err := ctx.Err(); err != nil {
+			recordErr("cancelled before key down", stroke.key, err)
 		} else {
-			time.Sleep(t.keyHold)
+			primaryNeedsRelease = true
+			if err := t.kb.KeyDown(stroke.key); err != nil {
+				recordErr("key down", stroke.key, err)
+			} else {
+				primarySent = true
+				timer := time.NewTimer(t.keyHold)
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					timer.Stop()
+					recordErr("cancelled after key down", stroke.key, ctx.Err())
+				}
+			}
 		}
 	}
 
 	releasePrimary := func() {
-		if !primaryAttempted || !primaryNeedsRelease {
+		if !primaryNeedsRelease {
 			return
 		}
 		if err := t.kb.KeyUp(stroke.key); err != nil {
@@ -217,7 +230,7 @@ func (t *Typer) sendStroke(stroke keyStroke) error {
 		}
 	}
 	releaseModifier := func(mod *modifierState) {
-		if !mod.attempted || !mod.needsRelease {
+		if !mod.needsRelease {
 			return
 		}
 		if err := t.kb.KeyUp(mod.key); err != nil {
@@ -246,35 +259,59 @@ func (t *Typer) sendStroke(stroke keyStroke) error {
 		}
 	}
 
-	return firstErr
+	return primarySent, firstErr
 }
 
 func (t *Typer) Type(text string) error {
+	return t.TypeContext(context.Background(), text)
+}
+
+func (t *Typer) TypeContext(ctx context.Context, text string) error {
 	strokes, err := typeCompile(text)
 	if err != nil {
 		return err
 	}
 
 	for i, stroke := range strokes {
-		if err := t.sendStroke(stroke); err != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, err := t.sendStrokeTrackedContext(ctx, stroke); err != nil {
 			return fmt.Errorf("partial output at stroke %d: %w", i, err)
 		}
 		if i+1 < len(strokes) {
-			time.Sleep(t.keyDelay)
+			timer := time.NewTimer(t.keyDelay)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			}
 		}
 	}
 	return nil
 }
 
-// Paste temporarily owns CLIPBOARD, pastes the transcript, and restores what
-// was there. When those contents cannot be handed back -- an unrecognised or
-// oversized flavour -- the clipboard is left untouched and the transcript is
-// typed instead: losing what the user copied costs more than the extra second.
-// Type remains the low-level keyboard compiler.
+// Paste preserves CLIPBOARD when possible and falls back to direct typing.
 func (t *Typer) Paste(text string) error {
-	old, ok := saveClipboard()
-	if !ok {
-		return t.Type(text)
+	return t.PasteContext(context.Background(), text)
+}
+
+func (t *Typer) PasteContext(ctx context.Context, text string) error {
+	old, ok := saveClipboardContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	return t.pasteClipboard(text, old)
+	if !ok {
+		return t.TypeContext(ctx, text)
+	}
+	sent, err := t.pasteClipboardContext(ctx, text, old)
+	if err != nil && !sent {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		logf("OUTPUT", "clipboard paste failed (%v) -- typing instead", err)
+		return t.TypeContext(ctx, text)
+	}
+	return err
 }

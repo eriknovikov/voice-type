@@ -1,4 +1,4 @@
-package main
+package voicetype
 
 import (
 	"bytes"
@@ -12,10 +12,10 @@ const (
 	wavHeaderSize    = 44
 )
 
-// wavEncode wraps PCM16 samples in a canonical 44-byte RIFF/WAVE header.
+// WavEncode wraps PCM16 samples in a canonical 44-byte RIFF/WAVE header.
 // Parakeet's native input spec is 16 kHz mono PCM16, so no resampling happens
 // anywhere in the pipeline.
-func wavEncode(samples []int16) []byte {
+func WavEncode(samples []int16) []byte {
 	dataSize := len(samples) * 2
 	byteRate := wavSampleRate * wavChannels * wavBitsPerSample / 8
 	blockAlign := wavChannels * wavBitsPerSample / 8

@@ -1,4 +1,5 @@
 BINARY  := voice-type
+PKG     := ./cmd/voice-type
 VERSION ?= $(shell cat VERSION)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
@@ -11,7 +12,7 @@ export CGO_ENABLED = 0
 all: build
 
 build:
-	go build -ldflags="$(LDFLAGS)" -o $(BINARY) .
+	go build -ldflags="$(LDFLAGS)" -o $(BINARY) $(PKG)
 
 test:
 	go test ./...
@@ -24,7 +25,7 @@ vet:
 	go vet ./...
 
 fmt:
-	gofmt -w *.go
+	gofmt -w .
 
 check: fmt vet test
 
@@ -37,8 +38,8 @@ install:
 
 dist:
 	mkdir -p dist
-	GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o dist/$(BINARY)-x64 .
-	GOOS=linux GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o dist/$(BINARY)-arm64 .
+	GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o dist/$(BINARY)-x64 $(PKG)
+	GOOS=linux GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o dist/$(BINARY)-arm64 $(PKG)
 	@ls -lh dist/
 
 clean:

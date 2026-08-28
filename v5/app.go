@@ -1,8 +1,9 @@
-package main
+package voicetype
 
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -11,25 +12,17 @@ import (
 	"time"
 )
 
-// version is stamped at build time from the VERSION file, which is the single
-// source of truth the Makefile and release CI both read:
-// -ldflags "-X main.version=$(cat VERSION)". An unstamped `go build` reports
-// "dev" rather than claiming a release number it may not be.
-var version = "dev"
-
 func init() {
 	log.SetFlags(0)
 	log.SetOutput(os.Stderr)
 }
 
-// logf writes a tagged line to stderr. No file logger, no rotation -- stderr is
-// the whole logging story in v5.
 func logf(tag, format string, args ...any) {
 	log.Printf("[%s] %s: %s", time.Now().Format("15:04:05"), tag, fmt.Sprintf(format, args...))
 }
 
-// retainWAV saves audio that could not be transcribed, so an API failure never
-// silently discards speech the user already gave.
+// retainWAV saves audio that failed or produced a suspicious transcription, so
+// the evidence and speech the user already gave are not silently discarded.
 func retainWAV(wav []byte) (string, error) {
 	dir := filepath.Join(os.TempDir(), "voice-type")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -55,7 +48,48 @@ func retainWAV(wav []byte) (string, error) {
 	return path, nil
 }
 
-func main() {
+func printConfig(w io.Writer) error {
+	cfg, err := configReadStrict()
+	if err != nil {
+		return err
+	}
+
+	keyStatus := "MISSING"
+	switch {
+	case os.Getenv("OPENROUTER_API_KEY") != "":
+		keyStatus = "set (from OPENROUTER_API_KEY)"
+	case cfg.APIKey != "":
+		keyStatus = "set (from config file)"
+	}
+
+	spec := cfg.modelSpec()
+	vocabulary := "ignores vocabulary"
+	if spec.Vocabulary {
+		vocabulary = "reads vocabulary"
+	}
+	_, err = fmt.Fprintf(w, "config:     %s\napi_key:    %s\nport:       %d\nmodel:      %s  ($%.3f/hour, %s)\nvocabulary: %d terms\n",
+		configFilePath(), keyStatus, cfg.Port, spec.ID, spec.USDPerHour, vocabulary, len(cfg.Vocabulary))
+	return err
+}
+
+func printModels(w io.Writer) {
+	fmt.Fprintln(w, "ID                           $/hour   vocabulary")
+	for _, model := range sttModels {
+		vocabulary := "no"
+		if model.Vocabulary {
+			vocabulary = "yes"
+		}
+		defaultLabel := ""
+		if model.ID == defaultModelID {
+			defaultLabel = "  (default)"
+		}
+		fmt.Fprintf(w, "%-28s %7.3f   %-10s%s\n", model.ID, model.USDPerHour, vocabulary, defaultLabel)
+	}
+}
+
+// Run dispatches commands and runs the daemon. version stays in package main so
+// release builds can stamp it with -X main.version.
+func Run(version string) {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
 
@@ -72,8 +106,17 @@ func main() {
 	case "config-port":
 		fmt.Println(configLoad().Port)
 		return
+	case "config":
+		if err := printConfig(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	case "models":
+		printModels(os.Stdout)
+		return
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n\nusage: voice-type [start|version|config-port]\n", flag.Arg(0))
+		fmt.Fprintf(os.Stderr, "unknown command %q\n\nusage: voice-type [start|version|config|models|config-port]\n", flag.Arg(0))
 		os.Exit(2)
 	}
 
@@ -94,7 +137,6 @@ func main() {
 
 	d := newDaemon(cfg, res)
 
-	// Ctrl-C and SIGTERM shut down the same way /exit does.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
