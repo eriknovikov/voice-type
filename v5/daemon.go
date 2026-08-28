@@ -186,7 +186,6 @@ func (d *daemon) startSession() (int, string) {
 	started = true
 	d.mu.Unlock()
 
-	logf("AUDIO", "recording")
 	return http.StatusOK, "recording"
 }
 
@@ -257,10 +256,14 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 		d.sessionWG.Done()
 	}()
 
-	samples := d.res.Recorder.Stop()
+	samples, recordErr := d.res.Recorder.Stop()
 	if err := ctx.Err(); err != nil {
 		logf("AUDIO", "recording discarded during shutdown")
 		return http.StatusOK, "cancelled"
+	}
+	if recordErr != nil {
+		logf("AUDIO", "capture failed: %v", recordErr)
+		return http.StatusInternalServerError, recordErr.Error()
 	}
 	captured := wavDurationSeconds(samples)
 	if len(samples) == 0 {
@@ -268,11 +271,17 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 		return http.StatusOK, "no audio captured"
 	}
 	levels := measureAudioLevels(samples)
-	logf("AUDIO", "captured %.2fs (%d samples); peak RMS %.0f, noise floor %.0f",
-		captured, len(samples), levels.peakRMS, levels.noiseFloor)
+	analysis := analyzeSpeech(samples)
+	logf("AUDIO", "captured %.2fs (%d samples); peak RMS %.0f, noise floor %.0f, gate %.0f",
+		captured, len(samples), levels.peakRMS, levels.noiseFloor, analysis.gate)
 
-	if !worthUploading(samples) {
-		logf("AUDIO", "no speech in %.2fs -- discarded", captured)
+	if captured < minCaptureSeconds {
+		logf("AUDIO", "capture shorter than %.2fs -- discarded", minCaptureSeconds)
+		return http.StatusOK, "no speech detected"
+	}
+	if !analysis.detected {
+		logf("AUDIO", "no speech in %.2fs; longest active span %dms, candidate ZCR %.3f -- discarded",
+			captured, analysis.maxActiveFrames*20, analysis.zeroCrossingRate)
 		return http.StatusOK, "no speech detected"
 	}
 

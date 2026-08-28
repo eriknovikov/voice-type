@@ -23,6 +23,7 @@ type fakeRecorder struct {
 	startCalls   atomic.Int32
 	stopCalls    atomic.Int32
 	samples      []int16
+	stopErr      error
 }
 
 func (r *fakeRecorder) Start() error {
@@ -36,9 +37,9 @@ func (r *fakeRecorder) Start() error {
 	return nil
 }
 
-func (r *fakeRecorder) Stop() []int16 {
+func (r *fakeRecorder) Stop() ([]int16, error) {
 	r.stopCalls.Add(1)
-	return r.samples
+	return r.samples, r.stopErr
 }
 
 func (r *fakeRecorder) Close() {}
@@ -326,6 +327,21 @@ func TestExpiredTimerDoesNotStopNewSession(t *testing.T) {
 	}
 
 	d.stopSession()
+}
+
+func TestCaptureErrorIsNotReportedAsSilence(t *testing.T) {
+	rec := &fakeRecorder{samples: speech(1, 5000), stopErr: errors.New("connection closed")}
+	d := newDaemon(configDefaults(), &resources{Recorder: rec})
+	d.state = stateRecording
+	d.sessionCtx = context.Background()
+
+	status, message := d.stopSession()
+	if status != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", status)
+	}
+	if !strings.Contains(message, "connection closed") {
+		t.Errorf("message = %q, want capture error", message)
+	}
 }
 
 func TestShutdownWaitsForTranscription(t *testing.T) {

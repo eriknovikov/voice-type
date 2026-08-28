@@ -69,6 +69,13 @@ type audioLevels struct {
 	noiseFloor float64
 }
 
+type speechAnalysis struct {
+	detected         bool
+	gate             float64
+	maxActiveFrames  int
+	zeroCrossingRate float64
+}
+
 // measureAudioLevels uses the same 20 ms frames and quiet-frame rank as the
 // speech gate, making its log output directly comparable to that decision.
 func measureAudioLevels(samples []int16) audioLevels {
@@ -91,9 +98,13 @@ func measureAudioLevels(samples []int16) audioLevels {
 // over the whole capture. Unlike TrimSilence this needs no per-end estimate: it
 // asks whether the clip contains an utterance at all, not where one begins.
 func hasSpeech(samples []int16) bool {
+	return analyzeSpeech(samples).detected
+}
+
+func analyzeSpeech(samples []int16) speechAnalysis {
 	frames := len(samples) / trimFrameSamples
 	if frames == 0 {
-		return false
+		return speechAnalysis{}
 	}
 
 	rms := make([]float64, frames)
@@ -103,26 +114,40 @@ func hasSpeech(samples []int16) bool {
 
 	peak := slices.Max(rms)
 	gate := silenceGate(rms)
+	analysis := speechAnalysis{gate: gate}
 	activeFrames := 0
 	for i, level := range rms {
-		if level >= gate {
-			activeFrames++
-			if activeFrames >= speechMinActiveFrames {
-				start := (i - activeFrames + 1) * trimFrameSamples
-				end := (i + 1) * trimFrameSamples
-				return hasVoicedCadence(samples[start:end])
-			}
-		} else {
+		if level < gate {
 			activeFrames = 0
+			continue
+		}
+		activeFrames++
+		analysis.maxActiveFrames = max(analysis.maxActiveFrames, activeFrames)
+		if activeFrames < speechMinActiveFrames {
+			continue
+		}
+
+		// Keep scanning after a noise-like onset. The first 80 ms can be an
+		// unvoiced consonant; a later window in the same run may be voiced speech.
+		start := (i - speechMinActiveFrames + 1) * trimFrameSamples
+		end := (i + 1) * trimFrameSamples
+		rate, ok := voicedCadence(samples[start:end])
+		analysis.zeroCrossingRate = rate
+		if ok {
+			analysis.detected = true
+			return analysis
 		}
 	}
 	// A clip that begins immediately with sustained speech has no quiet frames
 	// from which to estimate a floor. Voiced cadence provides a conservative
 	// fallback without treating all steady room noise as speech.
-	return gate > peak && peak >= trimMinGate && hasVoicedCadence(samples)
+	if gate > peak && peak >= trimMinGate {
+		analysis.zeroCrossingRate, analysis.detected = voicedCadence(samples)
+	}
+	return analysis
 }
 
-func hasVoicedCadence(samples []int16) bool {
+func voicedCadence(samples []int16) (float64, bool) {
 	var previous int16
 	crossings, transitions := 0, 0
 	for _, sample := range samples {
@@ -138,10 +163,10 @@ func hasVoicedCadence(samples []int16) bool {
 		previous = sample
 	}
 	if transitions == 0 {
-		return false
+		return 0, false
 	}
 	rate := float64(crossings) / float64(transitions)
-	return rate >= speechMinZeroCrossingRate && rate <= speechMaxZeroCrossingRate
+	return rate, rate >= speechMinZeroCrossingRate && rate <= speechMaxZeroCrossingRate
 }
 
 // TrimSilence returns the span of samples between the first and last frame that

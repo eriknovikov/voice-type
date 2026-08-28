@@ -27,7 +27,7 @@ type Recorder struct {
 
 type audioRecorder interface {
 	Start() error
-	Stop() []int16
+	Stop() ([]int16, error)
 	Close()
 }
 
@@ -70,6 +70,11 @@ func (r *Recorder) Start() error {
 	r.samples = r.samples[:0]
 	r.bufMu.Unlock()
 
+	source, err := r.client.DefaultSource()
+	if err != nil {
+		return fmt.Errorf("resolve default source: %w", err)
+	}
+
 	stream, err := r.client.NewRecord(
 		pulse.Int16Writer(func(b []int16) (int, error) {
 			r.bufMu.Lock()
@@ -81,6 +86,7 @@ func (r *Recorder) Start() error {
 		pulse.RecordSampleRate(wavSampleRate),
 		pulse.RecordLatency(0.02),
 		pulse.RecordMediaName("voice-type dictation"),
+		pulse.RecordSource(source),
 	)
 	if err != nil {
 		return fmt.Errorf("open record stream: %w", err)
@@ -88,18 +94,21 @@ func (r *Recorder) Start() error {
 
 	r.stream = stream
 	stream.Start()
+	logf("AUDIO", "recording from %s (%s)", source.Name(), source.ID())
 	return nil
 }
 
 // Stop ends capture and returns everything recorded during the session.
-func (r *Recorder) Stop() []int16 {
+func (r *Recorder) Stop() ([]int16, error) {
 	r.streamMu.Lock()
 	stream := r.stream
 	r.stream = nil
 	r.streamMu.Unlock()
 
+	var streamErr error
 	if stream != nil {
 		stream.Stop()
+		streamErr = stream.Error()
 		stream.Close()
 	}
 
@@ -108,5 +117,8 @@ func (r *Recorder) Stop() []int16 {
 	out := make([]int16, len(r.samples))
 	copy(out, r.samples)
 	r.samples = r.samples[:0]
-	return out
+	if streamErr != nil {
+		streamErr = fmt.Errorf("record stream: %w", streamErr)
+	}
+	return out, streamErr
 }

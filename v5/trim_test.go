@@ -42,6 +42,20 @@ func speech(seconds float64, amplitude int16) []int16 {
 	return out
 }
 
+// fricative is a high-zero-crossing-rate onset, such as the "s" in "send".
+func fricative(seconds float64, amplitude int16) []int16 {
+	n := int(seconds * wavSampleRate)
+	out := make([]int16, n)
+	for i := range out {
+		if i%2 == 0 {
+			out[i] = amplitude
+		} else {
+			out[i] = -amplitude
+		}
+	}
+	return out
+}
+
 func concat(parts ...[]int16) []int16 {
 	var out []int16
 	for _, p := range parts {
@@ -274,6 +288,30 @@ func TestWorthUploadingKeepsSpeech(t *testing.T) {
 		if !worthUploading(in) {
 			t.Errorf("%s: discarded, want uploaded", name)
 		}
+	}
+}
+
+func TestWorthUploadingContinuesPastUnvoicedOnset(t *testing.T) {
+	in := concat(silence(0.2, 200), fricative(0.1, 6000), speech(0.6, 6000))
+
+	if !worthUploading(in) {
+		t.Error("voiced speech after a fricative onset was discarded")
+	}
+}
+
+func TestWorthUploadingContinuesPastRejectedActiveSpan(t *testing.T) {
+	in := concat(silence(0.2, 200), fricative(0.1, 6000), silence(0.1, 200), speech(0.6, 6000))
+
+	if !worthUploading(in) {
+		t.Error("later voiced speech was discarded after an earlier noise-like span")
+	}
+}
+
+func TestSustainedHighZeroCrossingNoiseIsDiscarded(t *testing.T) {
+	in := concat(silence(0.2, 200), fricative(1, 6000), silence(0.2, 200))
+
+	if worthUploading(in) {
+		t.Error("sustained high-zero-crossing noise reported as speech")
 	}
 }
 
