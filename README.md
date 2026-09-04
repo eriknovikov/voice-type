@@ -22,7 +22,19 @@ curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/v4/unins
 ```
 
 # V5
-Single Go Binary that records audio and sends to some OpenRouter voice model (parakeet v3 from Nvidia). Install with
+
+A single static Go binary that records audio and sends it to OpenRouter. New
+configurations use Microsoft MAI-Transcribe-2 with Azure phrase-list vocabulary
+and clean transcription; retryable provider failures fall back to OpenAI GPT
+Transcribe for that dictation. MAI-Transcribe-2 is currently a public-preview
+service without an SLA, which is why the fallback remains enabled.
+
+Existing configurations keep their explicitly selected model during upgrades.
+Run `voice-type models` to see the available models, vocabulary support, prices,
+and fallback policy. Workspace-specific vocabulary can be selected with
+`voice-type vocab set <name>`.
+
+Install with
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/v5/install.sh | bash
@@ -36,6 +48,5 @@ curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/v5/unins
 
 Only one version can be installed at a time: both use the `voice-type` command,
 `~/.config/voice-type.jsonc`, and port 3232, so installing one replaces the other.
-
 
 

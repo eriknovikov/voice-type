@@ -317,7 +317,7 @@ write_config() {
     "port": 3232,           // int 1024-65535
 
     // Run `voice-type models` for choices, prices, and vocabulary support.
-    "model": "gpt-4o-transcribe",
+    "model": "mai-transcribe-2",
 
     // Names and jargon the model would otherwise misspell, one list per
     // workspace. "general" rides along with every dictation; pick one of the

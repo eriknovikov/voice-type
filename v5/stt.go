@@ -20,6 +20,7 @@ type sttResult struct {
 	Text    string
 	Seconds float64
 	Cost    float64
+	ModelID string
 }
 
 type sttResponse struct {
@@ -62,26 +63,68 @@ func (e *sttError) Retryable() bool {
 type sttClient struct {
 	apiKey     string
 	model      sttSpec
+	fallback   *sttSpec
 	vocabulary []string
 	endpoint   string
 	http       *http.Client
 }
 
 func newSTTClient(apiKey string, model sttSpec, vocabulary []string) *sttClient {
-	return &sttClient{
+	c := &sttClient{
 		apiKey:     apiKey,
-		model:      model,
 		vocabulary: vocabulary,
 		endpoint:   sttEndpoint,
 		http:       &http.Client{Timeout: 120 * time.Second},
 	}
+	c.setRoute(model)
+	return c
 }
 
+func (c *sttClient) setRoute(model sttSpec) {
+	route := sttRouteFor(model)
+	c.model = route.Primary
+	c.fallback = route.Fallback
+}
+
+func (c *sttClient) fallbackID() string {
+	if c.fallback == nil {
+		return ""
+	}
+	return c.fallback.ID
+}
+
+// sttVocabularyPrompt is the conditioning sentence for prompt-biased models,
+// and is empty for every other model -- including phrase-list ones, which have
+// no prompt to echo and so need no echo guard.
 func sttVocabularyPrompt(model sttSpec, vocabulary []string) string {
-	if !model.Vocabulary || len(vocabulary) == 0 {
+	if model.Bias != biasPrompt || len(vocabulary) == 0 {
 		return ""
 	}
 	return "Vocabulary: " + strings.Join(vocabulary, ", ") + "."
+}
+
+// sttProviderOptions is the model-specific option block in the provider's own
+// spelling. The provider name is an options namespace, not a routing pin.
+func sttProviderOptions(model sttSpec, vocabulary []string) map[string]any {
+	switch model.Bias {
+	case biasPhraseList:
+		options := map[string]any{
+			"enhancedMode": map[string]any{
+				"modelOptions": map[string]any{"transcribeStyle": "clean"},
+			},
+		}
+		if len(vocabulary) > 0 {
+			options["phraseList"] = map[string]any{"phrases": vocabulary}
+		}
+		return options
+	case biasPrompt:
+		if len(vocabulary) == 0 {
+			return nil
+		}
+		return map[string]any{"prompt": sttVocabularyPrompt(model, vocabulary)}
+	default:
+		return nil
+	}
 }
 
 func normalizeTranscript(text string) string {
@@ -96,11 +139,10 @@ func vocabularyEcho(text, prompt string) bool {
 
 // OpenRouter reads provider options only from its base64 JSON encoding.
 func sttBuildJSON(model sttSpec, vocabulary []string, wav []byte) ([]byte, error) {
-	provider := map[string]any{"only": []string{model.Provider}}
-	if prompt := sttVocabularyPrompt(model, vocabulary); prompt != "" {
-		provider["options"] = map[string]any{model.Provider: map[string]any{
-			"prompt": prompt,
-		}}
+	vocabulary = cleanTerms(vocabulary)
+	var provider map[string]any
+	if options := sttProviderOptions(model, vocabulary); options != nil {
+		provider = map[string]any{"options": map[string]any{model.Provider: options}}
 	}
 
 	payload := map[string]any{
@@ -113,7 +155,9 @@ func sttBuildJSON(model sttSpec, vocabulary []string, wav []byte) ([]byte, error
 		// LLM transcribers sample, so the same audio would otherwise come back
 		// worded differently from one dictation to the next.
 		"temperature": 0,
-		"provider":    provider,
+	}
+	if provider != nil {
+		payload["provider"] = provider
 	}
 	return json.Marshal(payload)
 }
@@ -130,12 +174,14 @@ func (c *sttClient) Transcribe(wav []byte) (sttResult, error) {
 // TranscribeContext is Transcribe with cancellation for daemon shutdown.
 func (c *sttClient) TranscribeContext(ctx context.Context, wav []byte) (sttResult, error) {
 	var lastErr error
+	model := c.model
+	retriesOnModel := 0
 
 	for attempt := 1; attempt <= sttMaxAttempts; attempt++ {
-		res, err := c.transcribeOnce(ctx, wav)
+		res, err := c.transcribeOnce(ctx, model, wav)
 		if err == nil {
 			if attempt > 1 {
-				logf("STT", "succeeded on attempt %d", attempt)
+				logf("STT", "%s succeeded on attempt %d/%d", model.ID, attempt, sttMaxAttempts)
 			}
 			return res, nil
 		}
@@ -147,10 +193,17 @@ func (c *sttClient) TranscribeContext(ctx context.Context, wav []byte) (sttResul
 		if !sttShouldRetry(err) || attempt == sttMaxAttempts {
 			break
 		}
+		if model.ID == c.model.ID && c.fallback != nil {
+			logf("STT", "%s failed (%v) -- switching this dictation to %s", model.ID, err, c.fallback.ID)
+			model = *c.fallback
+			retriesOnModel = 0
+			continue
+		}
 
 		// 400ms, 800ms, 1600ms
-		backoff := time.Duration(400*(1<<(attempt-1))) * time.Millisecond
-		logf("STT", "attempt %d/%d failed (%v) -- retrying in %v", attempt, sttMaxAttempts, err, backoff)
+		backoff := time.Duration(400*(1<<retriesOnModel)) * time.Millisecond
+		retriesOnModel++
+		logf("STT", "%s attempt %d/%d failed (%v) -- retrying in %v", model.ID, attempt, sttMaxAttempts, err, backoff)
 		timer := time.NewTimer(backoff)
 		select {
 		case <-timer.C:
@@ -169,10 +222,8 @@ func sttShouldRetry(err error) bool {
 	if errors.As(err, &se) {
 		return se.Retryable()
 	}
-	// A transport-level failure (timeout, connection reset) is worth another go;
-	// a request we could not even build is not.
-	var be *sttBuildError
-	return !errors.As(err, &be)
+	var te *sttTransportError
+	return errors.As(err, &te)
 }
 
 // sttBuildError marks failures that happen before anything is sent, which are
@@ -182,9 +233,16 @@ type sttBuildError struct{ err error }
 func (e *sttBuildError) Error() string { return e.err.Error() }
 func (e *sttBuildError) Unwrap() error { return e.err }
 
+// sttTransportError is a failure while exchanging a request or response. It
+// distinguishes retryable network failures from deterministic decode errors.
+type sttTransportError struct{ err error }
+
+func (e *sttTransportError) Error() string { return e.err.Error() }
+func (e *sttTransportError) Unwrap() error { return e.err }
+
 // transcribeOnce performs a single upload attempt.
-func (c *sttClient) transcribeOnce(ctx context.Context, wav []byte) (sttResult, error) {
-	payload, err := sttBuildJSON(c.model, c.vocabulary, wav)
+func (c *sttClient) transcribeOnce(ctx context.Context, model sttSpec, wav []byte) (sttResult, error) {
+	payload, err := sttBuildJSON(model, c.vocabulary, wav)
 	if err != nil {
 		return sttResult{}, &sttBuildError{err}
 	}
@@ -198,13 +256,13 @@ func (c *sttClient) transcribeOnce(ctx context.Context, wav []byte) (sttResult, 
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return sttResult{}, fmt.Errorf("transcription request failed: %w", err)
+		return sttResult{}, &sttTransportError{fmt.Errorf("transcription request failed: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return sttResult{}, fmt.Errorf("read transcription response: %w", err)
+		return sttResult{}, &sttTransportError{fmt.Errorf("read transcription response: %w", err)}
 	}
 
 	var parsed sttResponse
@@ -229,6 +287,7 @@ func (c *sttClient) transcribeOnce(ctx context.Context, wav []byte) (sttResult, 
 		Text:    strings.TrimSpace(parsed.Text),
 		Seconds: parsed.Usage.Seconds,
 		Cost:    parsed.Usage.Cost,
+		ModelID: model.ID,
 	}, nil
 }
 

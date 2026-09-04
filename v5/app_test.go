@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -31,6 +32,7 @@ func TestPrintConfigReportsResolvedValuesWithoutKey(t *testing.T) {
 		"api_key:    set (from OPENROUTER_API_KEY)",
 		"port:       4321",
 		"model:      whisper-large-v3  ($0.027/hour, reads vocabulary)",
+		"fallback:   none",
 		"vocabulary: 2 terms",
 	} {
 		if !strings.Contains(got, want) {
@@ -76,8 +78,24 @@ func TestPrintModelsListsAllowlistAndDefault(t *testing.T) {
 			defaultLine = line
 		}
 	}
-	if !strings.Contains(defaultLine, "0.224") || !strings.Contains(defaultLine, "yes") || !strings.Contains(defaultLine, "(default)") {
+	spec, _ := sttLookup(defaultModelID)
+	price := strconv.FormatFloat(spec.USDPerHour, 'f', 3, 64)
+	if !strings.Contains(defaultLine, price) || !strings.Contains(defaultLine, "yes") || !strings.Contains(defaultLine, "(default)") {
 		t.Errorf("default model not identified:\n%s", got)
+	}
+	if !strings.Contains(defaultLine, "gpt-transcribe") {
+		t.Errorf("default model fallback not identified:\n%s", got)
+	}
+}
+
+func TestInstallerTemplateUsesMAIDefault(t *testing.T) {
+	raw, err := os.ReadFile("install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"model": "` + defaultModelID + `"`
+	if !strings.Contains(string(raw), want) {
+		t.Errorf("installer template lacks %s", want)
 	}
 }
 

@@ -61,30 +61,54 @@ const (
 	maxDurationSeconds = 600
 )
 
-// sttSpec is one allowed model. Provider is pinned on every request because
-// OpenRouter keys provider options by provider slug and reroutes freely, so an
-// unpinned request can land where the vocabulary is dropped; Vocabulary records
-// where it measurably is not.
+// sttBias is how a model takes vocabulary conditioning. The shape has to match
+// the provider namespace that OpenRouter forwards for that model.
+type sttBias int
+
+const (
+	// biasNone is a model that measurably discards a vocabulary. Sending one
+	// only pays to upload it.
+	biasNone sttBias = iota
+	// biasPrompt is the Whisper lineage: a sentence prepended to the decoder
+	// context, which the model can echo back instead of transcribing.
+	biasPrompt
+	// biasPhraseList is Azure keyword biasing -- terms, not prose, weighted
+	// during decoding. There is no prompt to echo.
+	biasPhraseList
+)
+
+// sttSpec is one allowed model. Provider names the provider.options namespace;
+// OpenRouter does not apply provider routing preferences to STT requests.
 type sttSpec struct {
 	ID         string
 	Slug       string
 	Provider   string
-	Vocabulary bool
+	Bias       sttBias
 	USDPerHour float64
+	FallbackID string
 }
 
-const defaultModelID = "gpt-4o-transcribe"
+type sttRoute struct {
+	Primary  sttSpec
+	Fallback *sttSpec
+}
+
+// TakesVocabulary reports whether sending terms with the audio does anything.
+func (s sttSpec) TakesVocabulary() bool { return s.Bias != biasNone }
+
+const defaultModelID = "mai-transcribe-2"
 
 // sttModels is the model allowlist shown by `voice-type models`.
 var sttModels = []sttSpec{
-	{"gpt-4o-transcribe", "openai/gpt-4o-transcribe", "openai", true, 0.224},
-	{"gpt-transcribe", "openai/gpt-transcribe", "openai", true, 0.273},
-	{"whisper-large-v3", "openai/whisper-large-v3", "deepinfra", true, 0.027},
-	{"whisper-1", "openai/whisper-1", "openai", true, 0.364},
-	{"whisper-large-v3-turbo", "openai/whisper-large-v3-turbo", "deepinfra", true, 0.012},
-	{"gpt-4o-mini-transcribe", "openai/gpt-4o-mini-transcribe", "openai", true, 0.111},
-	{"parakeet-v3", "nvidia/parakeet-tdt-0.6b-v3", "together", false, 0.090},
-	{"whisper-large-v3-turbo-groq", "openai/whisper-large-v3-turbo", "groq", false, 0.012},
+	{ID: "mai-transcribe-2", Slug: "microsoft/mai-transcribe-2", Provider: "azure", Bias: biasPhraseList, USDPerHour: 0.100, FallbackID: "gpt-transcribe"},
+	{ID: "gpt-4o-transcribe", Slug: "openai/gpt-4o-transcribe", Provider: "openai", Bias: biasPrompt, USDPerHour: 0.224},
+	{ID: "gpt-transcribe", Slug: "openai/gpt-transcribe", Provider: "openai", Bias: biasPrompt, USDPerHour: 0.270},
+	{ID: "whisper-large-v3", Slug: "openai/whisper-large-v3", Provider: "deepinfra", Bias: biasPrompt, USDPerHour: 0.027},
+	{ID: "whisper-1", Slug: "openai/whisper-1", Provider: "openai", Bias: biasPrompt, USDPerHour: 0.364},
+	{ID: "whisper-large-v3-turbo", Slug: "openai/whisper-large-v3-turbo", Provider: "deepinfra", Bias: biasPrompt, USDPerHour: 0.012},
+	{ID: "gpt-4o-mini-transcribe", Slug: "openai/gpt-4o-mini-transcribe", Provider: "openai", Bias: biasPrompt, USDPerHour: 0.111},
+	{ID: "parakeet-v3", Slug: "nvidia/parakeet-tdt-0.6b-v3", Provider: "together", Bias: biasNone, USDPerHour: 0.090},
+	{ID: "whisper-large-v3-turbo-groq", Slug: "openai/whisper-large-v3-turbo", Provider: "groq", Bias: biasNone, USDPerHour: 0.012},
 }
 
 func sttLookup(id string) (sttSpec, bool) {
@@ -94,6 +118,49 @@ func sttLookup(id string) (sttSpec, bool) {
 		}
 	}
 	return sttSpec{}, false
+}
+
+func sttRouteFor(primary sttSpec) sttRoute {
+	route := sttRoute{Primary: primary}
+	if primary.FallbackID != "" {
+		if fallback, ok := sttLookup(primary.FallbackID); ok {
+			route.Fallback = &fallback
+		}
+	}
+	return route
+}
+
+func validateSTTCatalog(models []sttSpec) error {
+	byID := make(map[string]sttSpec, len(models))
+	for _, model := range models {
+		if _, exists := byID[model.ID]; exists {
+			return fmt.Errorf("duplicate STT model %q", model.ID)
+		}
+		byID[model.ID] = model
+	}
+	for _, model := range models {
+		if model.FallbackID == "" {
+			continue
+		}
+		if model.FallbackID == model.ID {
+			return fmt.Errorf("STT model %q falls back to itself", model.ID)
+		}
+		if _, ok := byID[model.FallbackID]; !ok {
+			return fmt.Errorf("STT model %q has missing fallback %q", model.ID, model.FallbackID)
+		}
+
+		seen := map[string]bool{model.ID: true}
+		for next := model.FallbackID; next != ""; next = byID[next].FallbackID {
+			if seen[next] {
+				return fmt.Errorf("STT fallback cycle includes %q", next)
+			}
+			seen[next] = true
+			if _, ok := byID[next]; !ok {
+				break
+			}
+		}
+	}
+	return nil
 }
 
 func configDefaults() Config {
@@ -404,7 +471,7 @@ func configValidate(raw map[string]json.RawMessage) Config {
 	}
 
 	// A vocabulary the model discards is billed on every dictation for nothing.
-	if spec := cfg.modelSpec(); len(cfg.Vocabulary) > 0 && !spec.Vocabulary {
+	if spec := cfg.modelSpec(); len(cfg.Vocabulary) > 0 && !spec.TakesVocabulary() {
 		vocabularyWarning = spec.ID + " ignores it -- see `voice-type models`"
 	}
 	configWarn("vocabulary", vocabularyWarning)
