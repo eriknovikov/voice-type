@@ -113,6 +113,18 @@ remove_config() {
     esac
 }
 
+# The active vocabulary list is a single name voice-type wrote itself, so
+# it goes without asking. The directory stays unless it is now empty -- a log
+# may live beside it.
+remove_state() {
+    _dir="${XDG_STATE_HOME:-$HOME/.local/state}/voice-type"
+    _state="$_dir/workspace"
+    [ -e "$_state" ] || return 0
+    rm -f "$_state"
+    rmdir "$_dir" 2> /dev/null || true
+    log_info "Removed $_state"
+}
+
 # Audio that failed to transcribe is retained here rather than discarded, so it
 # may hold speech the user never got back as text. Never delete it unasked.
 remove_retained_audio() {
@@ -146,6 +158,7 @@ main() {
     stop_daemon
     remove_binary
     remove_config
+    remove_state
     remove_retained_audio
     printf '\n' >&2
     log_info "Done. Your 'input' group membership was left in place."

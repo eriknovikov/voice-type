@@ -39,11 +39,14 @@ func (s sessionState) String() string {
 }
 
 type daemon struct {
-	cfg  Config
-	res  *resources
-	stt  *sttClient
-	srv  *http.Server
-	done chan struct{}
+	cfg Config
+	// workspace is the active vocabulary workspace, re-read from the state file
+	// with the config so `voice-type vocab set` lands on the next dictation.
+	workspace string
+	res       *resources
+	stt       *sttClient
+	srv       *http.Server
+	done      chan struct{}
 
 	mu    sync.Mutex
 	state sessionState
@@ -60,10 +63,12 @@ type daemon struct {
 }
 
 func newDaemon(cfg Config, res *resources) *daemon {
+	workspace := workspaceLoad()
 	return &daemon{
 		cfg:         cfg,
+		workspace:   workspace,
 		res:         res,
-		stt:         newSTTClient(configAPIKey(cfg), cfg.modelSpec(), cfg.Vocabulary),
+		stt:         newSTTClient(configAPIKey(cfg), cfg.modelSpec(), cfg.activeVocabulary(workspace)),
 		done:        make(chan struct{}),
 		checkOnline: checkConnectivity,
 	}
@@ -189,20 +194,25 @@ func (d *daemon) startSession() (int, string) {
 	return http.StatusOK, "recording"
 }
 
-// reloadConfig re-reads the config file so a hand edit applies to this
-// dictation without a restart. Callers hold d.mu. The bound port is the one
-// exception: the listener is already up on the old one.
+// reloadConfig re-reads the config file and the active workspace so a hand edit
+// or a `vocab set` applies to this dictation without a restart. Callers hold
+// d.mu. The bound port is the one exception: the listener is already up on the
+// old one.
 func (d *daemon) reloadConfig() {
+	d.workspace = workspaceLoad()
+
 	cfg, err := configReadStrict()
 	if err != nil {
 		configWarn("file", err.Error()+" -- keeping current configuration")
+		d.stt.vocabulary = d.cfg.activeVocabulary(d.workspace)
 		return
 	}
 	lastWarning.Delete("file")
 	cfg.Port = d.cfg.Port
 	d.cfg = cfg
 
-	d.stt.apiKey, d.stt.model, d.stt.vocabulary = configAPIKey(cfg), cfg.modelSpec(), cfg.Vocabulary
+	d.stt.apiKey, d.stt.model = configAPIKey(cfg), cfg.modelSpec()
+	d.stt.vocabulary = cfg.activeVocabulary(d.workspace)
 }
 
 // stopSession moves recording -> transcribing -> idle. It runs on the caller's
@@ -401,11 +411,12 @@ func (d *daemon) routes() *http.ServeMux {
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		d.mu.Lock()
-		cfg, state := d.cfg, d.state
+		cfg, state, workspace := d.cfg, d.state, d.workspace
+		terms := len(cfg.vocabularyFor(workspace))
 		d.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status": "ok", "state": state.String(),
-			"model": cfg.Model, "vocabulary": len(cfg.Vocabulary),
+			"model": cfg.Model, "workspace": workspaceLabel(workspace), "vocabulary": terms,
 		})
 	})
 
@@ -485,8 +496,8 @@ func (d *daemon) Run() error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		logf("DAEMON", "listening on http://127.0.0.1:%d (model %s, %d vocabulary terms)",
-			d.cfg.Port, d.cfg.Model, len(d.cfg.Vocabulary))
+		logf("DAEMON", "listening on http://127.0.0.1:%d (model %s, workspace %s, %d vocabulary terms)",
+			d.cfg.Port, d.cfg.Model, workspaceLabel(d.workspace), len(d.cfg.vocabularyFor(d.workspace)))
 		if err := d.srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}

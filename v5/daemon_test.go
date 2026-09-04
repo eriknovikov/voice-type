@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -606,7 +607,7 @@ func TestVocabularyEchoRetainsAudioAndSkipsOutput(t *testing.T) {
 	kb := newFakeKeyboard()
 	samples := concat(speech(0.5, 2500), speech(2, 5000))
 	cfg := configDefaults()
-	cfg.Vocabulary = vocabulary
+	cfg.Vocabulary = vocabLists{{generalWorkspace, vocabulary}}
 	d := newDaemon(cfg, &resources{
 		Recorder: &fakeRecorder{samples: samples},
 		Typer:    &Typer{kb: kb},
@@ -645,13 +646,13 @@ func TestVocabularyInLegitimateTranscriptIsOutput(t *testing.T) {
 	// No clipboard tools in PATH forces the production fallback to direct typing.
 	t.Setenv("PATH", t.TempDir())
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{"text": "Numbero is spelled correctly."})
+		json.NewEncoder(w).Encode(map[string]any{"text": "CommonTerm is spelled correctly."})
 	}))
 	defer srv.Close()
 
 	kb := newFakeKeyboard()
 	cfg := configDefaults()
-	cfg.Vocabulary = []string{"Numbero"}
+	cfg.Vocabulary = vocabLists{{generalWorkspace, []string{"CommonTerm"}}}
 	d := newDaemon(cfg, &resources{
 		Recorder: &fakeRecorder{samples: concat(speech(0.5, 2500), speech(2, 5000))},
 		Typer:    &Typer{kb: kb},
@@ -661,10 +662,60 @@ func TestVocabularyInLegitimateTranscriptIsOutput(t *testing.T) {
 	d.sessionCtx = context.Background()
 
 	status, message := d.stopSession()
-	if status != http.StatusOK || message != "Numbero is spelled correctly." {
+	if status != http.StatusOK || message != "CommonTerm is spelled correctly." {
 		t.Fatalf("status/message = %d/%q", status, message)
 	}
 	if len(kb.events) == 0 {
 		t.Fatal("legitimate transcript was not output")
 	}
+}
+
+// A `voice-type vocab set` runs in a second process and only writes the state
+// file, so the daemon has to pick it up on the next dictation the same way it
+// picks up a hand edit.
+func TestDaemonPicksUpWorkspaceSetBetweenDictations(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("OPENROUTER_API_KEY", "k")
+	config := `{
+    "vocabulary": {
+        "general":     ["CommonTerm"],
+        "project-one": ["ProjectTerm", "AnotherTerm"],
+        "voice-type": ["dotool"]
+    }
+}`
+	if err := os.WriteFile(filepath.Join(home, "voice-type.jsonc"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspaceSave("project-one"); err != nil {
+		t.Fatal(err)
+	}
+
+	d := newDaemon(configLoad(), &resources{Recorder: &fakeRecorder{}})
+	assumeOnline(d)
+	if got := d.stt.vocabulary; !reflect.DeepEqual(got, []string{"CommonTerm", "ProjectTerm", "AnotherTerm"}) {
+		t.Fatalf("started with vocabulary %q", got)
+	}
+
+	if err := workspaceSave("voice-type"); err != nil {
+		t.Fatal(err)
+	}
+	if status, message := d.startSession(); status != http.StatusOK {
+		t.Fatalf("start after set = %d/%q", status, message)
+	}
+	if got := d.stt.vocabulary; !reflect.DeepEqual(got, []string{"CommonTerm", "dotool"}) {
+		t.Errorf("after set, vocabulary = %q", got)
+	}
+
+	health := httptest.NewRecorder()
+	d.routes().ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/health", nil))
+	var body map[string]any
+	if err := json.Unmarshal(health.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["workspace"] != "voice-type" || body["vocabulary"] != float64(2) {
+		t.Errorf("health = %#v", body)
+	}
+	d.stopSession()
 }

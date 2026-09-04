@@ -45,7 +45,7 @@ func TestLiveTranscribe(t *testing.T) {
 		t.Fatalf("model %q is not on the allowlist", cfg.Model)
 	}
 
-	c := newSTTClient(key, model, cfg.Vocabulary)
+	c := newSTTClient(key, model, cfg.activeVocabulary(workspaceLoad()))
 	t0 := time.Now()
 	res, err := c.Transcribe(wav)
 	if err != nil {
