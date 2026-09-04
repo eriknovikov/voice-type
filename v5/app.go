@@ -65,13 +65,17 @@ func printConfig(w io.Writer) error {
 	}
 
 	spec := cfg.modelSpec()
+	fallback := "none"
+	if route := sttRouteFor(spec); route.Fallback != nil {
+		fallback = route.Fallback.ID
+	}
 	vocabulary := "ignores vocabulary"
-	if spec.Vocabulary {
+	if spec.TakesVocabulary() {
 		vocabulary = "reads vocabulary"
 	}
 	workspace := workspaceLoad()
-	_, err = fmt.Fprintf(w, "config:     %s\napi_key:    %s\nport:       %d\nmodel:      %s  ($%.3f/hour, %s)\nvocabulary: %d terms (%s)\n",
-		configFilePath(), keyStatus, cfg.Port, spec.ID, spec.USDPerHour, vocabulary,
+	_, err = fmt.Fprintf(w, "config:     %s\napi_key:    %s\nport:       %d\nmodel:      %s  ($%.3f/hour, %s)\nfallback:   %s\nvocabulary: %d terms (%s)\n",
+		configFilePath(), keyStatus, cfg.Port, spec.ID, spec.USDPerHour, vocabulary, fallback,
 		len(cfg.activeVocabulary(workspace)), vocabularySources(cfg, workspace))
 	return err
 }
@@ -95,7 +99,7 @@ func vocabularySources(cfg Config, workspace string) string {
 // printVocab is `voice-type vocab ls`: how many terms the next dictation sends,
 // which list is picked, and every list in the order the config file writes them.
 func printVocab(w io.Writer, cfg Config, workspace string) {
-	if spec := cfg.modelSpec(); !spec.Vocabulary {
+	if spec := cfg.modelSpec(); !spec.TakesVocabulary() {
 		fmt.Fprintf(w, "model:   %s (ignores vocabulary -- nothing below is sent)\n", spec.ID)
 	}
 	fmt.Fprintf(w, "sending: %d\ncurrent: %s\n", len(cfg.activeVocabulary(workspace)), workspaceLabel(workspace))
@@ -174,17 +178,21 @@ func runVocab(w io.Writer, args []string) error {
 }
 
 func printModels(w io.Writer) {
-	fmt.Fprintln(w, "ID                           $/hour   vocabulary")
+	fmt.Fprintln(w, "ID                           $/hour   vocabulary  fallback")
 	for _, model := range sttModels {
 		vocabulary := "no"
-		if model.Vocabulary {
+		if model.TakesVocabulary() {
 			vocabulary = "yes"
 		}
 		defaultLabel := ""
 		if model.ID == defaultModelID {
 			defaultLabel = "  (default)"
 		}
-		fmt.Fprintf(w, "%-28s %7.3f   %-10s%s\n", model.ID, model.USDPerHour, vocabulary, defaultLabel)
+		fallback := "-"
+		if model.FallbackID != "" {
+			fallback = model.FallbackID
+		}
+		fmt.Fprintf(w, "%-28s %7.3f   %-10s  %-14s%s\n", model.ID, model.USDPerHour, vocabulary, fallback, defaultLabel)
 	}
 }
 

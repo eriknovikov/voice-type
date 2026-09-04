@@ -3,6 +3,7 @@ package voicetype
 import (
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -165,6 +166,41 @@ func TestTunedConstantsAreValid(t *testing.T) {
 	}
 	if _, ok := sttLookup(defaultModelID); !ok {
 		t.Errorf("default model %q is not on the allowlist", defaultModelID)
+	}
+}
+
+func TestSTTCatalogRoutes(t *testing.T) {
+	if err := validateSTTCatalog(sttModels); err != nil {
+		t.Fatalf("catalog: %v", err)
+	}
+
+	mai := testSpec("mai-transcribe-2")
+	route := sttRouteFor(mai)
+	if route.Primary.ID != mai.ID || route.Fallback == nil || route.Fallback.ID != "gpt-transcribe" {
+		t.Fatalf("MAI route = primary %q, fallback %#v", route.Primary.ID, route.Fallback)
+	}
+	if route := sttRouteFor(testSpec("gpt-transcribe")); route.Fallback != nil {
+		t.Fatalf("explicit GPT Transcribe route unexpectedly falls back to %q", route.Fallback.ID)
+	}
+}
+
+func TestSTTCatalogRejectsInvalidFallbacks(t *testing.T) {
+	tests := []struct {
+		name   string
+		models []sttSpec
+		want   string
+	}{
+		{"missing", []sttSpec{{ID: "a", FallbackID: "gone"}}, "missing"},
+		{"self", []sttSpec{{ID: "a", FallbackID: "a"}}, "itself"},
+		{"cycle", []sttSpec{{ID: "a", FallbackID: "b"}, {ID: "b", FallbackID: "a"}}, "cycle"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSTTCatalog(tt.models)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want substring %q", err, tt.want)
+			}
+		})
 	}
 }
 

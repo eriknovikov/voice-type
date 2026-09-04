@@ -211,7 +211,8 @@ func (d *daemon) reloadConfig() {
 	cfg.Port = d.cfg.Port
 	d.cfg = cfg
 
-	d.stt.apiKey, d.stt.model = configAPIKey(cfg), cfg.modelSpec()
+	d.stt.apiKey = configAPIKey(cfg)
+	d.stt.setRoute(cfg.modelSpec())
 	d.stt.vocabulary = cfg.activeVocabulary(d.workspace)
 }
 
@@ -328,15 +329,19 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 		}
 		return d.handleSTTError(err, wav)
 	}
-	logf("STT", "%.2fs audio -> %d chars in %v (billed %.0fs, $%.6f)",
-		duration, len(result.Text), time.Since(t0).Round(time.Millisecond), result.Seconds, result.Cost)
+	logf("STT", "%s: %.2fs audio -> %d chars in %v (billed %.0fs, $%.6f)",
+		result.ModelID, duration, len(result.Text), time.Since(t0).Round(time.Millisecond), result.Seconds, result.Cost)
 
 	if result.Text == "" {
 		logf("STT", "empty transcript -- nothing to type")
 		return http.StatusOK, ""
 	}
 
-	prompt := sttVocabularyPrompt(stt.model, stt.vocabulary)
+	producingModel, ok := sttLookup(result.ModelID)
+	if !ok {
+		producingModel = stt.model
+	}
+	prompt := sttVocabularyPrompt(producingModel, stt.vocabulary)
 	if vocabularyEcho(result.Text, prompt) {
 		retained := ""
 		if path, retainErr := retainWAV(wav); retainErr == nil {
@@ -414,9 +419,15 @@ func (d *daemon) routes() *http.ServeMux {
 		cfg, state, workspace := d.cfg, d.state, d.workspace
 		terms := len(cfg.vocabularyFor(workspace))
 		d.mu.Unlock()
+		route := sttRouteFor(cfg.modelSpec())
+		fallback := ""
+		if route.Fallback != nil {
+			fallback = route.Fallback.ID
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status": "ok", "state": state.String(),
-			"model": cfg.Model, "workspace": workspaceLabel(workspace), "vocabulary": terms,
+			"model": cfg.Model, "fallback": fallback,
+			"workspace": workspaceLabel(workspace), "vocabulary": terms,
 		})
 	})
 

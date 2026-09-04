@@ -239,6 +239,9 @@ func TestHealthReportsState(t *testing.T) {
 	if body["state"] != "recording" {
 		t.Errorf("state = %v, want recording", body["state"])
 	}
+	if body["fallback"] != "gpt-transcribe" {
+		t.Errorf("fallback = %v, want gpt-transcribe", body["fallback"])
+	}
 }
 
 // /toggle while recording must not be routed to start.
@@ -557,10 +560,11 @@ func TestDaemonReloadsConfigBetweenDictations(t *testing.T) {
 		t.Fatalf("started with model=%s vocabulary=%q", beforeModel, d.stt.vocabulary)
 	}
 
+	const reloadedModel = defaultModelID
 	if err := os.WriteFile(path, []byte(`{
     "api_key": "second",
     "port": 9999,
-    "model": "gpt-4o-transcribe",
+    "model": "`+reloadedModel+`",
     "vocabulary": ["Numbero"]
 }`), 0o600); err != nil {
 		t.Fatal(err)
@@ -570,8 +574,11 @@ func TestDaemonReloadsConfigBetweenDictations(t *testing.T) {
 	}
 
 	after := d.stt
-	if after.model.ID != defaultModelID || after.apiKey != "second" || len(after.vocabulary) != 1 {
+	if after.model.ID != reloadedModel || after.apiKey != "second" || len(after.vocabulary) != 1 {
 		t.Errorf("after reload: model=%s key=%s vocabulary=%q", after.model.ID, after.apiKey, after.vocabulary)
+	}
+	if after.fallbackID() != "gpt-transcribe" {
+		t.Errorf("after reload fallback = %q, want gpt-transcribe", after.fallbackID())
 	}
 	// The listener is already bound, so a port change waits for a restart.
 	if d.cfg.Port != 3232 {
@@ -589,7 +596,7 @@ func TestDaemonReloadsConfigBetweenDictations(t *testing.T) {
 	if err := json.Unmarshal(health.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["state"] != "recording" || body["model"] != defaultModelID || body["vocabulary"] != float64(1) {
+	if body["state"] != "recording" || body["model"] != reloadedModel || body["fallback"] != "gpt-transcribe" || body["vocabulary"] != float64(1) {
 		t.Errorf("health after reload = %#v", body)
 	}
 	d.stopSession()
@@ -597,8 +604,11 @@ func TestDaemonReloadsConfigBetweenDictations(t *testing.T) {
 
 func TestVocabularyEchoRetainsAudioAndSkipsOutput(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
-	vocabulary := []string{"Numbero", "Erik Novikov"}
-	prompt := sttVocabularyPrompt(testSpec(defaultModelID), vocabulary)
+	vocabulary := []string{"ProjectTerm", "Maintainer Name"}
+	// Only a prompt-biased model can echo; the phrase-list default never sees a
+	// prompt to send back.
+	const promptModel = "gpt-4o-transcribe"
+	prompt := sttVocabularyPrompt(testSpec(promptModel), vocabulary)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"text": prompt})
 	}))
@@ -607,6 +617,7 @@ func TestVocabularyEchoRetainsAudioAndSkipsOutput(t *testing.T) {
 	kb := newFakeKeyboard()
 	samples := concat(speech(0.5, 2500), speech(2, 5000))
 	cfg := configDefaults()
+	cfg.Model = promptModel
 	cfg.Vocabulary = vocabLists{{generalWorkspace, vocabulary}}
 	d := newDaemon(cfg, &resources{
 		Recorder: &fakeRecorder{samples: samples},
@@ -642,10 +653,58 @@ func TestVocabularyEchoRetainsAudioAndSkipsOutput(t *testing.T) {
 	}
 }
 
-func TestVocabularyInLegitimateTranscriptIsOutput(t *testing.T) {
+func TestFallbackVocabularyEchoRetainsAudioAndSkipsOutput(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	vocabulary := []string{"ProjectTerm", "Maintainer Name"}
+	prompt := sttVocabularyPrompt(testSpec("gpt-transcribe"), vocabulary)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["model"] == "microsoft/mai-transcribe-2" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"text": prompt})
+	}))
+	defer srv.Close()
+
+	kb := newFakeKeyboard()
+	cfg := configDefaults()
+	cfg.Vocabulary = vocabLists{{generalWorkspace, vocabulary}}
+	d := newDaemon(cfg, &resources{
+		Recorder: &fakeRecorder{samples: concat(speech(0.5, 2500), speech(2, 5000))},
+		Typer:    &Typer{kb: kb},
+	})
+	d.stt.endpoint = srv.URL
+	d.state = stateRecording
+	d.sessionCtx = context.Background()
+
+	status, message := d.stopSession()
+	if status != http.StatusBadGateway || !strings.Contains(message, "matched the vocabulary prompt") {
+		t.Fatalf("status/message = %d/%q", status, message)
+	}
+	if len(kb.events) != 0 {
+		t.Errorf("echo reached keyboard: %#v", kb.events)
+	}
+	matches, err := filepath.Glob(filepath.Join(os.TempDir(), "voice-type", "dictation-*.wav"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("retained WAVs = %d, err=%v", len(matches), err)
+	}
+}
+
+func TestVocabularyInLegitimateFallbackTranscriptIsOutput(t *testing.T) {
 	// No clipboard tools in PATH forces the production fallback to direct typing.
 	t.Setenv("PATH", t.TempDir())
+	var models []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		models = append(models, body["model"].(string))
+		if len(models) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		json.NewEncoder(w).Encode(map[string]any{"text": "CommonTerm is spelled correctly."})
 	}))
 	defer srv.Close()
@@ -667,6 +726,34 @@ func TestVocabularyInLegitimateTranscriptIsOutput(t *testing.T) {
 	}
 	if len(kb.events) == 0 {
 		t.Fatal("legitimate transcript was not output")
+	}
+	if !reflect.DeepEqual(models, []string{"microsoft/mai-transcribe-2", "openai/gpt-transcribe"}) {
+		t.Errorf("models = %#v", models)
+	}
+}
+
+func TestFallbackExhaustionRetainsAudio(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	d := newDaemon(configDefaults(), &resources{
+		Recorder: &fakeRecorder{samples: concat(speech(0.5, 2500), speech(2, 5000))},
+		Typer:    &Typer{kb: newFakeKeyboard()},
+	})
+	d.stt.endpoint = srv.URL
+	d.state = stateRecording
+	d.sessionCtx = context.Background()
+
+	status, _ := d.stopSession()
+	if status != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", status)
+	}
+	matches, err := filepath.Glob(filepath.Join(os.TempDir(), "voice-type", "dictation-*.wav"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("retained WAVs = %d, err=%v", len(matches), err)
 	}
 }
 

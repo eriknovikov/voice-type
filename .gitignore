@@ -8,4 +8,5 @@ releases
 .env
 .env.*
 /v5/voice-type
-tools 
+/benchmark*.wav
+tools
