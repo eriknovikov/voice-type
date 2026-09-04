@@ -1,10 +1,13 @@
 package voicetype
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"unicode"
 )
@@ -16,8 +19,36 @@ type Config struct {
 	Port   int
 	// Model is an sttModels ID. Vocabulary travels with the audio, so names
 	// come out spelled right instead of being corrected afterwards.
-	Model      string
-	Vocabulary []string
+	Model string
+	// Vocabulary is the named term lists. generalWorkspace rides along with
+	// every dictation; the rest are one at a time, picked with `voice-type
+	// vocab set`, so a term only costs where it earns its keep.
+	Vocabulary vocabLists
+}
+
+// generalWorkspace is the reserved name for terms that are always sent. It is
+// merged with whichever workspace is active rather than being one of them.
+const generalWorkspace = "general"
+
+// vocabLists holds the lists in the order the config file writes them, so
+// `voice-type vocab ls` reads straight down the user's own file. A handful of
+// entries makes a linear scan cheaper than a map plus the ordering it would
+// still have to carry alongside.
+type vocabLists []vocabList
+
+// vocabList is one named list of terms.
+type vocabList struct {
+	Name  string
+	Terms []string
+}
+
+func (v vocabLists) index(name string) int {
+	for i := range v {
+		if v[i].Name == name {
+			return i
+		}
+	}
+	return -1
 }
 
 const defaultPort = 3232
@@ -75,6 +106,122 @@ func configDefaults() Config {
 
 // modelSpec is always found: validation only ever stores an allowlisted ID.
 func (c Config) modelSpec() sttSpec { m, _ := sttLookup(c.Model); return m }
+
+// workspaces lists the switchable workspaces -- everything but general -- in the
+// order the config file declares them, which is the order the user reads.
+func (c Config) workspaces() []string {
+	out := make([]string, 0, len(c.Vocabulary))
+	for _, list := range c.Vocabulary {
+		if list.Name != generalWorkspace {
+			out = append(out, list.Name)
+		}
+	}
+	return out
+}
+
+// hasWorkspace reports whether the config file declares this workspace. An
+// empty one still counts: it is a placeholder the user can set.
+func (c Config) hasWorkspace(name string) bool { return c.Vocabulary.index(name) >= 0 }
+
+// terms returns one workspace's terms.
+func (c Config) terms(name string) []string {
+	if i := c.Vocabulary.index(name); i >= 0 {
+		return c.Vocabulary[i].Terms
+	}
+	return nil
+}
+
+// vocabularyFor merges the general terms with the named workspace. General goes
+// first: a provider that truncates a long prompt keeps the tail, and the
+// workspace the user switched to on purpose is the half worth keeping.
+func (c Config) vocabularyFor(workspace string) []string {
+	merged := append([]string{}, c.terms(generalWorkspace)...)
+	if workspace != generalWorkspace {
+		merged = append(merged, c.terms(workspace)...)
+	}
+	return cleanTerms(merged)
+}
+
+// activeVocabulary is vocabularyFor for the workspace the state file names. A
+// workspace that has since been renamed or deleted in the config warns once and
+// leaves the general terms doing their job.
+func (c Config) activeVocabulary(workspace string) []string {
+	warning := ""
+	if workspace != "" && !c.hasWorkspace(workspace) {
+		warning = fmt.Sprintf("%q is not in the config file -- sending %s only", workspace, generalWorkspace)
+	}
+	configWarn("workspace", warning)
+	return c.vocabularyFor(workspace)
+}
+
+// cleanTerms trims, drops blanks, and removes case-insensitive duplicates,
+// keeping the first spelling. Every surviving term is billed on every
+// dictation, and general overlapping a workspace is the normal way to write it.
+func cleanTerms(terms []string) []string {
+	seen := make(map[string]bool, len(terms))
+	out := make([]string, 0, len(terms))
+	for _, term := range terms {
+		term = strings.TrimSpace(term)
+		if term == "" {
+			continue
+		}
+		key := strings.ToLower(term)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, term)
+	}
+	return out
+}
+
+// parseVocabulary accepts the workspace object -- read as a token stream, which
+// is what keeps the lists in the order the file writes them -- and still accepts
+// the flat array v5 shipped first, which is exactly what the general list is now.
+func parseVocabulary(raw json.RawMessage) (vocabLists, error) {
+	var flat []string
+	if err := json.Unmarshal(raw, &flat); err == nil {
+		terms := cleanTerms(flat)
+		if len(terms) == 0 {
+			return nil, nil
+		}
+		return vocabLists{{generalWorkspace, terms}}, nil
+	}
+
+	badShape := errors.New("must be an object of \"workspace\": [terms] (or a flat array), ignoring it")
+
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil, badShape
+	}
+
+	var lists vocabLists
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			return nil, badShape
+		}
+		var terms []string
+		if err := dec.Decode(&terms); err != nil {
+			return nil, badShape
+		}
+		name, _ := key.(string) // an object key is always a string
+		if name = strings.TrimSpace(name); name == "" {
+			continue
+		}
+		// JSON says a repeated key wins with its last value; the row stays where
+		// it first appeared so the list still reads down the file.
+		if i := lists.index(name); i >= 0 {
+			lists[i].Terms = cleanTerms(terms)
+		} else {
+			lists = append(lists, vocabList{name, cleanTerms(terms)})
+		}
+	}
+	if len(lists) == 0 {
+		return nil, nil
+	}
+	return lists, nil
+}
 
 // configFilePath honours XDG_CONFIG_HOME, matching v4's resolution order.
 func configFilePath() string {
@@ -248,9 +395,11 @@ func configValidate(raw map[string]json.RawMessage) Config {
 
 	vocabularyWarning := ""
 	if v, ok := raw["vocabulary"]; ok {
-		if err := json.Unmarshal(v, &cfg.Vocabulary); err != nil {
-			vocabularyWarning = "must be an array of strings, ignoring it"
-			cfg.Vocabulary = nil
+		vocabulary, err := parseVocabulary(v)
+		if err != nil {
+			vocabularyWarning = err.Error()
+		} else {
+			cfg.Vocabulary = vocabulary
 		}
 	}
 

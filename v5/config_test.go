@@ -170,11 +170,11 @@ func TestTunedConstantsAreValid(t *testing.T) {
 
 // The model is picked from a closed list, and the vocabulary rides with it.
 func TestConfigModelAndVocabulary(t *testing.T) {
-	cfg, err := configParse([]byte(`{"model": "parakeet-v3", "vocabulary": ["Numbero", "Erik Novikov"]}`))
+	cfg, err := configParse([]byte(`{"model": "parakeet-v3", "vocabulary": {"general": ["CommonTerm", "SharedTerm"]}}`))
 	if err != nil {
 		t.Fatalf("configParse: %v", err)
 	}
-	if cfg.Model != "parakeet-v3" || len(cfg.Vocabulary) != 2 {
+	if cfg.Model != "parakeet-v3" || len(cfg.terms(generalWorkspace)) != 2 {
 		t.Errorf("got model=%q vocabulary=%q", cfg.Model, cfg.Vocabulary)
 	}
 
@@ -224,5 +224,118 @@ func TestConfigLoadRealFileIfPresent(t *testing.T) {
 	}
 	if _, err := configParse(data); err != nil {
 		t.Errorf("real config at %s failed to parse: %v", path, err)
+	}
+}
+
+// The flat array v5 shipped first is exactly what the general list is now, so
+// an existing config keeps sending the same terms.
+func TestConfigVocabularyAcceptsFlatArrayAsGeneral(t *testing.T) {
+	cfg, err := configParse([]byte(`{"vocabulary": ["CommonTerm", "SharedTerm"]}`))
+	if err != nil {
+		t.Fatalf("configParse: %v", err)
+	}
+	want := vocabLists{{generalWorkspace, []string{"CommonTerm", "SharedTerm"}}}
+	if !reflect.DeepEqual(cfg.Vocabulary, want) {
+		t.Errorf("got %#v, want %#v", cfg.Vocabulary, want)
+	}
+	if len(cfg.workspaces()) != 0 {
+		t.Errorf("general must not be switchable: %q", cfg.workspaces())
+	}
+	if got := cfg.vocabularyFor(""); !reflect.DeepEqual(got, []string{"CommonTerm", "SharedTerm"}) {
+		t.Errorf("with no workspace active, got %q", got)
+	}
+}
+
+func TestConfigVocabularyWorkspaces(t *testing.T) {
+	cfg, err := configParse([]byte(`{
+    "vocabulary": {
+        "project-one": ["ProjectTerm", "AnotherTerm", "sharedterm"],
+        "general":     ["CommonTerm", " ", "SharedTerm"],
+        "voice-type": ["dotool", "JSONC"],
+        "empty":      []
+    }
+}`))
+	if err != nil {
+		t.Fatalf("configParse: %v", err)
+	}
+
+	// File order, general skipped where it sits, and an empty workspace still
+	// selectable -- "empty" is declared last and must stay last, not sort first.
+	if got := cfg.workspaces(); !reflect.DeepEqual(got, []string{"project-one", "voice-type", "empty"}) {
+		t.Errorf("workspaces = %q", got)
+	}
+	// Blanks dropped; general first, then the workspace, with the duplicate
+	// "openrouter" folded into the spelling general already gave it.
+	want := []string{"CommonTerm", "SharedTerm", "ProjectTerm", "AnotherTerm"}
+	if got := cfg.vocabularyFor("project-one"); !reflect.DeepEqual(got, want) {
+		t.Errorf("vocabularyFor(project-one) = %q, want %q", got, want)
+	}
+	if got := cfg.vocabularyFor("empty"); !reflect.DeepEqual(got, []string{"CommonTerm", "SharedTerm"}) {
+		t.Errorf("empty workspace should send general only, got %q", got)
+	}
+	if got := cfg.vocabularyFor(generalWorkspace); !reflect.DeepEqual(got, []string{"CommonTerm", "SharedTerm"}) {
+		t.Errorf("general must not be merged with itself twice, got %q", got)
+	}
+}
+
+// A workspace renamed or deleted in the config must not take the general terms
+// down with it.
+func TestConfigActiveVocabularyFallsBackToGeneral(t *testing.T) {
+	lastWarning = sync.Map{}
+	t.Cleanup(func() { lastWarning = sync.Map{} })
+
+	cfg, err := configParse([]byte(`{"vocabulary": {"general": ["CommonTerm"], "project-one": ["ProjectTerm"]}}`))
+	if err != nil {
+		t.Fatalf("configParse: %v", err)
+	}
+	if got := cfg.activeVocabulary("gone"); !reflect.DeepEqual(got, []string{"CommonTerm"}) {
+		t.Errorf("got %q, want the general terms", got)
+	}
+	if _, warned := lastWarning.Load("workspace"); !warned {
+		t.Error("a missing workspace did not warn")
+	}
+	if got := cfg.activeVocabulary("project-one"); len(got) != 2 {
+		t.Errorf("got %q, want general + project-one", got)
+	}
+	if _, warned := lastWarning.Load("workspace"); warned {
+		t.Error("switching back to a real workspace did not clear the warning")
+	}
+}
+
+func TestConfigVocabularyRejectsBadShape(t *testing.T) {
+	lastWarning = sync.Map{}
+	t.Cleanup(func() { lastWarning = sync.Map{} })
+
+	cfg, err := configParse([]byte(`{"vocabulary": {"project-one": "ProjectTerm"}}`))
+	if err != nil {
+		t.Fatalf("configParse: %v", err)
+	}
+	if len(cfg.Vocabulary) != 0 {
+		t.Errorf("a bad vocabulary should be ignored, got %#v", cfg.Vocabulary)
+	}
+	if _, warned := lastWarning.Load("vocabulary"); !warned {
+		t.Error("a bad vocabulary did not warn")
+	}
+}
+
+// A key written twice is a typo, not a reordering: JSON says the last value
+// wins, and the row stays where the reader first sees it.
+func TestConfigVocabularyDuplicateKey(t *testing.T) {
+	cfg, err := configParse([]byte(`{
+    "vocabulary": {
+        "project-one": ["first"],
+        "other":   ["x"],
+        "project-one": ["second"]
+    }
+}`))
+	if err != nil {
+		t.Fatalf("configParse: %v", err)
+	}
+	want := vocabLists{
+		{"project-one", []string{"second"}},
+		{"other", []string{"x"}},
+	}
+	if !reflect.DeepEqual(cfg.Vocabulary, want) {
+		t.Errorf("got %#v, want %#v", cfg.Vocabulary, want)
 	}
 }

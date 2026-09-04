@@ -319,10 +319,15 @@ write_config() {
     // Run `voice-type models` for choices, prices, and vocabulary support.
     "model": "gpt-4o-transcribe",
 
-    // Names and jargon the model would otherwise misspell. Keep this short.
-    "vocabulary": [],
+    // Names and jargon the model would otherwise misspell, one list per
+    // workspace. "general" rides along with every dictation; pick one of the
+    // rest with `voice-type vocab set <name>`. Keep them short.
+    "vocabulary": {
+        "general": []
+    },
 
-    // Hand edits take effect on the next dictation; voice-type never writes it.
+    // Hand edits take effect on the next dictation; voice-type never writes
+    // this file (a `vocab set` is recorded under ~/.local/state/voice-type).
 }
 EOF
     )
