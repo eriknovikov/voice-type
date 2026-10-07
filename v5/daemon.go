@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -463,6 +464,35 @@ func (d *daemon) routes() *http.ServeMux {
 	return mux
 }
 
+// requireLoopbackHost rejects requests whose Host header does not name this
+// loopback listener. Binding to 127.0.0.1 keeps the network out, but not a
+// browser: a web page whose domain is re-pointed at 127.0.0.1 after it loads
+// (DNS rebinding) reaches the daemon as same-origin, so it can call /start and
+// read the transcript back from /stop. Browsers always send the name the page
+// used, so anything other than the loopback address or localhost is such a
+// page, never a hotkey.
+func requireLoopbackHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isLoopbackHost(r.Host) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"status": "error", "message": "rejected non-local Host header"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isLoopbackHost(hostport string) bool {
+	host, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		host = hostport
+	}
+	switch strings.ToLower(host) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
+}
+
 func statusWord(status int) string {
 	if status >= 200 && status < 300 {
 		return "ok"
@@ -502,7 +532,7 @@ func (d *daemon) shutdown() {
 func (d *daemon) Run() error {
 	d.srv = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", d.cfg.Port),
-		Handler: d.routes(),
+		Handler: requireLoopbackHost(d.routes()),
 	}
 
 	errCh := make(chan error, 1)

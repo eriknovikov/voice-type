@@ -244,6 +244,31 @@ func TestHealthReportsState(t *testing.T) {
 	}
 }
 
+// The Host check guards the real listener; a page that rebinds its DNS to
+// 127.0.0.1 arrives with its own domain in Host, a hotkey's curl never does.
+func TestNonLoopbackHostIsRejected(t *testing.T) {
+	d := &daemon{cfg: configDefaults(), state: stateRecording}
+	h := requireLoopbackHost(d.routes())
+
+	serve := func(host string) int {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
+		req.Host = host
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for _, host := range []string{"example.com", "example.com:3232", "127.0.0.1.nip.io:3232", "127.0.0.2:3232", ""} {
+		if code := serve(host); code != http.StatusForbidden {
+			t.Errorf("Host %q: status = %d, want %d", host, code, http.StatusForbidden)
+		}
+	}
+	for _, host := range []string{"127.0.0.1:3232", "127.0.0.1", "localhost:3232", "LOCALHOST", "[::1]:3232"} {
+		if code := serve(host); code != http.StatusOK {
+			t.Errorf("Host %q: status = %d, want %d", host, code, http.StatusOK)
+		}
+	}
+}
+
 // /toggle while recording must not be routed to start.
 func TestToggleWhileRecordingDoesNotStart(t *testing.T) {
 	d := &daemon{cfg: configDefaults(), state: stateTranscribing}
