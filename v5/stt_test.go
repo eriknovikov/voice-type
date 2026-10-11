@@ -155,7 +155,7 @@ func TestVocabularyEchoMatchingIsWholeTranscriptOnly(t *testing.T) {
 	}
 	// A phrase-list model is conditioned on terms, not prose, so there is no
 	// prompt for it to echo and nothing for the guard to match.
-	if p := sttVocabularyPrompt(testSpec(defaultModelID), vocabulary); p != "" {
+	if p := sttVocabularyPrompt(testSpec("mai-transcribe-2"), vocabulary); p != "" {
 		t.Errorf("phrase-list model was handed a prompt %q", p)
 	}
 }
@@ -256,6 +256,7 @@ func TestSTTMAIFallsBackToGPTTranscribe(t *testing.T) {
 	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			var requests []map[string]any
+			var observed []string
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body map[string]any
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -274,7 +275,12 @@ func TestSTTMAIFallsBackToGPTTranscribe(t *testing.T) {
 			wav := testWAV()
 			c := newSTTClient("k", testSpec("mai-transcribe-2"), []string{"ProjectTerm", "Maintainer Name"})
 			c.endpoint = srv.URL
-			res, err := c.Transcribe(wav)
+			res, err := c.transcribeContext(context.Background(), wav, func(model string, attempt int, duration time.Duration, _ sttResult, _ error) {
+				observed = append(observed, model)
+				if attempt != len(observed) || duration < 0 {
+					t.Errorf("observation = model %q, attempt %d, duration %v", model, attempt, duration)
+				}
+			})
 			if err != nil {
 				t.Fatalf("transcribe: %v", err)
 			}
@@ -283,6 +289,9 @@ func TestSTTMAIFallsBackToGPTTranscribe(t *testing.T) {
 			}
 			if len(requests) != 2 {
 				t.Fatalf("requests = %d, want 2", len(requests))
+			}
+			if !reflect.DeepEqual(observed, []string{"mai-transcribe-2", "gpt-transcribe"}) {
+				t.Errorf("observed models = %#v", observed)
 			}
 			if requests[0]["model"] != "microsoft/mai-transcribe-2" || requests[1]["model"] != "openai/gpt-transcribe" {
 				t.Errorf("models = %q, %q", requests[0]["model"], requests[1]["model"])

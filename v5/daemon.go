@@ -45,6 +45,7 @@ type daemon struct {
 	workspace string
 	res       *resources
 	stt       *sttClient
+	runLog    *runLog
 	srv       *http.Server
 	done      chan struct{}
 
@@ -320,8 +321,31 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 		return http.StatusOK, "cancelled"
 	}
 
+	requestedModel := stt.model.ID
 	t0 := time.Now()
-	result, err := stt.TranscribeContext(ctx, wav)
+	attempts := make([]runLogAttempt, 0, sttMaxAttempts)
+	result, err := stt.transcribeContext(ctx, wav, func(model string, attempt int, requestDuration time.Duration, result sttResult, err error) {
+		status := http.StatusOK
+		if err != nil {
+			status = 0
+			var sttErr *sttError
+			if errors.As(err, &sttErr) {
+				status = sttErr.Status
+			}
+		}
+		attempts = append(attempts, runLogAttempt{
+			Model:      model,
+			StatusCode: status,
+			DurationMS: requestDuration.Milliseconds(),
+			Error:      safeRequestError(err),
+		})
+	})
+	requestDuration := time.Since(t0)
+	finalModel := result.ModelID
+	if finalModel == "" && len(attempts) > 0 {
+		finalModel = attempts[len(attempts)-1].Model
+	}
+	d.runLog.complete(requestedModel, finalModel, requestOutcome(err), requestDuration, duration, attempts, err)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			logf("STT", "cancelled during shutdown")
@@ -330,7 +354,7 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 		return d.handleSTTError(err, wav)
 	}
 	logf("STT", "%s: %.2fs audio -> %d chars in %v (billed %.0fs, $%.6f)",
-		result.ModelID, duration, len(result.Text), time.Since(t0).Round(time.Millisecond), result.Seconds, result.Cost)
+		result.ModelID, duration, len(result.Text), requestDuration.Round(time.Millisecond), result.Seconds, result.Cost)
 
 	if result.Text == "" {
 		logf("STT", "empty transcript -- nothing to type")

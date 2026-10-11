@@ -239,8 +239,8 @@ func TestHealthReportsState(t *testing.T) {
 	if body["state"] != "recording" {
 		t.Errorf("state = %v, want recording", body["state"])
 	}
-	if body["fallback"] != "gpt-transcribe" {
-		t.Errorf("fallback = %v, want gpt-transcribe", body["fallback"])
+	if body["fallback"] != "" {
+		t.Errorf("fallback = %v, want no fallback", body["fallback"])
 	}
 }
 
@@ -542,9 +542,9 @@ func TestRetainedAudioNamesDoNotCollide(t *testing.T) {
 // reload at the top of startSession.
 func TestDaemonReloadsConfigBetweenDictations(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("HOME", home)
 	t.Setenv("OPENROUTER_API_KEY", "")
-	path := filepath.Join(home, "voice-type.jsonc")
+	path := configFilePath()
 	if err := os.WriteFile(path, []byte(`{
     "api_key": "first",
     "port": 3232,
@@ -560,7 +560,7 @@ func TestDaemonReloadsConfigBetweenDictations(t *testing.T) {
 		t.Fatalf("started with model=%s vocabulary=%q", beforeModel, d.stt.vocabulary)
 	}
 
-	const reloadedModel = defaultModelID
+	const reloadedModel = "mai-transcribe-2"
 	if err := os.WriteFile(path, []byte(`{
     "api_key": "second",
     "port": 9999,
@@ -672,6 +672,7 @@ func TestFallbackVocabularyEchoRetainsAudioAndSkipsOutput(t *testing.T) {
 	kb := newFakeKeyboard()
 	cfg := configDefaults()
 	cfg.Vocabulary = vocabLists{{generalWorkspace, vocabulary}}
+	cfg.Model = "mai-transcribe-2"
 	d := newDaemon(cfg, &resources{
 		Recorder: &fakeRecorder{samples: concat(speech(0.5, 2500), speech(2, 5000))},
 		Typer:    &Typer{kb: kb},
@@ -712,6 +713,7 @@ func TestVocabularyInLegitimateFallbackTranscriptIsOutput(t *testing.T) {
 	kb := newFakeKeyboard()
 	cfg := configDefaults()
 	cfg.Vocabulary = vocabLists{{generalWorkspace, []string{"CommonTerm"}}}
+	cfg.Model = "mai-transcribe-2"
 	d := newDaemon(cfg, &resources{
 		Recorder: &fakeRecorder{samples: concat(speech(0.5, 2500), speech(2, 5000))},
 		Typer:    &Typer{kb: kb},
@@ -762,7 +764,7 @@ func TestFallbackExhaustionRetainsAudio(t *testing.T) {
 // picks up a hand edit.
 func TestDaemonPicksUpWorkspaceSetBetweenDictations(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("HOME", home)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("OPENROUTER_API_KEY", "k")
 	config := `{
@@ -772,7 +774,7 @@ func TestDaemonPicksUpWorkspaceSetBetweenDictations(t *testing.T) {
         "voice-type": ["dotool"]
     }
 }`
-	if err := os.WriteFile(filepath.Join(home, "voice-type.jsonc"), []byte(config), 0o600); err != nil {
+	if err := os.WriteFile(configFilePath(), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := workspaceSave("project-one"); err != nil {
