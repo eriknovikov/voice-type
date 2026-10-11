@@ -3,7 +3,6 @@ package voicetype
 import (
 	"bytes"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -11,7 +10,7 @@ import (
 
 func TestPrintConfigReportsResolvedValuesWithoutKey(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("HOME", home)
 	t.Setenv("OPENROUTER_API_KEY", "sk-or-environment-secret")
 	config := `{
     "api_key": "sk-or-file-secret",
@@ -19,7 +18,7 @@ func TestPrintConfigReportsResolvedValuesWithoutKey(t *testing.T) {
     "model": "whisper-large-v3",
     "vocabulary": ["Numbero", "Erik Novikov"]
 }`
-	if err := os.WriteFile(filepath.Join(home, "voice-type.jsonc"), []byte(config), 0o600); err != nil {
+	if err := os.WriteFile(configFilePath(), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -48,8 +47,8 @@ func TestPrintConfigReportsResolvedValuesWithoutKey(t *testing.T) {
 
 func TestPrintConfigRejectsMalformedFile(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", home)
-	path := filepath.Join(home, "voice-type.jsonc")
+	t.Setenv("HOME", home)
+	path := configFilePath()
 	if err := os.WriteFile(path, []byte(`{"port":`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +104,7 @@ func TestInstallerTemplateUsesMAIDefault(t *testing.T) {
 func writeVocabConfig(t *testing.T) {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("HOME", home)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	config := `{
     "model": "gpt-4o-transcribe",
@@ -115,7 +114,7 @@ func writeVocabConfig(t *testing.T) {
         "project-one": ["ProjectTerm", "AnotherTerm", "WorkspaceTerm"]
     }
 }`
-	if err := os.WriteFile(filepath.Join(home, "voice-type.jsonc"), []byte(config), 0o600); err != nil {
+	if err := os.WriteFile(configFilePath(), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -235,10 +234,10 @@ func TestVocabSetRejectsUnknownGeneralAndNumbers(t *testing.T) {
 // A model that drops the prompt has to say so here, not silently bill for it.
 func TestVocabLsFlagsAModelThatIgnoresVocabulary(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("HOME", home)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	config := `{"model": "parakeet-v3"}`
-	if err := os.WriteFile(filepath.Join(home, "voice-type.jsonc"), []byte(config), 0o600); err != nil {
+	if err := os.WriteFile(configFilePath(), []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

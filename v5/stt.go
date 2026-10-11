@@ -23,6 +23,8 @@ type sttResult struct {
 	ModelID string
 }
 
+type sttAttemptObserver func(model string, attempt int, duration time.Duration, result sttResult, err error)
+
 type sttResponse struct {
 	Text  string `json:"text"`
 	Usage struct {
@@ -173,12 +175,20 @@ func (c *sttClient) Transcribe(wav []byte) (sttResult, error) {
 
 // TranscribeContext is Transcribe with cancellation for daemon shutdown.
 func (c *sttClient) TranscribeContext(ctx context.Context, wav []byte) (sttResult, error) {
+	return c.transcribeContext(ctx, wav, nil)
+}
+
+func (c *sttClient) transcribeContext(ctx context.Context, wav []byte, observe sttAttemptObserver) (sttResult, error) {
 	var lastErr error
 	model := c.model
 	retriesOnModel := 0
 
 	for attempt := 1; attempt <= sttMaxAttempts; attempt++ {
+		started := time.Now()
 		res, err := c.transcribeOnce(ctx, model, wav)
+		if observe != nil {
+			observe(model.ID, attempt, time.Since(started), res, err)
+		}
 		if err == nil {
 			if attempt > 1 {
 				logf("STT", "%s succeeded on attempt %d/%d", model.ID, attempt, sttMaxAttempts)

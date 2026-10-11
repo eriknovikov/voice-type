@@ -2,6 +2,7 @@ package voicetype
 
 import (
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -143,7 +144,7 @@ func TestConfigWarningReturnsAfterFieldIsFixed(t *testing.T) {
 	lastWarning = sync.Map{}
 	t.Cleanup(func() { lastWarning = sync.Map{} })
 	home := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("HOME", home)
 
 	configParse([]byte(`{"port": 80}`))
 	if _, warned := lastWarning.Load("port"); !warned {
@@ -161,6 +162,9 @@ func TestConfigWarningReturnsAfterFieldIsFixed(t *testing.T) {
 
 // The constants that replace user-facing knobs still have to be usable values.
 func TestTunedConstantsAreValid(t *testing.T) {
+	if defaultModelID != "gpt-transcribe" {
+		t.Errorf("default model = %q, want gpt-transcribe", defaultModelID)
+	}
 	if maxDurationSeconds <= 0 {
 		t.Errorf("maxDurationSeconds = %d, want positive", maxDurationSeconds)
 	}
@@ -244,10 +248,12 @@ func TestConfigAPIKeyPrefersEnv(t *testing.T) {
 	}
 }
 
-func TestConfigFilePathHonoursXDG(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "/xdg")
-	if got := configFilePath(); got != "/xdg/voice-type.jsonc" {
-		t.Errorf("got %q", got)
+func TestConfigFilePathUsesHomeDotFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "xdg-config"))
+	if got, want := configFilePath(), filepath.Join(home, ".voice-type-config.jsonc"); got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 

@@ -10,3 +10,4 @@ releases
 /v5/voice-type
 /benchmark*.wav
 tools
+/assets/

@@ -96,7 +96,7 @@ type sttRoute struct {
 // TakesVocabulary reports whether sending terms with the audio does anything.
 func (s sttSpec) TakesVocabulary() bool { return s.Bias != biasNone }
 
-const defaultModelID = "mai-transcribe-2"
+const defaultModelID = "gpt-transcribe"
 
 // sttModels is the model allowlist shown by `voice-type models`.
 var sttModels = []sttSpec{
@@ -290,17 +290,16 @@ func parseVocabulary(raw json.RawMessage) (vocabLists, error) {
 	return lists, nil
 }
 
-// configFilePath honours XDG_CONFIG_HOME, matching v4's resolution order.
+// configFilePath is the one and only config location: ~/.voice-type-config.jsonc,
+// the same path install.sh writes. Without a home directory there is nowhere
+// else to look, so stop rather than fall back to a stray relative file.
 func configFilePath() string {
-	base := os.Getenv("XDG_CONFIG_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "voice-type.jsonc"
-		}
-		base = filepath.Join(home, ".config")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "voice-type: cannot locate home directory: %v\n", err)
+		os.Exit(1)
 	}
-	return filepath.Join(base, "voice-type.jsonc")
+	return filepath.Join(home, ".voice-type-config.jsonc")
 }
 
 // stripJsoncComments removes // line comments while leaving string literals
