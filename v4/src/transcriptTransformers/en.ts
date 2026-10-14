@@ -80,12 +80,9 @@ const ENDS_SENTENCE = /(?:[.?!]|\n)\s*$/
 
 type TextBoundary = "none" | "word" | "afterPunctuation" | "afterNewline" | "afterOpeningQuote"
 
+// Tokens keep the recognizer's casing ("I'm", "Google"); command matching lowercases.
 function tokenize(text: string): string[] {
-    return text
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean)
-        .map((w) => w.toLowerCase())
+    return text.trim().split(/\s+/).filter(Boolean)
 }
 
 function allowedCommands(streamEnabled: boolean): CommandDef[] {
@@ -123,7 +120,7 @@ function findStandaloneKeyCommand(tokens: string[], ctx: CommandContext): KeyCom
 
 function wordsMatch(tokens: string[], start: number, words: string[]): boolean {
     if (start + words.length > tokens.length) return false
-    return words.every((word, i) => tokens[start + i] === word)
+    return words.every((word, i) => tokens[start + i]!.toLowerCase() === word)
 }
 
 function isCommandPrefix(tokens: string[], ctx: CommandContext): boolean {
