@@ -58,7 +58,6 @@ type daemon struct {
 	sessionID     uint64
 	sessionCtx    context.Context
 	sessionCancel context.CancelFunc
-	checkOnline   func(context.Context) error
 
 	exitOnce sync.Once
 }
@@ -66,38 +65,12 @@ type daemon struct {
 func newDaemon(cfg Config, res *resources) *daemon {
 	workspace := workspaceLoad()
 	return &daemon{
-		cfg:         cfg,
-		workspace:   workspace,
-		res:         res,
-		stt:         newSTTClient(configAPIKey(cfg), cfg.modelSpec(), cfg.activeVocabulary(workspace)),
-		done:        make(chan struct{}),
-		checkOnline: checkConnectivity,
+		cfg:       cfg,
+		workspace: workspace,
+		res:       res,
+		stt:       newSTTClient(configAPIKey(cfg), cfg.modelSpec(), cfg.activeVocabulary(workspace)),
+		done:      make(chan struct{}),
 	}
-}
-
-const connectivityURL = "https://connectivitycheck.gstatic.com/generate_204"
-
-var connectivityClient = &http.Client{
-	Timeout: time.Second,
-	CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-		return http.ErrUseLastResponse
-	},
-}
-
-func checkConnectivity(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, connectivityURL, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := connectivityClient.Do(req)
-	if err != nil {
-		return err
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("connectivity check returned HTTP %d", resp.StatusCode)
-	}
-	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
@@ -144,26 +117,6 @@ func (d *daemon) startSession() (int, string) {
 		}
 		d.sessionWG.Done()
 	}()
-
-	if err := d.checkOnline(ctx); err != nil {
-		d.mu.Lock()
-		cancelled := ctx.Err() != nil || d.shuttingDown || d.sessionID != sessionID
-		d.mu.Unlock()
-		if cancelled {
-			return http.StatusConflict, "shutting down"
-		}
-		logf("NETWORK", "offline: %v", err)
-
-		typeErr := d.res.Typer.TypeContext(ctx, "?")
-		if ctx.Err() != nil {
-			return http.StatusConflict, "shutting down"
-		}
-		if typeErr != nil {
-			logf("OUTPUT", "offline marker failed: %v", typeErr)
-			return http.StatusInternalServerError, fmt.Sprintf("offline; type marker: %v", typeErr)
-		}
-		return http.StatusServiceUnavailable, "offline"
-	}
 
 	d.mu.Lock()
 	if d.shuttingDown || ctx.Err() != nil || d.sessionID != sessionID || d.state != stateChecking {
