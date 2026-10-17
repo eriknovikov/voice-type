@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -45,6 +46,7 @@ type daemon struct {
 	workspace string
 	res       *resources
 	stt       *sttClient
+	runLog    *runLog
 	srv       *http.Server
 	done      chan struct{}
 
@@ -57,7 +59,6 @@ type daemon struct {
 	sessionID     uint64
 	sessionCtx    context.Context
 	sessionCancel context.CancelFunc
-	checkOnline   func(context.Context) error
 
 	exitOnce sync.Once
 }
@@ -65,38 +66,12 @@ type daemon struct {
 func newDaemon(cfg Config, res *resources) *daemon {
 	workspace := workspaceLoad()
 	return &daemon{
-		cfg:         cfg,
-		workspace:   workspace,
-		res:         res,
-		stt:         newSTTClient(configAPIKey(cfg), cfg.modelSpec(), cfg.activeVocabulary(workspace)),
-		done:        make(chan struct{}),
-		checkOnline: checkConnectivity,
+		cfg:       cfg,
+		workspace: workspace,
+		res:       res,
+		stt:       newSTTClient(configAPIKey(cfg), cfg.modelSpec(), cfg.activeVocabulary(workspace)),
+		done:      make(chan struct{}),
 	}
-}
-
-const connectivityURL = "https://connectivitycheck.gstatic.com/generate_204"
-
-var connectivityClient = &http.Client{
-	Timeout: time.Second,
-	CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-		return http.ErrUseLastResponse
-	},
-}
-
-func checkConnectivity(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, connectivityURL, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := connectivityClient.Do(req)
-	if err != nil {
-		return err
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("connectivity check returned HTTP %d", resp.StatusCode)
-	}
-	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
@@ -143,26 +118,6 @@ func (d *daemon) startSession() (int, string) {
 		}
 		d.sessionWG.Done()
 	}()
-
-	if err := d.checkOnline(ctx); err != nil {
-		d.mu.Lock()
-		cancelled := ctx.Err() != nil || d.shuttingDown || d.sessionID != sessionID
-		d.mu.Unlock()
-		if cancelled {
-			return http.StatusConflict, "shutting down"
-		}
-		logf("NETWORK", "offline: %v", err)
-
-		typeErr := d.res.Typer.TypeContext(ctx, "?")
-		if ctx.Err() != nil {
-			return http.StatusConflict, "shutting down"
-		}
-		if typeErr != nil {
-			logf("OUTPUT", "offline marker failed: %v", typeErr)
-			return http.StatusInternalServerError, fmt.Sprintf("offline; type marker: %v", typeErr)
-		}
-		return http.StatusServiceUnavailable, "offline"
-	}
 
 	d.mu.Lock()
 	if d.shuttingDown || ctx.Err() != nil || d.sessionID != sessionID || d.state != stateChecking {
@@ -320,8 +275,31 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 		return http.StatusOK, "cancelled"
 	}
 
+	requestedModel := stt.model.ID
 	t0 := time.Now()
-	result, err := stt.TranscribeContext(ctx, wav)
+	attempts := make([]runLogAttempt, 0, sttMaxAttempts)
+	result, err := stt.transcribeContext(ctx, wav, func(model string, attempt int, requestDuration time.Duration, result sttResult, err error) {
+		status := http.StatusOK
+		if err != nil {
+			status = 0
+			var sttErr *sttError
+			if errors.As(err, &sttErr) {
+				status = sttErr.Status
+			}
+		}
+		attempts = append(attempts, runLogAttempt{
+			Model:      model,
+			StatusCode: status,
+			DurationMS: requestDuration.Milliseconds(),
+			Error:      safeRequestError(err),
+		})
+	})
+	requestDuration := time.Since(t0)
+	finalModel := result.ModelID
+	if finalModel == "" && len(attempts) > 0 {
+		finalModel = attempts[len(attempts)-1].Model
+	}
+	d.runLog.complete(requestedModel, finalModel, requestOutcome(err), requestDuration, duration, attempts, err)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			logf("STT", "cancelled during shutdown")
@@ -330,7 +308,7 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 		return d.handleSTTError(err, wav)
 	}
 	logf("STT", "%s: %.2fs audio -> %d chars in %v (billed %.0fs, $%.6f)",
-		result.ModelID, duration, len(result.Text), time.Since(t0).Round(time.Millisecond), result.Seconds, result.Cost)
+		result.ModelID, duration, len(result.Text), requestDuration.Round(time.Millisecond), result.Seconds, result.Cost)
 
 	if result.Text == "" {
 		logf("STT", "empty transcript -- nothing to type")
@@ -463,6 +441,35 @@ func (d *daemon) routes() *http.ServeMux {
 	return mux
 }
 
+// requireLoopbackHost rejects requests whose Host header does not name this
+// loopback listener. Binding to 127.0.0.1 keeps the network out, but not a
+// browser: a web page whose domain is re-pointed at 127.0.0.1 after it loads
+// (DNS rebinding) reaches the daemon as same-origin, so it can call /start and
+// read the transcript back from /stop. Browsers always send the name the page
+// used, so anything other than the loopback address or localhost is such a
+// page, never a hotkey.
+func requireLoopbackHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isLoopbackHost(r.Host) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"status": "error", "message": "rejected non-local Host header"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isLoopbackHost(hostport string) bool {
+	host, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		host = hostport
+	}
+	switch strings.ToLower(host) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
+}
+
 func statusWord(status int) string {
 	if status >= 200 && status < 300 {
 		return "ok"
@@ -502,7 +509,7 @@ func (d *daemon) shutdown() {
 func (d *daemon) Run() error {
 	d.srv = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", d.cfg.Port),
-		Handler: d.routes(),
+		Handler: requireLoopbackHost(d.routes()),
 	}
 
 	errCh := make(chan error, 1)

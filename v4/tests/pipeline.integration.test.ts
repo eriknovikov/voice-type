@@ -45,12 +45,12 @@ describe("SpeechPipeline integration", () => {
         expect(normCase(screen)).toBe("hello world")
     })
 
-    test("hello period + world no extra space", () => {
+    test("hello period + world keeps space", () => {
         const { screen } = runPipeline(true, "en-US", [
             streamingSegmentEvents({ interims: ["hello period"], final: "hello period" }),
             streamingSegmentEvents({ interims: ["world"], final: "world" }),
         ])
-        expect(normCase(screen)).toBe("hello.world")
+        expect(screen).toBe("Hello. World")
     })
 
     test("hello period + and then capitalizes", () => {
@@ -58,7 +58,16 @@ describe("SpeechPipeline integration", () => {
             streamingSegmentEvents({ interims: ["hello period"], final: "hello period" }),
             streamingSegmentEvents({ interims: ["and then"], final: "and then" }),
         ])
-        expect(normCase(screen)).toBe("hello.and then")
+        expect(screen).toBe("Hello. And then")
+    })
+
+    test("hello + empty final after long pause + world", () => {
+        const { screen } = runPipeline(true, "en-US", [
+            streamingSegmentEvents({ interims: ["hello"], final: "hello" }),
+            [{ kind: "segment-finalized" }],
+            streamingSegmentEvents({ interims: ["world"], final: "world" }),
+        ])
+        expect(screen).toBe("Hello world")
     })
 
     test("deferred new line across segments", () => {
@@ -103,7 +112,7 @@ describe("SpeechPipeline integration", () => {
             nonStreamSegmentEvents("hello period"),
             nonStreamSegmentEvents("and then"),
         ])
-        expect(normCase(screen)).toBe("hello.and then")
+        expect(screen).toBe("Hello. And then")
     })
 
     test("non-English noop passthrough", () => {
