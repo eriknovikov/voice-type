@@ -153,6 +153,30 @@ describe("createEnglishTransformerSession", () => {
         expect(s.transform("hello").text).toBe(" hello")
     })
 
+    test("preserves recognizer casing of words", () => {
+        const s = session()
+        expect(s.transform("so I'm talking to Google").text).toBe("So I'm talking to Google")
+    })
+
+    test("preserves casing at the start of a mid-sentence segment", () => {
+        const s = session()
+        expect(s.transform("this is a test").text).toBe("This is a test")
+        finalizeSegment(s)
+        expect(s.transform("I'm not sure").text).toBe(" I'm not sure")
+    })
+
+    test("deferred tokens keep their casing", () => {
+        const s = session()
+        expect(s.transform("I live in New").text).toBe("I live in")
+        finalizeSegment(s)
+        expect(s.transform("York").text).toBe(" New York")
+    })
+
+    test("commands match case-insensitively", () => {
+        const s = session()
+        expect(s.transform("hello Comma world Period").text).toBe("Hello, world.")
+    })
+
     test("reset clears state", () => {
         const s = session()
         s.transform("hello period")
@@ -175,6 +199,13 @@ describe("createEnglishTransformerSession — punctuation toggle", () => {
         const s = createEnglishTransformerSession(true, () => on)
         s.reset()
         expect(s.transform("hello world").text).toBe("hello world")
+    })
+
+    test("disabled: preserves recognizer casing", () => {
+        let on = false
+        const s = createEnglishTransformerSession(true, () => on)
+        s.reset()
+        expect(s.transform("so I'm in New York").text).toBe("so I'm in New York")
     })
 
     test("disabled: control enter types literally, no key chord", () => {
