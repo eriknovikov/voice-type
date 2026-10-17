@@ -101,8 +101,7 @@ remove_binary() {
 }
 
 remove_config() {
-    _dir="${XDG_CONFIG_HOME:-$HOME/.config}"
-    _cfg="$_dir/voice-type.jsonc"
+    _cfg="$HOME/.voice-type-config.jsonc"
     [ -e "$_cfg" ] || return 0
     case "$(prompt_yn "Remove the config ($_cfg)?" "N")" in
         [Yy]*)

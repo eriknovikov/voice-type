@@ -41,7 +41,9 @@
 ## Security Model
 
 - **Localhost only**: The HTTP server binds to `127.0.0.1` and is not exposed on
-  the network.
+  the network. Requests whose `Host` header is not `127.0.0.1`, `localhost`, or
+  `::1` are rejected, so a web page cannot reach the daemon through DNS
+  rebinding.
 - **No authentication**: The API is designed for a single-user desktop and must
   remain localhost-only.
 - **User control**: Recording starts and stops only from the user's hotkey/API

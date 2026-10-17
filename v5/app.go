@@ -235,6 +235,21 @@ func Run(version string) {
 		os.Exit(2)
 	}
 
+	if exitCode := runDaemon(version); exitCode != 0 {
+		os.Exit(exitCode)
+	}
+}
+
+func runDaemon(version string) (exitCode int) {
+	runLog := openRunLog(version)
+	defer func() {
+		outcome := "ok"
+		if exitCode != 0 {
+			outcome = "error"
+		}
+		runLog.close(outcome)
+	}()
+
 	cfg := configLoad()
 
 	result, res, err := runPreflight(cfg)
@@ -243,14 +258,15 @@ func Run(version string) {
 		// Matches v4: an existing daemon is a successful no-op, which is what
 		// makes the F10 `curl /exit || voice-type` toggle work.
 		logf("PREFLIGHT", "%v", err)
-		os.Exit(0)
+		return 0
 	case preflightFailed:
 		logf("PREFLIGHT", "%v", err)
-		os.Exit(1)
+		return 1
 	}
 	defer res.Close()
 
 	d := newDaemon(cfg, res)
+	d.runLog = runLog
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -261,7 +277,7 @@ func Run(version string) {
 
 	if err := d.Run(); err != nil {
 		logf("DAEMON", "%v", err)
-		res.Close()
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }

@@ -11,8 +11,7 @@ import (
 // directory. The daemon re-reads it on every dictation, which is what makes a
 // `vocab set` land without a restart.
 
-// workspaceFilePath honours XDG_STATE_HOME, the same way configFilePath honours
-// XDG_CONFIG_HOME.
+// workspaceFilePath honours XDG_STATE_HOME.
 func workspaceFilePath() string {
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {

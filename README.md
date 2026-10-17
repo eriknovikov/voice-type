@@ -34,6 +34,9 @@ Run `voice-type models` to see the available models, vocabulary support, prices,
 and fallback policy. Workspace-specific vocabulary can be selected with
 `voice-type vocab set <name>`.
 
+When the daemon is started without a terminal, it records privacy-safe request
+metrics in `~/.voice-type-logs.jsonl`, useful for troubleshooting.
+
 Install with
 
 ```bash
@@ -47,6 +50,4 @@ curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/v5/unins
 ```
 
 Only one version can be installed at a time: both use the `voice-type` command,
-`~/.config/voice-type.jsonc`, and port 3232, so installing one replaces the other.
-
-
+`~/.voice-type-config.jsonc`, and port 3232, so installing one replaces the other.

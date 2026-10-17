@@ -120,11 +120,16 @@ detect_arch() {
     esac
 }
 
+# releases/latest redirects to the tag page, so the final URL names the tag.
+# api.github.com answers the same question but is rate-limited to 60 requests
+# per hour per IP unauthenticated, and hands a shared or NAT'd address a 403
+# once that budget is gone -- which reads as "no release exists" here.
 get_latest_tag() {
-    curl -sSfL "https://api.github.com/repos/${REPO}/releases/latest" \
-        | grep '"tag_name":' \
-        | sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/' \
-        | head -n 1
+    _url=$(curl -sSfL -o /dev/null -w '%{url_effective}' \
+        "https://github.com/${REPO}/releases/latest") || return 1
+    case "$_url" in
+        */releases/tag/*) echo "${_url##*/tag/}" ;;
+    esac
 }
 
 # This repository publishes several majors from one release stream, and their
@@ -286,8 +291,7 @@ ask_api_key() {
 # Writes a config, offering to skip when one already exists. The safe default is
 # to keep it; declining the prompt explicitly replaces it without a backup.
 write_config() {
-    CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
-    CONFIG_FILE="$CONFIG_DIR/voice-type.jsonc"
+    CONFIG_FILE="$HOME/.voice-type-config.jsonc"
     _config_action="Wrote"
 
     if [ -f "$CONFIG_FILE" ]; then
@@ -305,8 +309,7 @@ write_config() {
     fi
 
     ask_api_key
-    mkdir -p "$CONFIG_DIR"
-    CONFIG_TMP=$(mktemp "$CONFIG_DIR/.voice-type.jsonc.XXXXXX")
+    CONFIG_TMP=$(mktemp "$HOME/.voice-type-config.jsonc.XXXXXX")
     # The key lands on disk, so write a private same-directory temporary file
     # and atomically replace the config only after the complete write succeeds.
     (
@@ -317,7 +320,7 @@ write_config() {
     "port": 3232,           // int 1024-65535
 
     // Run `voice-type models` for choices, prices, and vocabulary support.
-    "model": "mai-transcribe-2",
+    "model": "gpt-transcribe",
 
     // Names and jargon the model would otherwise misspell, one list per
     // workspace. "general" rides along with every dictation; pick one of the
