@@ -71,18 +71,70 @@ describe("createEnglishTransformerSession", () => {
         expect(s.transform("world").text).toBe(" world")
     })
 
-    test("no space after sentence-ending punctuation", () => {
+    test("space after sentence-ending punctuation across segments", () => {
         const s = session()
         expect(s.transform("hello period").text).toBe("Hello.")
         finalizeSegment(s)
-        expect(s.transform("world").text).toBe("World")
+        expect(s.transform("world").text).toBe(" World")
     })
 
     test("capitalize after sentence-end pause", () => {
         const s = session()
         expect(s.transform("hello period").text).toBe("Hello.")
         finalizeSegment(s)
-        expect(s.transform("and then").text).toBe("And then")
+        expect(s.transform("and then").text).toBe(" And then")
+    })
+
+    test("punctuation-only segment attaches, next segment is spaced", () => {
+        const s = session()
+        expect(s.transform("hello").text).toBe("Hello")
+        finalizeSegment(s)
+        expect(s.transform("period").text).toBe(".")
+        finalizeSegment(s)
+        expect(s.transform("world").text).toBe(" World")
+    })
+
+    test("empty segment keeps boundary space", () => {
+        const s = session()
+        expect(s.transform("hello").text).toBe("Hello")
+        finalizeSegment(s)
+        finalizeSegment(s)
+        expect(s.transform("world").text).toBe(" world")
+    })
+
+    test("whitespace-only segment keeps boundary space", () => {
+        const s = session()
+        expect(s.transform("hello").text).toBe("Hello")
+        finalizeSegment(s)
+        expect(s.transform(" ").text).toBe("")
+        finalizeSegment(s)
+        expect(s.transform("world").text).toBe(" world")
+    })
+
+    test("deferred-only segment keeps boundary space", () => {
+        const s = session()
+        expect(s.transform("hello").text).toBe("Hello")
+        finalizeSegment(s)
+        expect(s.transform("new").text).toBe("")
+        finalizeSegment(s)
+        expect(s.transform("stuff").text).toBe(" new stuff")
+    })
+
+    test("deferred tokens survive an empty segment", () => {
+        const s = session()
+        expect(s.transform("hello new").text).toBe("Hello")
+        finalizeSegment(s)
+        finalizeSegment(s)
+        expect(s.transform("line world").text).toBe("\nWorld")
+    })
+
+    test("no boundary space after standalone control enter", () => {
+        const s = session()
+        expect(s.transform("hello").text).toBe("Hello")
+        finalizeSegment(s)
+        expect(s.transform("control enter").text).toBe("")
+        expect(finalizeSegment(s)).toEqual([{ kind: "key", chord: "ctrl+enter" }])
+        expect(s.transform("world").text).toBe("world")
     })
 
     test("deferred new line across segments", () => {
