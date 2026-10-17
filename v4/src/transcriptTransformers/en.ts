@@ -250,16 +250,10 @@ function needsBoundaryLeadingSpace(items: RenderItem[]): boolean {
     return false
 }
 
-function endsWithVisibleContent(text: string): boolean {
-    return /\S/.test(text) && !text.endsWith("\n")
-}
-
 // Whether the next segment's text should be prefixed with a space after a WSA pause.
-// Sentence-ending punctuation (.?!) attaches directly; newlines already separate;
-// deferred multi-word commands use needsBoundaryLeadingSpace() to skip before newlines.
+// Newlines already separate; a next segment opening with punctuation or a newline
+// skips the space via needsBoundaryLeadingSpace().
 function needsCrossSegmentSpace(text: string): boolean {
-    if (!text || text.endsWith("\n")) return false
-    if (/[.?!]$/.test(text)) return false
     return /\S$/.test(text)
 }
 
@@ -308,18 +302,16 @@ export function createEnglishTransformerSession(
             return { text, commands: [] }
         },
         onSegmentFinalized(): TranscriptCommand[] {
-            const deferredForNext = segmentEndDeferred
-            segmentEndDeferred = []
-
             const commands = extractKeyCommands(lastSegmentItems)
-            carriedDeferred = deferredForNext
             lastSegmentItems = []
+            // segmentEndDeferred is not cleared, so a segment with no transform() call
+            // (an empty final after a long pause) carries the deferred tokens forward.
+            carriedDeferred = segmentEndDeferred
 
-            const hadVisibleText = endsWithVisibleContent(lastRenderedText)
-            if (carriedDeferred.length > 0) {
-                pendingBoundarySpace = hadVisibleText
-            } else {
-                pendingBoundarySpace = hadVisibleText && needsCrossSegmentSpace(lastRenderedText)
+            // A segment that typed nothing and sent no keys (an empty final, or only a
+            // deferred command prefix) left the screen unchanged; keep the old boundary.
+            if (lastRenderedText !== "" || commands.length > 0) {
+                pendingBoundarySpace = needsCrossSegmentSpace(lastRenderedText)
             }
 
             if (lastRenderedText !== "") {
