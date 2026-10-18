@@ -46,19 +46,15 @@ func portInUse(port int) bool {
 	return true
 }
 
-// runPreflight mirrors the order in src/preflight.ts.
-func runPreflight(cfg Config) (preflightResult, *resources, error) {
+func runPreflight(cfg Config, settings sttSettings) (preflightResult, *resources, error) {
 	// 1. Port free -- in use means a daemon is already up, which is not a failure.
 	if portInUse(cfg.Port) {
 		return preflightAlreadyRunning, nil, fmt.Errorf("port %d is already in use -- daemon already running?", cfg.Port)
 	}
 
 	// 2. API key present.
-	if configAPIKey(cfg) == "" {
-		return preflightFailed, nil, fmt.Errorf(
-			"no OpenRouter API key. Set OPENROUTER_API_KEY in the environment, or add\n"+
-				"  \"api_key\": \"sk-or-...\"\n"+
-				"to %s", configFilePath())
+	if err := settings.validateCredentials(); err != nil {
+		return preflightFailed, nil, err
 	}
 
 	// 3. /dev/uinput usable. Creating the keyboard is the real test -- opening

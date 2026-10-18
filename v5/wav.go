@@ -13,8 +13,7 @@ const (
 )
 
 // WavEncode wraps PCM16 samples in a canonical 44-byte RIFF/WAVE header.
-// Parakeet's native input spec is 16 kHz mono PCM16, so no resampling happens
-// anywhere in the pipeline.
+// Capture and upload both use 16 kHz mono PCM16, with no resampling.
 func WavEncode(samples []int16) []byte {
 	dataSize := len(samples) * 2
 	byteRate := wavSampleRate * wavChannels * wavBitsPerSample / 8

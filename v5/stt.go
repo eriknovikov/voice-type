@@ -8,48 +8,66 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strings"
 	"time"
 )
 
-const sttEndpoint = "https://openrouter.ai/api/v1/audio/transcriptions"
+const (
+	openAIEndpoint     = "https://api.openai.com/v1/audio/transcriptions"
+	openRouterEndpoint = "https://openrouter.ai/api/v1/audio/transcriptions"
+)
 
-// sttResult is the useful part of OpenRouter's transcription response.
+// Missing usage data is unknown, not free transcription.
 type sttResult struct {
 	Text    string
-	Seconds float64
-	Cost    float64
+	Seconds *float64
+	Cost    *float64
 	ModelID string
+}
+
+func (r sttResult) billingSummary() string {
+	seconds, cost := "unavailable", "unavailable"
+	if r.Seconds != nil {
+		seconds = fmt.Sprintf("%.0fs", *r.Seconds)
+	}
+	if r.Cost != nil {
+		cost = fmt.Sprintf("$%.6f", *r.Cost)
+	}
+	return "billed duration " + seconds + ", cost " + cost
 }
 
 type sttAttemptObserver func(model string, attempt int, duration time.Duration, result sttResult, err error)
 
 type sttResponse struct {
-	Text  string `json:"text"`
+	Text  *string `json:"text"`
 	Usage struct {
-		Seconds float64 `json:"seconds"`
-		Cost    float64 `json:"cost"`
+		Seconds *float64 `json:"seconds"`
+		Cost    *float64 `json:"cost"`
 	} `json:"usage"`
 	Error *struct {
 		Message string `json:"message"`
 		Code    any    `json:"code"`
+		Type    string `json:"type"`
 	} `json:"error"`
 }
 
 // sttError carries the HTTP status so callers can distinguish a bad key from a
 // transient failure, and holds onto whether the audio is worth retrying.
 type sttError struct {
-	Status  int
-	Body    string
-	Message string
+	Provider string
+	Status   int
+	Message  string
+	Quota    bool
 }
 
 func (e *sttError) Error() string {
 	if e.Message != "" {
-		return fmt.Sprintf("openrouter %d: %s", e.Status, e.Message)
+		return fmt.Sprintf("%s %d: %s", e.Provider, e.Status, e.Message)
 	}
-	return fmt.Sprintf("openrouter %d: %s", e.Status, e.Body)
+	return fmt.Sprintf("%s %d: %s", e.Provider, e.Status, http.StatusText(e.Status))
 }
 
 // Fatal reports whether retrying could ever help.
@@ -59,74 +77,35 @@ func (e *sttError) Fatal() bool {
 
 // Retryable reports whether the audio should be kept for a retry.
 func (e *sttError) Retryable() bool {
-	return e.Status == http.StatusTooManyRequests || e.Status >= 500
+	return !e.Quota && (e.Status == http.StatusTooManyRequests || (e.Status >= 500 && e.Status < 600))
 }
 
 type sttClient struct {
-	apiKey     string
-	model      sttSpec
-	fallback   *sttSpec
-	vocabulary []string
+	settings   sttSettings
 	endpoint   string
 	http       *http.Client
+	retryDelay time.Duration
 }
 
-func newSTTClient(apiKey string, model sttSpec, vocabulary []string) *sttClient {
-	c := &sttClient{
-		apiKey:     apiKey,
-		vocabulary: vocabulary,
-		endpoint:   sttEndpoint,
+func newSTTClient(settings sttSettings) *sttClient {
+	endpoint := openRouterEndpoint
+	if settings.Provider == providerOpenAI {
+		endpoint = openAIEndpoint
+	}
+	return &sttClient{
+		settings:   settings,
+		endpoint:   endpoint,
 		http:       &http.Client{Timeout: 120 * time.Second},
+		retryDelay: 400 * time.Millisecond,
 	}
-	c.setRoute(model)
-	return c
 }
 
-func (c *sttClient) setRoute(model sttSpec) {
-	route := sttRouteFor(model)
-	c.model = route.Primary
-	c.fallback = route.Fallback
-}
-
-func (c *sttClient) fallbackID() string {
-	if c.fallback == nil {
+// Only OpenRouter sends a prompt. OpenAI keywords need no prompt-echo guard.
+func (s sttSettings) vocabularyPrompt() string {
+	if s.Provider != providerOpenRouter || !s.supportedModel() || len(s.Vocabulary) == 0 {
 		return ""
 	}
-	return c.fallback.ID
-}
-
-// sttVocabularyPrompt is the conditioning sentence for prompt-biased models,
-// and is empty for every other model -- including phrase-list ones, which have
-// no prompt to echo and so need no echo guard.
-func sttVocabularyPrompt(model sttSpec, vocabulary []string) string {
-	if model.Bias != biasPrompt || len(vocabulary) == 0 {
-		return ""
-	}
-	return "Vocabulary: " + strings.Join(vocabulary, ", ") + "."
-}
-
-// sttProviderOptions is the model-specific option block in the provider's own
-// spelling. The provider name is an options namespace, not a routing pin.
-func sttProviderOptions(model sttSpec, vocabulary []string) map[string]any {
-	switch model.Bias {
-	case biasPhraseList:
-		options := map[string]any{
-			"enhancedMode": map[string]any{
-				"modelOptions": map[string]any{"transcribeStyle": "clean"},
-			},
-		}
-		if len(vocabulary) > 0 {
-			options["phraseList"] = map[string]any{"phrases": vocabulary}
-		}
-		return options
-	case biasPrompt:
-		if len(vocabulary) == 0 {
-			return nil
-		}
-		return map[string]any{"prompt": sttVocabularyPrompt(model, vocabulary)}
-	default:
-		return nil
-	}
+	return "Vocabulary: " + strings.Join(s.Vocabulary, ", ") + "."
 }
 
 func normalizeTranscript(text string) string {
@@ -140,28 +119,77 @@ func vocabularyEcho(text, prompt string) bool {
 }
 
 // OpenRouter reads provider options only from its base64 JSON encoding.
-func sttBuildJSON(model sttSpec, vocabulary []string, wav []byte) ([]byte, error) {
-	vocabulary = cleanTerms(vocabulary)
-	var provider map[string]any
-	if options := sttProviderOptions(model, vocabulary); options != nil {
-		provider = map[string]any{"options": map[string]any{model.Provider: options}}
-	}
-
+func sttBuildJSON(settings sttSettings, wav []byte) ([]byte, error) {
 	payload := map[string]any{
-		"model": model.Slug,
+		"model": settings.Model,
 		"input_audio": map[string]string{
 			"data":   base64.StdEncoding.EncodeToString(wav),
 			"format": "wav",
 		},
-		"language": "en",
-		// LLM transcribers sample, so the same audio would otherwise come back
-		// worded differently from one dictation to the next.
-		"temperature": 0,
 	}
-	if provider != nil {
-		payload["provider"] = provider
+	if settings.supportedModel() {
+		payload["language"] = "en"
+		payload["temperature"] = 0
+	}
+	if prompt := settings.vocabularyPrompt(); prompt != "" {
+		payload["provider"] = map[string]any{
+			"options": map[string]any{"openai": map[string]any{"prompt": prompt}},
+		}
 	}
 	return json.Marshal(payload)
+}
+
+func sttBuildMultipart(settings sttSettings, wav []byte) ([]byte, string, error) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("model", settings.Model); err != nil {
+		return nil, "", err
+	}
+	if settings.supportedModel() {
+		if err := writer.WriteField("languages[]", "en"); err != nil {
+			return nil, "", err
+		}
+		for _, term := range settings.Vocabulary {
+			if err := writer.WriteField("keywords[]", term); err != nil {
+				return nil, "", err
+			}
+		}
+	}
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", `form-data; name="file"; filename="dictation.wav"`)
+	header.Set("Content-Type", "audio/wav")
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err := part.Write(wav); err != nil {
+		return nil, "", err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, "", err
+	}
+	return body.Bytes(), writer.FormDataContentType(), nil
+}
+
+func (c *sttClient) buildRequest(ctx context.Context, wav []byte) (*http.Request, error) {
+	var payload []byte
+	var err error
+	contentType := "application/json"
+	if c.settings.Provider == providerOpenAI {
+		payload, contentType, err = sttBuildMultipart(c.settings, wav)
+	} else {
+		payload, err = sttBuildJSON(c.settings, wav)
+	}
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Authorization", "Bearer "+c.settings.APIKey)
+	return req, nil
 }
 
 // Retry transient failures rather than dropping an already-spoken dictation.
@@ -180,18 +208,18 @@ func (c *sttClient) TranscribeContext(ctx context.Context, wav []byte) (sttResul
 
 func (c *sttClient) transcribeContext(ctx context.Context, wav []byte, observe sttAttemptObserver) (sttResult, error) {
 	var lastErr error
-	model := c.model
-	retriesOnModel := 0
-
 	for attempt := 1; attempt <= sttMaxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return sttResult{}, err
+		}
 		started := time.Now()
-		res, err := c.transcribeOnce(ctx, model, wav)
+		res, err := c.transcribeOnce(ctx, wav)
 		if observe != nil {
-			observe(model.ID, attempt, time.Since(started), res, err)
+			observe(c.settings.Model, attempt, time.Since(started), res, err)
 		}
 		if err == nil {
 			if attempt > 1 {
-				logf("STT", "%s succeeded on attempt %d/%d", model.ID, attempt, sttMaxAttempts)
+				logf("STT", "%s/%s succeeded on attempt %d/%d", c.settings.Provider, c.settings.Model, attempt, sttMaxAttempts)
 			}
 			return res, nil
 		}
@@ -203,17 +231,9 @@ func (c *sttClient) transcribeContext(ctx context.Context, wav []byte, observe s
 		if !sttShouldRetry(err) || attempt == sttMaxAttempts {
 			break
 		}
-		if model.ID == c.model.ID && c.fallback != nil {
-			logf("STT", "%s failed (%v) -- switching this dictation to %s", model.ID, err, c.fallback.ID)
-			model = *c.fallback
-			retriesOnModel = 0
-			continue
-		}
-
 		// 400ms, 800ms, 1600ms
-		backoff := time.Duration(400*(1<<retriesOnModel)) * time.Millisecond
-		retriesOnModel++
-		logf("STT", "%s attempt %d/%d failed (%v) -- retrying in %v", model.ID, attempt, sttMaxAttempts, err, backoff)
+		backoff := c.retryDelay * time.Duration(1<<(attempt-1))
+		logf("STT", "%s/%s attempt %d/%d failed (%v) -- retrying in %v", c.settings.Provider, c.settings.Model, attempt, sttMaxAttempts, err, backoff)
 		timer := time.NewTimer(backoff)
 		select {
 		case <-timer.C:
@@ -251,54 +271,60 @@ func (e *sttTransportError) Error() string { return e.err.Error() }
 func (e *sttTransportError) Unwrap() error { return e.err }
 
 // transcribeOnce performs a single upload attempt.
-func (c *sttClient) transcribeOnce(ctx context.Context, model sttSpec, wav []byte) (sttResult, error) {
-	payload, err := sttBuildJSON(model, c.vocabulary, wav)
+func (c *sttClient) transcribeOnce(ctx context.Context, wav []byte) (sttResult, error) {
+	req, err := c.buildRequest(ctx, wav)
 	if err != nil {
-		return sttResult{}, &sttBuildError{err}
+		return sttResult{}, &sttBuildError{fmt.Errorf("%s: build transcription request: %w", c.settings.Provider, err)}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return sttResult{}, &sttBuildError{err}
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return sttResult{}, &sttTransportError{fmt.Errorf("transcription request failed: %w", err)}
+		return sttResult{}, &sttTransportError{fmt.Errorf("%s: transcription request failed: %w", c.settings.Provider, err)}
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return sttResult{}, &sttTransportError{fmt.Errorf("read transcription response: %w", err)}
+		return sttResult{}, &sttTransportError{fmt.Errorf("%s: read transcription response: %w", c.settings.Provider, err)}
 	}
 
 	var parsed sttResponse
 	parseErr := json.Unmarshal(raw, &parsed)
 
-	if resp.StatusCode != http.StatusOK {
-		e := &sttError{Status: resp.StatusCode, Body: strings.TrimSpace(string(raw))}
-		if parseErr == nil && parsed.Error != nil {
-			e.Message = parsed.Error.Message
-		}
-		return sttResult{}, e
+	if resp.StatusCode != http.StatusOK || (parseErr == nil && parsed.Error != nil) {
+		return sttResult{}, c.responseError(resp.StatusCode, parsed)
 	}
 
 	if parseErr != nil {
-		return sttResult{}, fmt.Errorf("decode transcription response: %w (body: %s)", parseErr, truncate(string(raw), 300))
+		return sttResult{}, fmt.Errorf("%s: decode transcription response: %w", c.settings.Provider, parseErr)
 	}
-	if parsed.Error != nil && parsed.Error.Message != "" {
-		return sttResult{}, &sttError{Status: resp.StatusCode, Message: parsed.Error.Message}
+	if parsed.Text == nil {
+		return sttResult{}, fmt.Errorf("%s: transcription response is missing text", c.settings.Provider)
 	}
 
 	return sttResult{
-		Text:    strings.TrimSpace(parsed.Text),
+		Text:    strings.TrimSpace(*parsed.Text),
 		Seconds: parsed.Usage.Seconds,
 		Cost:    parsed.Usage.Cost,
-		ModelID: model.ID,
+		ModelID: c.settings.Model,
 	}, nil
+}
+
+func (c *sttClient) responseError(status int, parsed sttResponse) *sttError {
+	e := &sttError{Provider: c.settings.Provider, Status: status, Quota: status == http.StatusPaymentRequired}
+	if parsed.Error != nil {
+		e.Message = parsed.Error.Message
+		if c.settings.APIKey != "" {
+			e.Message = strings.ReplaceAll(e.Message, c.settings.APIKey, "[redacted]")
+		}
+		classification := strings.ToLower(fmt.Sprint(parsed.Error.Code) + " " + parsed.Error.Type + " " + parsed.Error.Message)
+		for _, marker := range []string{"insufficient_quota", "quota_exceeded", "billing_hard_limit", "billing_not_active", "credit_balance_too_low", "exceeded your current quota", "insufficient credits"} {
+			if strings.Contains(classification, marker) {
+				e.Quota = true
+			}
+		}
+	}
+	return e
 }
 
 func truncate(s string, n int) string {
