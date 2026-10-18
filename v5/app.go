@@ -50,7 +50,7 @@ func retainWAV(wav []byte) (string, error) {
 	return path, nil
 }
 
-func printConfig(w io.Writer) error {
+func printConfig(w io.Writer, modelOverride string) error {
 	cfg, err := configReadStrict()
 	if err != nil {
 		return err
@@ -58,25 +58,24 @@ func printConfig(w io.Writer) error {
 
 	keyStatus := "MISSING"
 	switch {
-	case os.Getenv("OPENROUTER_API_KEY") != "":
-		keyStatus = "set (from OPENROUTER_API_KEY)"
+	case strings.TrimSpace(os.Getenv(cfg.keyEnv())) != "":
+		keyStatus = "set (from " + cfg.keyEnv() + ")"
 	case cfg.APIKey != "":
 		keyStatus = "set (from config file)"
 	}
 
-	spec := cfg.modelSpec()
-	fallback := "none"
-	if route := sttRouteFor(spec); route.Fallback != nil {
-		fallback = route.Fallback.ID
-	}
-	vocabulary := "ignores vocabulary"
-	if spec.TakesVocabulary() {
-		vocabulary = "reads vocabulary"
-	}
 	workspace := workspaceLoad()
-	_, err = fmt.Fprintf(w, "config:     %s\napi_key:    %s\nport:       %d\nmodel:      %s  ($%.3f/hour, %s)\nfallback:   %s\nvocabulary: %d terms (%s)\n",
-		configFilePath(), keyStatus, cfg.Port, spec.ID, spec.USDPerHour, vocabulary, fallback,
-		len(cfg.activeVocabulary(workspace)), vocabularySources(cfg, workspace))
+	settings, err := cfg.resolveSTT(modelOverride, workspace)
+	if err != nil {
+		return err
+	}
+	modelStatus := "supported"
+	if !settings.supportedModel() {
+		modelStatus = "unsupported override, vocabulary disabled"
+	}
+	_, err = fmt.Fprintf(w, "config:     %s\nprovider:   %s\napi_key:    %s\nport:       %d\nmodel:      %s (%s)\nfallback:   none\nvocabulary: %d terms (%s)\n",
+		configFilePath(), cfg.Provider, keyStatus, cfg.Port, settings.Model, modelStatus,
+		len(settings.Vocabulary), vocabularySources(cfg, workspace))
 	return err
 }
 
@@ -99,9 +98,7 @@ func vocabularySources(cfg Config, workspace string) string {
 // printVocab is `voice-type vocab ls`: how many terms the next dictation sends,
 // which list is picked, and every list in the order the config file writes them.
 func printVocab(w io.Writer, cfg Config, workspace string) {
-	if spec := cfg.modelSpec(); !spec.TakesVocabulary() {
-		fmt.Fprintf(w, "model:   %s (ignores vocabulary -- nothing below is sent)\n", spec.ID)
-	}
+	fmt.Fprintln(w, "Vocabulary applies to GPT Transcribe. A daemon using an unsupported --model sends none.")
 	fmt.Fprintf(w, "sending: %d\ncurrent: %s\n", len(cfg.activeVocabulary(workspace)), workspaceLabel(workspace))
 
 	if len(cfg.Vocabulary) == 0 {
@@ -113,7 +110,7 @@ func printVocab(w io.Writer, cfg Config, workspace string) {
 		if list.Name == workspace {
 			marker = "*"
 		}
-		fmt.Fprintf(w, "%s%s: %d\n", list.Name, marker, len(list.Terms))
+		fmt.Fprintf(w, "%s%s: %d\n", list.Name, marker, len(cfg.terms(list.Name)))
 	}
 	if workspace != "" && !cfg.hasWorkspace(workspace) {
 		fmt.Fprintf(w, "\n%q is not in the config file -- only %s is being sent\n", workspace, generalWorkspace)
@@ -178,45 +175,47 @@ func runVocab(w io.Writer, args []string) error {
 }
 
 func printModels(w io.Writer) {
-	fmt.Fprintln(w, "ID                           $/hour   vocabulary  fallback")
-	for _, model := range sttModels {
-		vocabulary := "no"
-		if model.TakesVocabulary() {
-			vocabulary = "yes"
-		}
-		defaultLabel := ""
-		if model.ID == defaultModelID {
-			defaultLabel = "  (default)"
-		}
-		fallback := "-"
-		if model.FallbackID != "" {
-			fallback = model.FallbackID
-		}
-		fmt.Fprintf(w, "%-28s %7.3f   %-10s  %-14s%s\n", model.ID, model.USDPerHour, vocabulary, fallback, defaultLabel)
-	}
+	fmt.Fprintln(w, "GPT Transcribe (default, only supported model)")
+	fmt.Fprintln(w, "  OpenAI:     gpt-transcribe (vocabulary keywords)")
+	fmt.Fprintln(w, "  OpenRouter: openai/gpt-transcribe (vocabulary prompt)")
+	fmt.Fprintln(w, "No provider or model fallback. Billing comes from the API when available.")
+	fmt.Fprintln(w, "Use --model ID with start or config for an unsupported override.")
+	fmt.Fprintln(w, "Other IDs pass through unchanged. Vocabulary and model-specific hints are disabled.")
 }
 
 // Run dispatches commands and runs the daemon. version stays in package main so
 // release builds can stamp it with -X main.version.
 func Run(version string) {
-	showVersion := flag.Bool("version", false, "print version and exit")
-	flag.Parse()
-
-	if *showVersion {
+	opts, err := parseCLI(os.Args[1:])
+	if errors.Is(err, flag.ErrHelp) {
+		fmt.Println(cliUsage)
+		fmt.Println("--model ID: unsupported override for start or config (process lifetime only)")
+		return
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n\n%s\n", err, cliUsage)
+		os.Exit(2)
+	}
+	if opts.Version {
 		fmt.Println(version)
 		return
 	}
 
-	switch flag.Arg(0) {
-	case "", "start":
+	switch opts.Command {
+	case "start":
 	case "version":
 		fmt.Println(version)
 		return
 	case "config-port":
-		fmt.Println(configLoad().Port)
+		cfg, err := configReadStrict()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println(cfg.Port)
 		return
 	case "config":
-		if err := printConfig(os.Stdout); err != nil {
+		if err := printConfig(os.Stdout, opts.Model); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -225,22 +224,19 @@ func Run(version string) {
 		printModels(os.Stdout)
 		return
 	case "vocab", "vocabulary":
-		if err := runVocab(os.Stdout, flag.Args()[1:]); err != nil {
+		if err := runVocab(os.Stdout, opts.Args); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		return
-	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n\nusage: voice-type [start|version|config|models|vocab|config-port]\n", flag.Arg(0))
-		os.Exit(2)
 	}
 
-	if exitCode := runDaemon(version); exitCode != 0 {
+	if exitCode := runDaemon(version, opts.Model); exitCode != 0 {
 		os.Exit(exitCode)
 	}
 }
 
-func runDaemon(version string) (exitCode int) {
+func runDaemon(version, modelOverride string) (exitCode int) {
 	runLog := openRunLog(version)
 	defer func() {
 		outcome := "ok"
@@ -250,9 +246,18 @@ func runDaemon(version string) (exitCode int) {
 		runLog.close(outcome)
 	}()
 
-	cfg := configLoad()
+	cfg, err := configReadStrict()
+	if err != nil {
+		logf("CONFIG", "%v", err)
+		return 1
+	}
+	settings, err := cfg.resolveSTT(modelOverride, workspaceLoad())
+	if err != nil {
+		logf("CONFIG", "%v", err)
+		return 1
+	}
 
-	result, res, err := runPreflight(cfg)
+	result, res, err := runPreflight(cfg, settings)
 	switch result {
 	case preflightAlreadyRunning:
 		// Matches v4: an existing daemon is a successful no-op, which is what
@@ -265,7 +270,7 @@ func runDaemon(version string) (exitCode int) {
 	}
 	defer res.Close()
 
-	d := newDaemon(cfg, res)
+	d := newDaemon(cfg, res, settings, modelOverride)
 	d.runLog = runLog
 
 	sigCh := make(chan os.Signal, 1)

@@ -4,10 +4,11 @@
 
 ### Microphone Access
 
-- **Purpose**: Capture speech for OpenRouter transcription.
+- **Purpose**: Capture speech for transcription by the selected provider.
 - **When active**: The microphone is read only during an explicit recording
   session started by the user.
-- **Data flow**: Captured PCM audio is encoded as WAV and sent to OpenRouter.
+- **Data flow**: Captured PCM audio is encoded as WAV and sent to OpenAI or
+  OpenRouter, as selected in the config. Active vocabulary accompanies the audio.
 - **Local retention**: Audio from failed transcription attempts is retained
   privately under `$TMPDIR/voice-type/` so it is not silently lost.
 
@@ -25,18 +26,26 @@
 ### Network Access
 
 - **Purpose**: Upload WAV audio for speech-to-text transcription.
-- **Connection**: OpenRouter, using the configured API key.
+- **Connection**: HTTPS to OpenAI or OpenRouter, using the selected provider's
+  API key. No automatic provider fallback sends audio to another service.
+- **Credentials**: `OPENAI_API_KEY` applies only to OpenAI. `OPENROUTER_API_KEY`
+  applies only to OpenRouter. A nonblank matching environment key replaces the
+  config's `api_key`. Keys are never used to infer the provider.
 - **No telemetry**: Voice-type does not collect usage analytics or send unrelated
   data.
 
 ### Filesystem Access
 
-- **Configuration**: The daemon reads `~/.config/voice-type.jsonc` or the path
-  selected by `XDG_CONFIG_HOME` and never writes it. The installer creates or
-  explicitly replaces the config.
+- **Configuration**: The daemon reads `~/.voice-type-config.jsonc` and never
+  writes it. The installer creates or explicitly replaces the config with mode
+  `600`. Interactive credential entry disables terminal echo.
 - **Failed audio**: May write private WAV files under `$TMPDIR/voice-type/` after
   transcription failures.
-- **Logs**: Status and error logs are written to stderr only.
+- **Logs**: Status and error logs go to stderr and may include transcript
+  previews. Protect redirected stderr as speech content. Without a terminal,
+  request metrics also go to `~/.voice-type-logs.jsonl` with mode `600`.
+  Metrics contain provider/model IDs, attempts, timing, and status, but no keys,
+  audio, transcripts, vocabulary, or provider error bodies. They rotate at 5 MiB.
 
 ## Security Model
 
@@ -53,7 +62,7 @@
 - **Clipboard borrowing**: Output pastes rather than types, so voice-type reads
   the CLIPBOARD selection, replaces it with the transcript, sends Ctrl+Shift+V,
   and writes the previous contents back. While that is in flight the previous
-  clipboard contents — which may be a password or other secret — are held in the
+  clipboard contents (which may be a password or other secret) are held in the
   daemon's memory, and the transcript is briefly readable by any application
   that can read the clipboard. PRIMARY is never touched. When the previous
   contents cannot be restored faithfully, the clipboard is left alone and the
@@ -68,6 +77,6 @@
 - Does not run Chrome or a browser speech-recognition pipeline.
 - Does not invoke dotool. It does invoke `wl-copy` and `wl-paste` for the
   clipboard step described above.
-- Does not add desktop notifications, cache browser data, or maintain a file
-  logger.
-- Does not collect telemetry or usage statistics.
+- Does not add desktop notifications or cache browser data.
+- Does not send telemetry or usage statistics to a remote collector. Request
+  metrics remain local.

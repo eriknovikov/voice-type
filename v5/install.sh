@@ -20,6 +20,7 @@ MODE="prod"          # prod | version | local
 VERSION_TAG=""
 PREFIX="/usr/local"
 API_KEY=""
+PROVIDER=""
 CONFIG_CREATED=0
 CONFIG_TMP=""
 TMP_DIR=""
@@ -51,10 +52,11 @@ link_path() {
 
 usage() {
     cat >&2 << EOF
-Usage: install.sh [--version vX.Y.Z | --local]
+Usage: install.sh [--version vX.Y.Z | --local] [--provider openai|openrouter]
 
   --version vX.Y.Z   install a specific v5 release
   --local            build from the working tree with the Go toolchain
+  --provider NAME    provider for a new config (unattended default: openrouter)
 EOF
 }
 
@@ -253,6 +255,36 @@ download_release() {
     install_binary_file "$_binary"
 }
 
+ask_provider() {
+    [ -z "$PROVIDER" ] || return 0
+    PROVIDER="openrouter"
+    has_tty || return 0
+    while :; do
+        printf 'Transcription provider [openrouter/openai] (openrouter): ' > /dev/tty
+        read -r _provider_answer < /dev/tty || _provider_answer=""
+        case "$_provider_answer" in
+            "" | openrouter) PROVIDER="openrouter"; return 0 ;;
+            openai) PROVIDER="openai"; return 0 ;;
+            *) log_warn "Choose openai or openrouter." ;;
+        esac
+    done
+}
+
+provider_key_env() {
+    case "$PROVIDER" in
+        openai) printf '%s' 'OPENAI_API_KEY' ;;
+        *) printf '%s' 'OPENROUTER_API_KEY' ;;
+    esac
+}
+
+provider_has_env_key() {
+    case "$PROVIDER" in
+        openai) _env_key="${OPENAI_API_KEY:-}" ;;
+        *) _env_key="${OPENROUTER_API_KEY:-}" ;;
+    esac
+    printf '%s' "$_env_key" | grep -q '[^[:space:]]'
+}
+
 # Called when creating or replacing a config. An existing file is never edited to
 # add a key.
 #
@@ -263,29 +295,30 @@ download_release() {
 # restoring it would hand the user back a shell that types invisibly.
 ask_api_key() {
     # A key in the environment wins over the file, so there is nothing to ask.
-    [ -z "${OPENROUTER_API_KEY:-}" ] || return 0
+    if provider_has_env_key; then return 0; fi
     has_tty || return 0
 
     # Echo goes off *before* the prompt is printed. Anything arriving between the
     # two -- unexpected input, a fast typist, an automated answer -- would otherwise be
     # echoed by the line discipline in that window.
-    _stty_saved=$(stty -g < /dev/tty 2> /dev/null) || _stty_saved=""
-    if [ -n "$_stty_saved" ]; then
-        trap 'stty "$_stty_saved" < /dev/tty 2> /dev/null; exit 130' INT TERM
-        stty -echo < /dev/tty 2> /dev/null || _stty_saved=""
+    if ! _stty_saved=$(stty -g < /dev/tty 2> /dev/null); then
+        log_warn "Cannot hide key entry. Set $(provider_key_env) or edit api_key later."
+        return 0
     fi
-
-    printf 'OpenRouter API key (hidden, blank to set it later): ' > /dev/tty
-    read -r API_KEY < /dev/tty || API_KEY=""
-
-    if [ -n "$_stty_saved" ]; then
+    trap 'stty "$_stty_saved" < /dev/tty 2> /dev/null; exit 130' INT TERM
+    if ! stty -echo < /dev/tty 2> /dev/null; then
         stty "$_stty_saved" < /dev/tty 2> /dev/null || true
         trap 'exit 130' INT TERM
-        # Echo off swallowed the user's newline too, so this line both masks the
-        # key and terminates the prompt. With no stty the terminal echoed the key
-        # itself and there is nothing to mask.
-        printf '%s\n' "$(printf '%s' "$API_KEY" | sed 's/./*/g')" > /dev/tty
+        log_warn "Cannot hide key entry. Set $(provider_key_env) or edit api_key later."
+        return 0
     fi
+
+    printf '%s API key (hidden, blank to set it later): ' "$PROVIDER" > /dev/tty
+    read -r API_KEY < /dev/tty || API_KEY=""
+
+    stty "$_stty_saved" < /dev/tty 2> /dev/null || true
+    trap 'exit 130' INT TERM
+    printf '%s\n' "$(printf '%s' "$API_KEY" | sed 's/./*/g')" > /dev/tty
 }
 
 # Writes a config, offering to skip when one already exists. The safe default is
@@ -308,6 +341,7 @@ write_config() {
         esac
     fi
 
+    ask_provider
     ask_api_key
     CONFIG_TMP=$(mktemp "$HOME/.voice-type-config.jsonc.XXXXXX")
     # The key lands on disk, so write a private same-directory temporary file
@@ -315,12 +349,13 @@ write_config() {
     (
         umask 077
         _json_key=$(printf '%s' "$API_KEY" | sed 's/\\/\\\\/g; s/"/\\"/g')
-        printf '{\n    "api_key": "%s", // or set OPENROUTER_API_KEY, which wins\n' "$_json_key" > "$CONFIG_TMP"
+        printf '{\n    "provider": "%s", // openai or openrouter\n' "$PROVIDER" > "$CONFIG_TMP"
+        printf '    "api_key": "%s", // or set %s, which wins\n' "$_json_key" "$(provider_key_env)" >> "$CONFIG_TMP"
         cat >> "$CONFIG_TMP" << 'EOF'
     "port": 3232,           // int 1024-65535
 
-    // Run `voice-type models` for choices, prices, and vocabulary support.
-    "model": "gpt-transcribe",
+    // GPT Transcribe is the only supported model. Use --model ID when starting
+    // the daemon for an unsupported override (vocabulary is then disabled).
 
     // Names and jargon the model would otherwise misspell, one list per
     // workspace. "general" rides along with every dictation; pick one of the
@@ -346,7 +381,17 @@ EOF
 config_has_key() {
     [ -f "$CONFIG_FILE" ] || return 1
     sed 's|//.*||g' "$CONFIG_FILE" 2> /dev/null \
-        | grep -Eq '"api_key"[[:space:]]*:[[:space:]]*"[^"]+"'
+        | grep -Eq '"api_key"[[:space:]]*:[[:space:]]*"[^"]*[^"[:space:]][^"]*"'
+}
+
+# Used only for the advisory summary. A kept legacy config selects OpenRouter.
+config_provider() {
+    _file_provider=$(sed 's|//.*||g' "$CONFIG_FILE" 2> /dev/null \
+        | sed -n 's/.*"provider"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+    case "$_file_provider" in
+        openai) printf '%s' 'openai' ;;
+        *) printf '%s' 'openrouter' ;;
+    esac
 }
 
 print_summary() {
@@ -357,8 +402,9 @@ print_summary() {
     fi
 
     # Both of these leave voice-type unable to work, so they stay.
-    if [ -z "${OPENROUTER_API_KEY:-}" ] && ! config_has_key; then
-        log_warn "No API key yet. Set OPENROUTER_API_KEY, or add \"api_key\" to $(link_path "$CONFIG_FILE")"
+    PROVIDER=$(config_provider)
+    if ! provider_has_env_key && ! config_has_key; then
+        log_warn "No $PROVIDER API key yet. Set $(provider_key_env), or add \"api_key\" to $(link_path "$CONFIG_FILE")"
     fi
 }
 
@@ -386,6 +432,14 @@ while [ $# -gt 0 ]; do
             VERSION_TAG="$2"; MODE="version"; shift 2
             ;;
         --local) MODE="local"; shift ;;
+        --provider)
+            [ $# -ge 2 ] || { log_error "--provider needs openai or openrouter"; exit 1; }
+            case "$2" in
+                openai | openrouter) PROVIDER="$2" ;;
+                *) log_error "--provider needs openai or openrouter"; exit 1 ;;
+            esac
+            shift 2
+            ;;
         *) log_error "Unknown option: $1"; usage; exit 1 ;;
     esac
 done
