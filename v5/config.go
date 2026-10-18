@@ -12,14 +12,12 @@ import (
 	"unicode"
 )
 
-// Config holds the four user-facing settings. Unknown fields are ignored so
-// older config files keep loading.
+// Config holds file settings. Model overrides belong to the process, not the
+// file. Unknown fields remain compatible with older files.
 type Config struct {
-	APIKey string
-	Port   int
-	// Model is an sttModels ID. Vocabulary travels with the audio, so names
-	// come out spelled right instead of being corrected afterwards.
-	Model string
+	Provider string
+	APIKey   string
+	Port     int
 	// Vocabulary is the named term lists. generalWorkspace rides along with
 	// every dictation; the rest are one at a time, picked with `voice-type
 	// vocab set`, so a term only costs where it earns its keep.
@@ -61,118 +59,89 @@ const (
 	maxDurationSeconds = 600
 )
 
-// sttBias is how a model takes vocabulary conditioning. The shape has to match
-// the provider namespace that OpenRouter forwards for that model.
-type sttBias int
-
 const (
-	// biasNone is a model that measurably discards a vocabulary. Sending one
-	// only pays to upload it.
-	biasNone sttBias = iota
-	// biasPrompt is the Whisper lineage: a sentence prepended to the decoder
-	// context, which the model can echo back instead of transcribing.
-	biasPrompt
-	// biasPhraseList is Azure keyword biasing -- terms, not prose, weighted
-	// during decoding. There is no prompt to echo.
-	biasPhraseList
+	providerOpenAI     = "openai"
+	providerOpenRouter = "openrouter"
+	defaultModelID     = "gpt-transcribe"
 )
 
-// sttSpec is one allowed model. Provider names the provider.options namespace;
-// OpenRouter does not apply provider routing preferences to STT requests.
-type sttSpec struct {
-	ID         string
-	Slug       string
+func configDefaults() Config {
+	return Config{
+		Provider: providerOpenRouter,
+		Port:     defaultPort,
+	}
+}
+
+// sttSettings is a snapshot for one recording. Reloads never mutate it during
+// capture or transcription.
+type sttSettings struct {
 	Provider   string
-	Bias       sttBias
-	USDPerHour float64
-	FallbackID string
+	Model      string
+	APIKey     string
+	Vocabulary []string
+	Workspace  string
 }
 
-type sttRoute struct {
-	Primary  sttSpec
-	Fallback *sttSpec
+func providerModel(provider string) string {
+	if provider == providerOpenRouter {
+		return "openai/" + defaultModelID
+	}
+	return defaultModelID
 }
 
-// TakesVocabulary reports whether sending terms with the audio does anything.
-func (s sttSpec) TakesVocabulary() bool { return s.Bias != biasNone }
+func (s sttSettings) supportedModel() bool { return s.Model == providerModel(s.Provider) }
 
-const defaultModelID = "gpt-transcribe"
-
-// sttModels is the model allowlist shown by `voice-type models`.
-var sttModels = []sttSpec{
-	{ID: "mai-transcribe-2", Slug: "microsoft/mai-transcribe-2", Provider: "azure", Bias: biasPhraseList, USDPerHour: 0.100, FallbackID: "gpt-transcribe"},
-	{ID: "gpt-4o-transcribe", Slug: "openai/gpt-4o-transcribe", Provider: "openai", Bias: biasPrompt, USDPerHour: 0.224},
-	{ID: "gpt-transcribe", Slug: "openai/gpt-transcribe", Provider: "openai", Bias: biasPrompt, USDPerHour: 0.270},
-	{ID: "whisper-large-v3", Slug: "openai/whisper-large-v3", Provider: "deepinfra", Bias: biasPrompt, USDPerHour: 0.027},
-	{ID: "whisper-1", Slug: "openai/whisper-1", Provider: "openai", Bias: biasPrompt, USDPerHour: 0.364},
-	{ID: "whisper-large-v3-turbo", Slug: "openai/whisper-large-v3-turbo", Provider: "deepinfra", Bias: biasPrompt, USDPerHour: 0.012},
-	{ID: "gpt-4o-mini-transcribe", Slug: "openai/gpt-4o-mini-transcribe", Provider: "openai", Bias: biasPrompt, USDPerHour: 0.111},
-	{ID: "parakeet-v3", Slug: "nvidia/parakeet-tdt-0.6b-v3", Provider: "together", Bias: biasNone, USDPerHour: 0.090},
-	{ID: "whisper-large-v3-turbo-groq", Slug: "openai/whisper-large-v3-turbo", Provider: "groq", Bias: biasNone, USDPerHour: 0.012},
+func (c Config) keyEnv() string {
+	if c.Provider == providerOpenAI {
+		return "OPENAI_API_KEY"
+	}
+	return "OPENROUTER_API_KEY"
 }
 
-func sttLookup(id string) (sttSpec, bool) {
-	for _, m := range sttModels {
-		if m.ID == id {
-			return m, true
+func (s sttSettings) validateCredentials() error {
+	if s.APIKey == "" {
+		return fmt.Errorf("no %s API key. Set %s or api_key in %s", s.Provider,
+			(Config{Provider: s.Provider}).keyEnv(), configFilePath())
+	}
+	return nil
+}
+
+func (c Config) resolveSTT(modelOverride, workspace string) (sttSettings, error) {
+	if c.Provider != providerOpenAI && c.Provider != providerOpenRouter {
+		return sttSettings{}, errors.New("provider must be openai or openrouter")
+	}
+	model := modelOverride
+	if model == "" || model == defaultModelID {
+		model = providerModel(c.Provider)
+	}
+	s := sttSettings{Provider: c.Provider, Model: model, APIKey: configAPIKey(c), Workspace: workspace}
+	if !s.supportedModel() {
+		configWarn("override", "unsupported model override: vocabulary and model-specific hints are disabled")
+		return s, nil
+	}
+	configWarn("override", "")
+	if c.Provider == providerOpenAI {
+		if err := c.validateKeywords(workspace); err != nil {
+			return sttSettings{}, err
 		}
 	}
-	return sttSpec{}, false
+	s.Vocabulary = c.activeVocabulary(workspace)
+	return s, nil
 }
 
-func sttRouteFor(primary sttSpec) sttRoute {
-	route := sttRoute{Primary: primary}
-	if primary.FallbackID != "" {
-		if fallback, ok := sttLookup(primary.FallbackID); ok {
-			route.Fallback = &fallback
-		}
-	}
-	return route
-}
-
-func validateSTTCatalog(models []sttSpec) error {
-	byID := make(map[string]sttSpec, len(models))
-	for _, model := range models {
-		if _, exists := byID[model.ID]; exists {
-			return fmt.Errorf("duplicate STT model %q", model.ID)
-		}
-		byID[model.ID] = model
-	}
-	for _, model := range models {
-		if model.FallbackID == "" {
+func (c Config) validateKeywords(workspace string) error {
+	for _, list := range c.Vocabulary {
+		if list.Name != generalWorkspace && list.Name != workspace {
 			continue
 		}
-		if model.FallbackID == model.ID {
-			return fmt.Errorf("STT model %q falls back to itself", model.ID)
-		}
-		if _, ok := byID[model.FallbackID]; !ok {
-			return fmt.Errorf("STT model %q has missing fallback %q", model.ID, model.FallbackID)
-		}
-
-		seen := map[string]bool{model.ID: true}
-		for next := model.FallbackID; next != ""; next = byID[next].FallbackID {
-			if seen[next] {
-				return fmt.Errorf("STT fallback cycle includes %q", next)
-			}
-			seen[next] = true
-			if _, ok := byID[next]; !ok {
-				break
+		for i, term := range list.Terms {
+			if strings.ContainsAny(term, "<>\r\n") {
+				return fmt.Errorf("vocabulary workspace %q term %d: OpenAI keywords cannot contain angle brackets or line breaks", list.Name, i+1)
 			}
 		}
 	}
 	return nil
 }
-
-func configDefaults() Config {
-	return Config{
-		Port:   defaultPort,
-		APIKey: "",
-		Model:  defaultModelID,
-	}
-}
-
-// modelSpec is always found: validation only ever stores an allowlisted ID.
-func (c Config) modelSpec() sttSpec { m, _ := sttLookup(c.Model); return m }
 
 // workspaces lists the switchable workspaces -- everything but general -- in the
 // order the config file declares them, which is the order the user reads.
@@ -193,7 +162,7 @@ func (c Config) hasWorkspace(name string) bool { return c.Vocabulary.index(name)
 // terms returns one workspace's terms.
 func (c Config) terms(name string) []string {
 	if i := c.Vocabulary.index(name); i >= 0 {
-		return c.Vocabulary[i].Terms
+		return cleanTerms(c.Vocabulary[i].Terms)
 	}
 	return nil
 }
@@ -248,11 +217,10 @@ func cleanTerms(terms []string) []string {
 func parseVocabulary(raw json.RawMessage) (vocabLists, error) {
 	var flat []string
 	if err := json.Unmarshal(raw, &flat); err == nil {
-		terms := cleanTerms(flat)
-		if len(terms) == 0 {
+		if len(flat) == 0 {
 			return nil, nil
 		}
-		return vocabLists{{generalWorkspace, terms}}, nil
+		return vocabLists{{generalWorkspace, flat}}, nil
 	}
 
 	badShape := errors.New("must be an object of \"workspace\": [terms] (or a flat array), ignoring it")
@@ -279,9 +247,10 @@ func parseVocabulary(raw json.RawMessage) (vocabLists, error) {
 		// JSON says a repeated key wins with its last value; the row stays where
 		// it first appeared so the list still reads down the file.
 		if i := lists.index(name); i >= 0 {
-			lists[i].Terms = cleanTerms(terms)
+			lists[i].Terms = terms
 		} else {
-			lists = append(lists, vocabList{name, cleanTerms(terms)})
+			// Validate original keywords before trimming can hide line breaks.
+			lists = append(lists, vocabList{name, terms})
 		}
 	}
 	if len(lists) == 0 {
@@ -418,12 +387,18 @@ func configWarn(field, reason string) {
 	logf("CONFIG", "%s: %s", field, reason)
 }
 
-// configValidate applies the four known fields over the defaults, warning about
-// (and then ignoring) values of the wrong type or out of range. Every other
-// field is not touched at all, so both v4 configs and configs written by
-// earlier v5 installers load cleanly.
-func configValidate(raw map[string]json.RawMessage) Config {
+// Provider errors must not silently select another destination. Unknown fields
+// remain compatible with older config files.
+func configValidate(raw map[string]json.RawMessage) (Config, error) {
 	cfg := configDefaults()
+	if v, ok := raw["provider"]; ok {
+		var provider string
+		if err := json.Unmarshal(v, &provider); err != nil ||
+			(provider != providerOpenAI && provider != providerOpenRouter) {
+			return cfg, errors.New("provider must be openai or openrouter")
+		}
+		cfg.Provider = provider
+	}
 
 	portWarning := ""
 	if v, ok := raw["port"]; ok {
@@ -436,25 +411,18 @@ func configValidate(raw map[string]json.RawMessage) Config {
 	}
 	configWarn("port", portWarning)
 
-	apiKeyWarning := ""
 	if v, ok := raw["api_key"]; ok {
-		var s string
-		if err := json.Unmarshal(v, &s); err == nil {
-			cfg.APIKey = s
-		} else {
-			apiKeyWarning = "must be a string, using default"
+		if err := json.Unmarshal(v, &cfg.APIKey); err != nil {
+			return cfg, errors.New("api_key must be a string")
 		}
+		cfg.APIKey = strings.TrimSpace(cfg.APIKey)
 	}
-	configWarn("api_key", apiKeyWarning)
 
 	modelWarning := ""
 	if v, ok := raw["model"]; ok {
 		var s string
-		json.Unmarshal(v, &s) // anything but an allowlisted ID warns below
-		if _, found := sttLookup(s); found {
-			cfg.Model = s
-		} else {
-			modelWarning = fmt.Sprintf("%q is not a model voice-type ships with, using %s -- see `voice-type models`", s, cfg.Model)
+		if err := json.Unmarshal(v, &s); err != nil || s != defaultModelID {
+			modelWarning = "legacy model field is ignored. Use --model for an unsupported override"
 		}
 	}
 	configWarn("model", modelWarning)
@@ -469,13 +437,9 @@ func configValidate(raw map[string]json.RawMessage) Config {
 		}
 	}
 
-	// A vocabulary the model discards is billed on every dictation for nothing.
-	if spec := cfg.modelSpec(); len(cfg.Vocabulary) > 0 && !spec.TakesVocabulary() {
-		vocabularyWarning = spec.ID + " ignores it -- see `voice-type models`"
-	}
 	configWarn("vocabulary", vocabularyWarning)
 
-	return cfg
+	return cfg, nil
 }
 
 // configParse turns raw JSONC bytes into a Config. A malformed file yields
@@ -487,29 +451,20 @@ func configParse(data []byte) (Config, error) {
 	if err := json.Unmarshal([]byte(stripped), &raw); err != nil {
 		return configDefaults(), fmt.Errorf("could not parse config file: %w", err)
 	}
-
-	return configValidate(raw), nil
-}
-
-// configLoad reads the config file. Nothing writes it: voice-type only ever
-// reads this file. A missing file simply means defaults.
-func configLoad() Config {
-	cfg, err := configReadStrict()
-	if err != nil {
-		configWarn("file", err.Error()+" -- using defaults")
-		return configDefaults()
+	if raw == nil {
+		return configDefaults(), errors.New("config must be a JSON object")
 	}
-	lastWarning.Delete("file")
-	return cfg
+
+	return configValidate(raw)
 }
 
-// configReadStrict is configLoad without fallback, for commands that need to
-// report a malformed file rather than silently continue with defaults.
+// Nothing writes the config. A missing file means defaults, but invalid files
+// must block recording rather than silently using old credentials or routes.
 func configReadStrict() (Config, error) {
 	data, err := os.ReadFile(configFilePath())
 	if err != nil {
 		if os.IsNotExist(err) {
-			return configValidate(nil), nil
+			return configValidate(nil)
 		}
 		return Config{}, fmt.Errorf("could not read %s: %w", configFilePath(), err)
 	}
@@ -520,10 +475,10 @@ func configReadStrict() (Config, error) {
 	return cfg, nil
 }
 
-// configAPIKey prefers the environment over the config file.
+// Only the selected provider's environment key can replace the file key.
 func configAPIKey(cfg Config) string {
-	if k := os.Getenv("OPENROUTER_API_KEY"); k != "" {
+	if k := strings.TrimSpace(os.Getenv(cfg.keyEnv())); k != "" {
 		return k
 	}
-	return cfg.APIKey
+	return strings.TrimSpace(cfg.APIKey)
 }

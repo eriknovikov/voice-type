@@ -40,7 +40,9 @@ func (s sessionState) String() string {
 }
 
 type daemon struct {
-	cfg Config
+	cfg           Config
+	modelOverride string
+	configError   string
 	// workspace is the active vocabulary workspace, re-read from the state file
 	// with the config so `voice-type vocab set` lands on the next dictation.
 	workspace string
@@ -63,14 +65,14 @@ type daemon struct {
 	exitOnce sync.Once
 }
 
-func newDaemon(cfg Config, res *resources) *daemon {
-	workspace := workspaceLoad()
+func newDaemon(cfg Config, res *resources, settings sttSettings, modelOverride string) *daemon {
 	return &daemon{
-		cfg:       cfg,
-		workspace: workspace,
-		res:       res,
-		stt:       newSTTClient(configAPIKey(cfg), cfg.modelSpec(), cfg.activeVocabulary(workspace)),
-		done:      make(chan struct{}),
+		cfg:           cfg,
+		modelOverride: modelOverride,
+		workspace:     settings.Workspace,
+		res:           res,
+		stt:           newSTTClient(settings),
+		done:          make(chan struct{}),
 	}
 }
 
@@ -94,7 +96,13 @@ func (d *daemon) startSession() (int, string) {
 		return http.StatusConflict, fmt.Sprintf("already %s", state)
 	}
 
-	d.reloadConfig()
+	if err := d.reloadConfig(); err != nil {
+		d.configError = err.Error()
+		d.mu.Unlock()
+		logf("CONFIG", "recording blocked: %v", err)
+		return http.StatusServiceUnavailable, err.Error()
+	}
+	d.configError = ""
 	d.state = stateChecking
 	d.sessionID++
 	sessionID := d.sessionID
@@ -153,22 +161,29 @@ func (d *daemon) startSession() (int, string) {
 // or a `vocab set` applies to this dictation without a restart. Callers hold
 // d.mu. The bound port is the one exception: the listener is already up on the
 // old one.
-func (d *daemon) reloadConfig() {
-	d.workspace = workspaceLoad()
-
+func (d *daemon) reloadConfig() error {
+	workspace := workspaceLoad()
 	cfg, err := configReadStrict()
 	if err != nil {
-		configWarn("file", err.Error()+" -- keeping current configuration")
-		d.stt.vocabulary = d.cfg.activeVocabulary(d.workspace)
-		return
+		return err
 	}
-	lastWarning.Delete("file")
+	settings, err := cfg.resolveSTT(d.modelOverride, workspace)
+	if err != nil {
+		return err
+	}
+	if err := settings.validateCredentials(); err != nil {
+		return err
+	}
+	if cfg.Port != d.cfg.Port {
+		configWarn("port-restart", "port change requires restarting the daemon")
+	} else {
+		configWarn("port-restart", "")
+	}
 	cfg.Port = d.cfg.Port
 	d.cfg = cfg
-
-	d.stt.apiKey = configAPIKey(cfg)
-	d.stt.setRoute(cfg.modelSpec())
-	d.stt.vocabulary = cfg.activeVocabulary(d.workspace)
+	d.workspace = workspace
+	d.stt = newSTTClient(settings)
+	return nil
 }
 
 // stopSession moves recording -> transcribing -> idle. It runs on the caller's
@@ -275,7 +290,7 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 		return http.StatusOK, "cancelled"
 	}
 
-	requestedModel := stt.model.ID
+	requestedModel := stt.settings.Model
 	t0 := time.Now()
 	attempts := make([]runLogAttempt, 0, sttMaxAttempts)
 	result, err := stt.transcribeContext(ctx, wav, func(model string, attempt int, requestDuration time.Duration, result sttResult, err error) {
@@ -288,6 +303,7 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 			}
 		}
 		attempts = append(attempts, runLogAttempt{
+			Provider:   stt.settings.Provider,
 			Model:      model,
 			StatusCode: status,
 			DurationMS: requestDuration.Milliseconds(),
@@ -299,7 +315,7 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 	if finalModel == "" && len(attempts) > 0 {
 		finalModel = attempts[len(attempts)-1].Model
 	}
-	d.runLog.complete(requestedModel, finalModel, requestOutcome(err), requestDuration, duration, attempts, err)
+	d.runLog.complete(stt.settings.Provider, requestedModel, finalModel, requestOutcome(err), requestDuration, duration, attempts, err)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			logf("STT", "cancelled during shutdown")
@@ -307,19 +323,15 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 		}
 		return d.handleSTTError(err, wav)
 	}
-	logf("STT", "%s: %.2fs audio -> %d chars in %v (billed %.0fs, $%.6f)",
-		result.ModelID, duration, len(result.Text), requestDuration.Round(time.Millisecond), result.Seconds, result.Cost)
+	logf("STT", "%s/%s: %.2fs audio -> %d chars in %v (%s)",
+		stt.settings.Provider, result.ModelID, duration, len(result.Text), requestDuration.Round(time.Millisecond), result.billingSummary())
 
 	if result.Text == "" {
 		logf("STT", "empty transcript -- nothing to type")
 		return http.StatusOK, ""
 	}
 
-	producingModel, ok := sttLookup(result.ModelID)
-	if !ok {
-		producingModel = stt.model
-	}
-	prompt := sttVocabularyPrompt(producingModel, stt.vocabulary)
+	prompt := stt.settings.vocabularyPrompt()
 	if vocabularyEcho(result.Text, prompt) {
 		retained := ""
 		if path, retainErr := retainWAV(wav); retainErr == nil {
@@ -331,7 +343,7 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 			captured, levels.peakRMS, levels.noiseFloor, retained)
 		return http.StatusBadGateway, "transcription matched the vocabulary prompt; " + retained
 	}
-	if strings.HasPrefix(normalizeTranscript(result.Text), "vocabulary:") {
+	if prompt != "" && strings.HasPrefix(normalizeTranscript(result.Text), "vocabulary:") {
 		logf("STT", "possible vocabulary echo contained other words; preserving transcript: %s", truncate(result.Text, 120))
 	}
 	if err := ctx.Err(); err != nil {
@@ -368,7 +380,9 @@ func (d *daemon) handleSTTError(err error, wav []byte) (int, string) {
 		switch {
 		case se.Fatal():
 			logf("STT", "authentication rejected (%d): %s%s", se.Status, se.Error(), retained)
-			logf("STT", "check OPENROUTER_API_KEY or the api_key field in %s", configFilePath())
+			logf("STT", "check %s or the api_key field in %s", (Config{Provider: se.Provider}).keyEnv(), configFilePath())
+		case se.Quota:
+			logf("STT", "%s quota or credit exhausted: %s%s", se.Provider, se.Error(), retained)
 		case se.Status == http.StatusRequestEntityTooLarge:
 			logf("STT", "audio rejected as too large (%d) -- dictate in shorter takes%s", se.Status, retained)
 		case se.Retryable():
@@ -394,18 +408,18 @@ func (d *daemon) routes() *http.ServeMux {
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		d.mu.Lock()
-		cfg, state, workspace := d.cfg, d.state, d.workspace
-		terms := len(cfg.vocabularyFor(workspace))
+		settings, state, workspace := d.stt.settings, d.state, d.workspace
+		configError := d.configError
+		ready := configError == "" && !d.shuttingDown
 		d.mu.Unlock()
-		route := sttRouteFor(cfg.modelSpec())
-		fallback := ""
-		if route.Fallback != nil {
-			fallback = route.Fallback.ID
+		status := "ok"
+		if !ready {
+			status = "error"
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"status": "ok", "state": state.String(),
-			"model": cfg.Model, "fallback": fallback,
-			"workspace": workspaceLabel(workspace), "vocabulary": terms,
+			"status": status, "state": state.String(), "ready": ready, "config_error": configError,
+			"provider": settings.Provider, "model": settings.Model, "fallback": "",
+			"workspace": workspaceLabel(workspace), "vocabulary": len(settings.Vocabulary),
 		})
 	})
 
@@ -513,9 +527,9 @@ func (d *daemon) Run() error {
 	}
 
 	errCh := make(chan error, 1)
+	logf("DAEMON", "listening on http://127.0.0.1:%d (provider %s, model %s, workspace %s, %d vocabulary terms)",
+		d.cfg.Port, d.stt.settings.Provider, d.stt.settings.Model, workspaceLabel(d.workspace), len(d.stt.settings.Vocabulary))
 	go func() {
-		logf("DAEMON", "listening on http://127.0.0.1:%d (model %s, workspace %s, %d vocabulary terms)",
-			d.cfg.Port, d.cfg.Model, workspaceLabel(d.workspace), len(d.cfg.vocabularyFor(d.workspace)))
 		if err := d.srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
