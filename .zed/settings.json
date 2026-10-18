@@ -1,0 +1,29 @@
+{
+  "enable_language_server": true,
+  "languages": {
+    "TypeScript": {
+      "enable_language_server": true,
+      "language_servers": ["vtsls"],
+      "formatter": "language_server"
+    },
+    "TSX": {
+      "enable_language_server": true,
+      "language_servers": ["vtsls"],
+      "formatter": "language_server"
+    },
+
+  },
+  "lsp": {
+    "vtsls": {
+      "settings": {
+        "typescript": {
+          "disableAutomaticTypeAcquisition": true,
+          "tsserver": {
+            "useSyntaxServer": "always",
+            "maxTsServerMemory": 1024
+          }
+        }
+      }
+    },
+  }
+}
