@@ -7,7 +7,7 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 # is the whole point of the rewrite.
 export CGO_ENABLED = 0
 
-.PHONY: all build test test-live vet fmt check clean dist run install
+.PHONY: all build test vet fmt check clean dist run install
 
 all: build
 
@@ -16,10 +16,6 @@ build:
 
 test:
 	go test ./...
-
-# Requires OPENROUTER_API_KEY and a 16 kHz mono s16le file in VOICE_TYPE_PCM.
-test-live:
-	VOICE_TYPE_LIVE=1 go test -run TestLiveTranscribe -v ./...
 
 vet:
 	go vet ./...

@@ -24,6 +24,7 @@ type runLog struct {
 }
 
 type runLogAttempt struct {
+	Provider   string `json:"provider"`
 	Model      string `json:"model"`
 	StatusCode int    `json:"status"`
 	DurationMS int64  `json:"duration_ms"`
@@ -33,6 +34,7 @@ type runLogAttempt struct {
 type runLogRecord struct {
 	Event           string          `json:"event"`
 	Version         string          `json:"version"`
+	Provider        string          `json:"provider"`
 	ConfiguredModel string          `json:"configured_model"`
 	FinalModel      string          `json:"final_model,omitempty"`
 	Outcome         string          `json:"outcome"`
@@ -88,7 +90,7 @@ func newRunLog(version string, terminal bool) *runLog {
 	return l
 }
 
-func (l *runLog) complete(configuredModel, finalModel, outcome string, total time.Duration, audioSeconds float64, attempts []runLogAttempt, err error) {
+func (l *runLog) complete(provider, configuredModel, finalModel, outcome string, total time.Duration, audioSeconds float64, attempts []runLogAttempt, err error) {
 	if l == nil {
 		return
 	}
@@ -100,16 +102,10 @@ func (l *runLog) complete(configuredModel, finalModel, outcome string, total tim
 			status = sttErr.Status
 		}
 	}
-	fallbackUsed := false
-	for _, attempt := range attempts {
-		if attempt.Model != configuredModel {
-			fallbackUsed = true
-			break
-		}
-	}
 	l.write(runLogRecord{
 		Event:           "dictation.completed",
 		Version:         l.version,
+		Provider:        provider,
 		ConfiguredModel: configuredModel,
 		FinalModel:      finalModel,
 		Outcome:         outcome,
@@ -118,7 +114,7 @@ func (l *runLog) complete(configuredModel, finalModel, outcome string, total tim
 		TotalMS:         total.Milliseconds(),
 		AudioMS:         int64(audioSeconds * 1000),
 		AttemptCount:    len(attempts),
-		FallbackUsed:    fallbackUsed,
+		FallbackUsed:    false,
 		Attempts:        attempts,
 	})
 }
@@ -162,7 +158,7 @@ func safeRequestError(err error) string {
 	}
 	var sttErr *sttError
 	if errors.As(err, &sttErr) {
-		return fmt.Sprintf("openrouter %d", sttErr.Status)
+		return fmt.Sprintf("%s %d", sttErr.Provider, sttErr.Status)
 	}
 	return requestOutcome(err)
 }
@@ -179,6 +175,8 @@ func requestOutcome(err error) string {
 		switch {
 		case sttErr.Fatal():
 			return "auth_error"
+		case sttErr.Quota:
+			return "quota_error"
 		case sttErr.Status == http.StatusRequestEntityTooLarge:
 			return "too_large"
 		case sttErr.Retryable():
