@@ -266,15 +266,15 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 		noSpeech = true
 	}
 	if noSpeech {
-		if err := d.res.Typer.TypeContext(ctx, "?"); err != nil {
+		if err := insertText(ctx, "?"); err != nil {
 			if errors.Is(err, context.Canceled) {
 				logf("OUTPUT", "no-speech marker cancelled")
 				return http.StatusOK, "cancelled"
 			}
 			logf("OUTPUT", "no-speech marker failed: %v", err)
-			return http.StatusInternalServerError, fmt.Sprintf("no speech detected; type marker: %v", err)
+			return http.StatusInternalServerError, fmt.Sprintf("no speech detected; insert marker: %v", err)
 		}
-		logf("OUTPUT", "typed no-speech marker")
+		logf("OUTPUT", "submitted no-speech marker via IBus")
 		return http.StatusOK, "no speech detected"
 	}
 
@@ -327,7 +327,7 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 		stt.settings.Provider, result.ModelID, duration, len(result.Text), requestDuration.Round(time.Millisecond), result.billingSummary())
 
 	if result.Text == "" {
-		logf("STT", "empty transcript -- nothing to type")
+		logf("STT", "empty transcript -- nothing to insert")
 		return http.StatusOK, ""
 	}
 
@@ -352,16 +352,16 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 	}
 
 	outputStart := time.Now()
-	if err := d.res.Typer.PasteContext(ctx, result.Text); err != nil {
+	if err := insertText(ctx, result.Text); err != nil {
 		if errors.Is(err, context.Canceled) {
 			logf("OUTPUT", "cancelled before insertion")
 			return http.StatusOK, "cancelled"
 		}
-		logf("OUTPUT", "paste failed: %v", err)
-		return http.StatusInternalServerError, fmt.Sprintf("paste failed: %v", err)
+		logf("OUTPUT", "IBus insertion failed: %v", err)
+		return http.StatusInternalServerError, fmt.Sprintf("IBus insertion failed: %v", err)
 	}
 
-	logf("OUTPUT", "typed in %v: %s", time.Since(outputStart).Round(time.Millisecond), truncate(result.Text, 120))
+	logf("OUTPUT", "submitted via IBus in %v: %s", time.Since(outputStart).Round(time.Millisecond), truncate(result.Text, 120))
 	return http.StatusOK, result.Text
 }
 
