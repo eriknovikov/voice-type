@@ -246,43 +246,12 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 		logf("AUDIO", "capture failed: %v", recordErr)
 		return http.StatusInternalServerError, recordErr.Error()
 	}
-	captured := wavDurationSeconds(samples)
+	duration := wavDurationSeconds(samples)
 	if len(samples) == 0 {
 		logf("AUDIO", "no audio captured")
 		return http.StatusOK, "no audio captured"
 	}
-	levels := measureAudioLevels(samples)
-	analysis := analyzeSpeech(samples)
-	logf("AUDIO", "captured %.2fs (%d samples); peak RMS %.0f, noise floor %.0f, gate %.0f",
-		captured, len(samples), levels.peakRMS, levels.noiseFloor, analysis.gate)
-
-	noSpeech := false
-	if captured < minCaptureSeconds {
-		logf("AUDIO", "capture shorter than %.2fs -- discarded", minCaptureSeconds)
-		noSpeech = true
-	} else if !analysis.detected {
-		logf("AUDIO", "no speech in %.2fs; longest active span %dms, candidate ZCR %.3f -- discarded",
-			captured, analysis.maxActiveFrames*20, analysis.zeroCrossingRate)
-		noSpeech = true
-	}
-	if noSpeech {
-		if err := insertText(ctx, "?"); err != nil {
-			if errors.Is(err, context.Canceled) {
-				logf("OUTPUT", "no-speech marker cancelled")
-				return http.StatusOK, "cancelled"
-			}
-			logf("OUTPUT", "no-speech marker failed: %v", err)
-			return http.StatusInternalServerError, fmt.Sprintf("no speech detected; insert marker: %v", err)
-		}
-		logf("OUTPUT", "submitted no-speech marker via IBus")
-		return http.StatusOK, "no speech detected"
-	}
-
-	samples = TrimSilence(samples)
-	duration := wavDurationSeconds(samples)
-	if duration < captured {
-		logf("AUDIO", "trimmed %.2fs of silence -> %.2fs", captured-duration, duration)
-	}
+	logf("AUDIO", "captured %.2fs (%d samples)", duration, len(samples))
 
 	wav := WavEncode(samples)
 	if err := ctx.Err(); err != nil {
@@ -339,8 +308,7 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 		} else {
 			retained = fmt.Sprintf("could not retain audio: %v", retainErr)
 		}
-		logf("STT", "rejected vocabulary echo after %.2fs capture (peak RMS %.0f, noise floor %.0f) -- %s",
-			captured, levels.peakRMS, levels.noiseFloor, retained)
+		logf("STT", "rejected vocabulary echo after %.2fs capture -- %s", duration, retained)
 		return http.StatusBadGateway, "transcription matched the vocabulary prompt; " + retained
 	}
 	if prompt != "" && strings.HasPrefix(normalizeTranscript(result.Text), "vocabulary:") {
