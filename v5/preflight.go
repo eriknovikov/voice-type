@@ -1,6 +1,7 @@
 package voicetype
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"time"
@@ -16,20 +17,13 @@ const (
 	preflightFailed
 )
 
-// resources are the long-lived handles preflight proves are usable. They are
-// handed to the daemon rather than recreated, so the 201 ms keyboard
-// registration and the Pulse connect are paid exactly once.
 type resources struct {
-	Typer    *Typer
 	Recorder audioRecorder
 }
 
 func (r *resources) Close() {
 	if r == nil {
 		return
-	}
-	if r.Typer != nil {
-		r.Typer.Close()
 	}
 	if r.Recorder != nil {
 		r.Recorder.Close()
@@ -57,25 +51,23 @@ func runPreflight(cfg Config, settings sttSettings) (preflightResult, *resources
 		return preflightFailed, nil, err
 	}
 
-	// 3. /dev/uinput usable. Creating the keyboard is the real test -- opening
-	//    the device can succeed where the ioctl setup still fails.
-	typer, err := newTyper()
+	// 3. IBus usable. Restore the active engine immediately; a temporary
+	//    insertion engine must not stay selected while the daemon is idle.
+	inserter, err := NewTextInserter(context.Background(), InsertBackendIBus)
 	if err != nil {
-		return preflightFailed, nil, fmt.Errorf(
-			"cannot create the virtual keyboard: %w\n"+
-				"voice-type needs write access to /dev/uinput. Add yourself to the 'input' group:\n"+
-				"  sudo usermod -aG input $USER\n"+
-				"then log out and back in (or run: newgrp input)", err)
+		return preflightFailed, nil, fmt.Errorf("cannot prepare IBus text insertion: %w", err)
+	}
+	if err := inserter.Close(); err != nil {
+		return preflightFailed, nil, fmt.Errorf("cannot restore IBus after preflight: %w", err)
 	}
 
 	// 4. PulseAudio reachable.
 	rec, err := NewRecorder()
 	if err != nil {
-		typer.Close()
 		return preflightFailed, nil, fmt.Errorf(
 			"cannot reach the audio server: %w\n"+
 				"voice-type needs PulseAudio or pipewire-pulse running", err)
 	}
 
-	return preflightOK, &resources{Typer: typer, Recorder: rec}, nil
+	return preflightOK, &resources{Recorder: rec}, nil
 }
