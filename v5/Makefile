@@ -40,3 +40,15 @@ dist:
 
 clean:
 	rm -rf $(BINARY) dist
+
+# The optional desktop companion uses native GTK/WebKit. The daemon above
+# remains a separate static, CGO-disabled build.
+.PHONY: desktop install-desktop check-desktop
+desktop:
+	$(MAKE) -C desktop build
+
+install-desktop:
+	$(MAKE) -C desktop install
+
+check-desktop:
+	$(MAKE) -C desktop check

@@ -359,13 +359,13 @@ write_config() {
 
     // Names and jargon the model would otherwise misspell, one list per
     // workspace. "general" rides along with every dictation; pick one of the
-    // rest with `voice-type vocab set <name>`. Keep them short.
+    // rest in the Voice Type desktop app. Keep them short.
     "vocabulary": {
         "general": []
     },
 
-    // Hand edits take effect on the next dictation; voice-type never writes
-    // this file (a `vocab set` is recorded under ~/.local/state/voice-type).
+    // Changes take effect on the next dictation. The desktop app can edit
+    // this file and keeps a private backup before its first save.
 }
 EOF
     )

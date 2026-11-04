@@ -104,6 +104,17 @@ func (d *daemon) managementRoutes() http.Handler {
 			return
 		}
 		value, err := SaveSettings(update)
+		if err == nil {
+			d.mu.Lock()
+			if d.state == stateIdle {
+				if e := d.reloadConfig(); e != nil {
+					d.configError = e.Error()
+				} else {
+					d.configError = ""
+				}
+			}
+			d.mu.Unlock()
+		}
 		managementResult(w, value, err)
 	})
 	mux.HandleFunc("PUT /workspace", func(w http.ResponseWriter, r *http.Request) {
