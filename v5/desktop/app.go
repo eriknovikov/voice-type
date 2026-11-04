@@ -34,6 +34,9 @@ func trayAvailable() bool {
 func trayIcon(state string) []byte {
 	canvas := image.NewRGBA(image.Rect(0, 0, 32, 32))
 	c := color.RGBA{116, 195, 170, 255}
+	if state == "disconnected" || state == "setup needed" {
+		c = color.RGBA{145, 150, 158, 255}
+	}
 	if state == "recording" {
 		c = color.RGBA{245, 110, 106, 255}
 	} else if state == "transcribing" {
@@ -56,6 +59,7 @@ func Run(version string) error {
 	done := make(chan struct{})
 	app := application.New(application.Options{
 		Name: "Voice Type", Description: "System-wide voice dictation",
+		Linux:    application.LinuxOptions{ApplicationID: "io.github.eriknovikov.voice-type"},
 		Services: []application.Service{application.NewService(b)},
 		Assets:   application.AssetOptions{Handler: application.BundledAssetFileServer(frontend)},
 		SingleInstance: &application.SingleInstanceOptions{UniqueID: "io.github.eriknovikov.voice-type", OnSecondInstanceLaunch: func(_ application.SecondInstanceData) {
@@ -121,7 +125,7 @@ func Run(version string) error {
 	}
 	updateMenu("idle", vt.Settings{})
 	if b.prefs.SetupComplete {
-		if err := app.GlobalShortcut.Register(b.prefs.Shortcut, func() { b.toggleFromTray() }); err != nil {
+		if err := app.GlobalShortcut.Register(b.prefs.Shortcut, func() { b.activateShortcut() }); err != nil {
 			b.shortcutError = err.Error()
 		}
 	}
@@ -139,6 +143,9 @@ func Run(version string) error {
 			state := "disconnected"
 			if status, err := b.Status(); err == nil {
 				state = status.State
+				if state == "idle" && status.Error != "" {
+					state = "setup needed"
+				}
 			}
 			settings, _ := b.Settings()
 			key := state + settings.Revision + settings.Workspace

@@ -47,7 +47,7 @@ type daemon struct {
 	modelOverride string
 	configError   string
 	// workspace is the active vocabulary workspace, re-read from the state file
-	// with the config so `voice-type vocab set` lands on the next dictation.
+	// with the config so desktop changes land on the next dictation.
 	workspace string
 	res       *resources
 	stt       *sttClient
@@ -166,7 +166,7 @@ func (d *daemon) startSession() (int, string) {
 }
 
 // reloadConfig re-reads the config file and the active workspace so a hand edit
-// or a `vocab set` applies to this dictation without a restart. Callers hold
+// or a desktop edit applies to this dictation without a restart. Callers hold
 // d.mu. The bound port is the one exception: the listener is already up on the
 // old one.
 func (d *daemon) reloadConfig() error {

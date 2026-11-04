@@ -21,8 +21,7 @@ type Config struct {
 	Microphone string
 	Port       int
 	// Vocabulary is the named term lists. generalWorkspace rides along with
-	// every dictation; the rest are one at a time, picked with `voice-type
-	// vocab set`, so a term only costs where it earns its keep.
+	// every dictation; the rest are selected one at a time in the desktop app.
 	Vocabulary vocabLists
 }
 
@@ -31,7 +30,7 @@ type Config struct {
 const generalWorkspace = "general"
 
 // vocabLists holds the lists in the order the config file writes them, so
-// `voice-type vocab ls` reads straight down the user's own file. A handful of
+// the desktop editor follows the user's file order. A handful of
 // entries makes a linear scan cheaper than a map plus the ordering it would
 // still have to carry alongside.
 type vocabLists []vocabList
@@ -102,8 +101,7 @@ func (c Config) keyEnv() string {
 
 func (s sttSettings) validateCredentials() error {
 	if s.APIKey == "" {
-		return fmt.Errorf("no %s API key. Set %s or api_key in %s", s.Provider,
-			(Config{Provider: s.Provider}).keyEnv(), configFilePath())
+		return fmt.Errorf("add your %s API key in Settings, or set %s", s.Provider, (Config{Provider: s.Provider}).keyEnv())
 	}
 	return nil
 }
@@ -470,7 +468,7 @@ func configParse(data []byte) (Config, error) {
 	return configValidate(raw)
 }
 
-// Nothing writes the config. A missing file means defaults, but invalid files
+// A missing file means defaults, but invalid files
 // must block recording rather than silently using old credentials or routes.
 func configReadStrict() (Config, error) {
 	data, err := os.ReadFile(configFilePath())

@@ -381,7 +381,7 @@ EOF
 config_has_key() {
     [ -f "$CONFIG_FILE" ] || return 1
     sed 's|//.*||g' "$CONFIG_FILE" 2> /dev/null \
-        | grep -Eq '"api_key"[[:space:]]*:[[:space:]]*"[^"]*[^"[:space:]][^"]*"'
+        | grep -Eq "\"(api_key|$PROVIDER)\"[[:space:]]*:[[:space:]]*\"[^\"]*[^\"[:space:]][^\"]*\""
 }
 
 # Used only for the advisory summary. A kept legacy config selects OpenRouter.

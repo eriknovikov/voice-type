@@ -87,6 +87,20 @@ func managementResult(w http.ResponseWriter, value any, err error) {
 }
 func (d *daemon) managementRoutes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /recovery", func(w http.ResponseWriter, r *http.Request) {
+		value, err := RecoveryRevision()
+		managementResult(w, value, err)
+	})
+	mux.HandleFunc("POST /recovery", func(w http.ResponseWriter, r *http.Request) {
+		var value struct {
+			Revision string `json:"revision"`
+		}
+		if !decodeManagement(w, r, &value) {
+			return
+		}
+		settings, err := ResetBrokenSettings(value.Revision)
+		managementResult(w, settings, err)
+	})
 	mux.HandleFunc("GET /logs", func(w http.ResponseWriter, r *http.Request) {
 		value, err := d.runLog.records()
 		managementResult(w, value, err)

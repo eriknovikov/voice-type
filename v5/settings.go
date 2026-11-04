@@ -23,8 +23,9 @@ type Settings struct {
 	Credentials map[string]CredentialStatus `json:"credentials"`
 }
 type VocabularyList struct {
-	Name  string   `json:"name"`
-	Terms []string `json:"terms"`
+	OriginalName string   `json:"original_name,omitempty"`
+	Name         string   `json:"name"`
+	Terms        []string `json:"terms"`
 }
 type CredentialStatus struct {
 	Saved       bool `json:"saved"`
@@ -77,7 +78,7 @@ func readSettings() (Settings, error) {
 	}
 	out := Settings{Revision: configRevision(data), Provider: cfg.Provider, Port: cfg.Port, Microphone: cfg.Microphone, Workspace: workspaceLoad(), Vocabulary: []VocabularyList{}, Credentials: map[string]CredentialStatus{}}
 	for _, list := range cfg.Vocabulary {
-		out.Vocabulary = append(out.Vocabulary, VocabularyList{list.Name, cleanTerms(list.Terms)})
+		out.Vocabulary = append(out.Vocabulary, VocabularyList{Name: list.Name, Terms: cleanTerms(list.Terms)})
 	}
 	for _, provider := range []string{providerOpenAI, providerOpenRouter} {
 		key, exists := cfg.APIKeys[provider]
@@ -113,12 +114,17 @@ func SaveSettings(update SettingsUpdate) (Settings, error) {
 	}
 	vocab := vocabLists{}
 	seen := map[string]bool{}
+	active := workspaceLoad()
+	nextActive := active
 	for _, list := range update.Vocabulary {
 		name := strings.TrimSpace(list.Name)
 		if name == "" || strings.ContainsAny(name, "\r\n") || seen[name] {
 			return Settings{}, errors.New("vocabulary names must be unique and nonempty")
 		}
 		seen[name] = true
+		if list.OriginalName != "" && list.OriginalName == active {
+			nextActive = name
+		}
 		// Validate all workspaces so a later switch cannot introduce invalid terms.
 		for _, term := range list.Terms {
 			if strings.ContainsAny(term, "<>\r\n") {
@@ -126,6 +132,9 @@ func SaveSettings(update SettingsUpdate) (Settings, error) {
 			}
 		}
 		vocab = append(vocab, vocabList{name, cleanTerms(list.Terms)})
+	}
+	if nextActive != "" && !seen[nextActive] {
+		nextActive = ""
 	}
 	keys := old.APIKeys
 	if keys == nil {
@@ -190,6 +199,11 @@ func SaveSettings(update SettingsUpdate) (Settings, error) {
 	if err := atomicPrivateWrite(path, append(encoded, '\n')); err != nil {
 		return Settings{}, err
 	}
+	if nextActive != active {
+		if err := workspaceSave(nextActive); err != nil {
+			return Settings{}, fmt.Errorf("settings saved but workspace could not be updated: %w", err)
+		}
+	}
 	return readSettings()
 }
 func atomicPrivateWrite(path string, data []byte) error {
@@ -225,4 +239,53 @@ func SelectWorkspace(name string) error {
 		return errors.New("choose an existing workspace or general only")
 	}
 	return workspaceSave(name)
+}
+
+// RecoveryRevision never returns the broken file's contents or credentials.
+func RecoveryRevision() (string, error) {
+	data, err := os.ReadFile(configFilePath())
+	if err != nil {
+		return "", err
+	}
+	return configRevision(data), nil
+}
+func ResetBrokenSettings(revision string) (Settings, error) {
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
+	path := configFilePath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Settings{}, err
+	}
+	if revision != configRevision(data) {
+		return Settings{}, errors.New("configuration changed elsewhere; reconnect before resetting")
+	}
+	if _, err := configParse(data); err == nil {
+		return Settings{}, errors.New("configuration is valid; reconnect instead of resetting")
+	}
+	backup, err := os.CreateTemp(filepath.Dir(path), ".voice-type-config-recovery-*.jsonc")
+	if err != nil {
+		return Settings{}, err
+	}
+	if _, err = backup.Write(data); err != nil {
+		backup.Close()
+		return Settings{}, err
+	}
+	if err = backup.Close(); err != nil {
+		return Settings{}, err
+	}
+	latest, err := os.ReadFile(path)
+	if err != nil {
+		return Settings{}, err
+	}
+	if configRevision(latest) != revision {
+		return Settings{}, errors.New("configuration changed elsewhere; reconnect before resetting")
+	}
+	if err := atomicPrivateWrite(path, []byte("{\"provider\":\"openai\",\"port\":3232,\"vocabulary\":{\"general\":[]}}\n")); err != nil {
+		return Settings{}, err
+	}
+	if err := workspaceSave(""); err != nil {
+		return Settings{}, err
+	}
+	return readSettings()
 }

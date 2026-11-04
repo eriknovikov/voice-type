@@ -31,20 +31,23 @@ type Preferences struct {
 	SetupComplete bool   `json:"setup_complete"`
 }
 type DesktopInfo struct {
-	Preferences   Preferences `json:"preferences"`
-	TrayAvailable bool        `json:"tray_available"`
-	ShortcutError string      `json:"shortcut_error"`
-	Version       string      `json:"version"`
+	LastShortcutAt string      `json:"last_shortcut_at"`
+	Preferences    Preferences `json:"preferences"`
+	TrayAvailable  bool        `json:"tray_available"`
+	ShortcutError  string      `json:"shortcut_error"`
+	Version        string      `json:"version"`
 }
 type Bridge struct {
-	app           *application.App
-	window        *application.WebviewWindow
-	client        *http.Client
-	mu            sync.Mutex
-	connectMu     sync.Mutex
-	prefs         Preferences
-	shortcutError string
-	version       string
+	app            *application.App
+	window         *application.WebviewWindow
+	client         *http.Client
+	mu             sync.Mutex
+	connectMu      sync.Mutex
+	closing        bool
+	prefs          Preferences
+	shortcutError  string
+	lastShortcutAt string
+	version        string
 }
 
 func (b *Bridge) request(method, path string, body, out any) error {
@@ -124,6 +127,9 @@ func (b *Bridge) ClearLogs() error { return b.request("DELETE", "/logs", nil, ni
 func (b *Bridge) Connect() error {
 	b.connectMu.Lock()
 	defer b.connectMu.Unlock()
+	if b.closing {
+		return errors.New("Voice Type is shutting down")
+	}
 	if _, err := b.Status(); err == nil {
 		return nil
 	}
@@ -178,6 +184,8 @@ func (b *Bridge) Restart() error {
 	return errors.New("daemon is still shutting down")
 }
 func (b *Bridge) Quit() error {
+	b.connectMu.Lock()
+	defer b.connectMu.Unlock()
 	status, err := b.Status()
 	if err == nil && status.State != "idle" && status.State != "testing" {
 		return errors.New("finish the current dictation before quitting")
@@ -187,6 +195,7 @@ func (b *Bridge) Quit() error {
 			return err
 		}
 	}
+	b.closing = true
 	b.app.Quit()
 	return nil
 }
@@ -237,9 +246,9 @@ func (b *Bridge) SavePreferences(prefs Preferences) error {
 		if old.SetupComplete {
 			_ = b.app.GlobalShortcut.Unregister(old.Shortcut)
 		}
-		if err := b.app.GlobalShortcut.Register(prefs.Shortcut, func() { b.toggleFromTray() }); err != nil {
+		if err := b.app.GlobalShortcut.Register(prefs.Shortcut, func() { b.activateShortcut() }); err != nil {
 			if old.SetupComplete {
-				_ = b.app.GlobalShortcut.Register(old.Shortcut, func() { b.toggleFromTray() })
+				_ = b.app.GlobalShortcut.Register(old.Shortcut, func() { b.activateShortcut() })
 			}
 			b.shortcutError = err.Error()
 			return err
@@ -264,7 +273,7 @@ func (b *Bridge) SavePreferences(prefs Preferences) error {
 func (b *Bridge) Info() DesktopInfo {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return DesktopInfo{Preferences: b.prefs, TrayAvailable: trayAvailable(), ShortcutError: b.shortcutError, Version: b.version}
+	return DesktopInfo{LastShortcutAt: b.lastShortcutAt, Preferences: b.prefs, TrayAvailable: trayAvailable(), ShortcutError: b.shortcutError, Version: b.version}
 }
 func (b *Bridge) toggleFromTray() {
 	if err := b.Toggle(); err != nil {
@@ -311,4 +320,22 @@ func (b *Bridge) ExportLogs(query, outcome string) error {
 		return err
 	}
 	return f.Close()
+}
+
+func (b *Bridge) activateShortcut() {
+	b.mu.Lock()
+	b.lastShortcutAt = time.Now().Format(time.RFC3339)
+	b.mu.Unlock()
+	b.toggleFromTray()
+}
+
+func (b *Bridge) RecoveryRevision() (string, error) {
+	var revision string
+	err := b.request("GET", "/recovery", nil, &revision)
+	return revision, err
+}
+func (b *Bridge) ResetBrokenSettings(revision string) (vt.Settings, error) {
+	var settings vt.Settings
+	err := b.request("POST", "/recovery", map[string]string{"revision": revision}, &settings)
+	return settings, err
 }
