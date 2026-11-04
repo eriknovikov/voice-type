@@ -97,7 +97,7 @@ func TestDesktopPipeline(t *testing.T) {
 			cfg, _ := configReadStrict()
 			stt, _ := cfg.resolveSTT("", workspaceLoad())
 			d := newDaemon(cfg, &resources{Recorder: &fixtureRecorder{}}, stt, "")
-			d.runLog = newRunLog("test", false)
+			d.runLog = newRunLog("test")
 			defer d.runLog.close("ok")
 			code, message := d.startSession()
 			if code != 200 {

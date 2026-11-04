@@ -110,7 +110,7 @@ func Run(version string) error {
 			submenu.AddRadio(name, settings.Workspace == name).OnClick(func(_ *application.Context) { _ = b.SelectWorkspace(name) })
 		}
 		menu.AddSeparator()
-		menu.Add("Open Settings").OnClick(func(_ *application.Context) { show() })
+		menu.Add("Open Settings").OnClick(func(_ *application.Context) { show(); app.Event.Emit("navigate", "settings") })
 		menu.Add("Quit Voice Type").OnClick(func(_ *application.Context) {
 			go func() {
 				if err := b.Quit(); err != nil {

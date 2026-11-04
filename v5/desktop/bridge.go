@@ -101,7 +101,11 @@ func (b *Bridge) SaveSettings(update vt.SettingsUpdate) (vt.Settings, error) {
 	return out, err
 }
 func (b *Bridge) SelectWorkspace(name string) error {
-	return b.request("PUT", "/workspace", map[string]string{"name": name}, nil)
+	if err := b.request("PUT", "/workspace", map[string]string{"name": name}, nil); err != nil {
+		return err
+	}
+	b.app.Event.Emit("workspace-changed", name)
+	return nil
 }
 func (b *Bridge) Status() (Status, error) {
 	var out Status
@@ -242,7 +246,7 @@ func (b *Bridge) SavePreferences(prefs Preferences) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	old := b.prefs
-	if prefs.Shortcut != old.Shortcut || !old.SetupComplete {
+	if prefs.Shortcut != old.Shortcut || !old.SetupComplete || b.shortcutError != "" {
 		if old.SetupComplete {
 			_ = b.app.GlobalShortcut.Unregister(old.Shortcut)
 		}
