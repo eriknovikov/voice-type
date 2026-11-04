@@ -11,9 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
-	"unsafe"
 )
 
 const runLogMaxBytes = 5 << 20
@@ -58,19 +56,12 @@ func runLogFilePath() string {
 	return filepath.Join(home, ".voice-type-logs.jsonl")
 }
 
-func stderrIsTerminal(stderr *os.File) bool {
-	var termios syscall.Termios
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, stderr.Fd(), uintptr(syscall.TCGETS), uintptr(unsafe.Pointer(&termios)))
-	return errno == 0
-}
-
 func openRunLog(version string) *runLog {
-	return newRunLog(version, stderrIsTerminal(os.Stderr))
+	return newRunLog(version)
 }
 
-func newRunLog(version string, terminal bool) *runLog {
+func newRunLog(version string) *runLog {
 	l := &runLog{version: version}
-	_ = terminal // Desktop logs must also persist when launched from a terminal.
 
 	l.path = runLogFilePath()
 	if err := os.MkdirAll(filepath.Dir(l.path), 0o700); err != nil {

@@ -3,6 +3,7 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
+  act,
   render,
   screen,
   waitFor,
@@ -10,9 +11,17 @@ import {
 } from "@testing-library/react";
 import { App } from "./App";
 import { api, type Settings } from "./api";
+const eventHandlers = vi.hoisted(
+  () => new Map<string, (event: { data: unknown }) => void>(),
+);
 vi.mock("@wailsio/runtime", () => ({
   Call: { ByName: vi.fn() },
-  Events: { On: () => () => {} },
+  Events: {
+    On: (name: string, callback: (event: { data: unknown }) => void) => {
+      eventHandlers.set(name, callback);
+      return () => eventHandlers.delete(name);
+    },
+  },
 }));
 vi.mock("./api", () => ({
   api: {
@@ -42,6 +51,7 @@ const settings: Settings = {
 };
 beforeEach(() => {
   vi.clearAllMocks();
+  eventHandlers.clear();
   vi.mocked(api.settings).mockResolvedValue(structuredClone(settings));
   vi.mocked(api.connect).mockResolvedValue();
   vi.mocked(api.status).mockResolvedValue({
@@ -125,4 +135,17 @@ describe("desktop workflows", () => {
     fireEvent.click(screen.getByRole("button", { name: "Overview" }));
     await waitFor(() => expect(api.stopTest).toHaveBeenCalled());
   });
+});
+
+it("tray events navigate to settings and update workspace without discarding edits", async () => {
+  render(<App />);
+  await screen.findByText("Speak naturally.");
+  act(() => eventHandlers.get("navigate")?.({ data: ["settings"] }));
+  const port = screen.getByLabelText("Local control port") as HTMLInputElement;
+  fireEvent.change(port, { target: { value: "4242" } });
+  act(() => eventHandlers.get("workspace-changed")?.({ data: ["project"] }));
+  expect(port.value).toBe("4242");
+  fireEvent.click(screen.getByRole("button", { name: "Overview" }));
+  expect(screen.getByRole("heading", { name: "project" })).toBeTruthy();
+  expect(screen.getByText("Unsaved changes")).toBeTruthy();
 });

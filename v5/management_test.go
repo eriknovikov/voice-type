@@ -71,7 +71,7 @@ func TestManagementRejectsUnsafeDirectoryAndPath(t *testing.T) {
 }
 func TestDesktopLogsArePersistentPrivateAndClearable(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	log := newRunLog("test", true)
+	log := newRunLog("test")
 	defer log.close("ok")
 	log.write(runLogRecord{Event: "dictation.completed", Outcome: "ok"})
 	records, err := log.records()

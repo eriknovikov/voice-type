@@ -88,7 +88,19 @@ export function App() {
       await load();
     });
     const off = Events.On("operation-error", (e) => setError(String(e.data)));
-    return () => off();
+    const offWorkspace = Events.On("workspace-changed", (e) =>
+      setSettings((current) =>
+        current ? { ...current, workspace: String(e.data) } : current,
+      ),
+    );
+    const offNavigation = Events.On("navigate", (e) => {
+      if (String(e.data) === "settings") setTab("settings");
+    });
+    return () => {
+      off();
+      offWorkspace();
+      offNavigation();
+    };
   }, []);
   useEffect(() => {
     let alive = true;
