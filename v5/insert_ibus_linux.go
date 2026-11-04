@@ -105,6 +105,19 @@ func ibusStore(value, target any) error {
 }
 
 func ibusEngineName(value any) (string, error) {
+	// IBus appends optional description fields across releases. Decode only
+	// the stable type/attachments/name prefix of received wire tuples.
+	if fields, ok := ibusUnwrap(value).([]any); ok {
+		if len(fields) >= 3 {
+			kind, kOK := fields[0].(string)
+			_, aOK := fields[1].(map[string]dbus.Variant)
+			name, nOK := fields[2].(string)
+			if kOK && aOK && nOK && kind == "IBusEngineDesc" && name != "" {
+				return name, nil
+			}
+		}
+		return "", errors.New("invalid IBus engine description")
+	}
 	var desc ibusEngineDesc
 	if err := ibusStore(value, &desc); err != nil || desc.Type != "IBusEngineDesc" || desc.Name == "" {
 		return "", errors.New("invalid IBus engine description")
@@ -303,6 +316,8 @@ type insertPureEngine struct {
 	name, owner                            string
 	deadline                               time.Time
 	created, destroyed, enabled, submitted bool
+	focused, contentKnown                  bool
+	focusGeneration                        uint64
 	focus, client                          string
 	enabledAt, focusAt                     time.Time
 	content                                ibusContentType
@@ -352,6 +367,7 @@ func (e *insertPureEngine) observe(msg *dbus.Message) {
 	now := time.Now()
 	if iface == ibusService+".Service" && member == "Destroy" && len(msg.Body) == 0 {
 		e.destroyed = true
+		e.clearFocus()
 		return
 	}
 	if !e.created || path != ibusEnginePath {
@@ -363,8 +379,8 @@ func (e *insertPureEngine) observe(msg *dbus.Message) {
 	if iface == ibusProperties && member == "Set" && len(msg.Body) == 3 {
 		if msg.Body[0] == ibusEngineInterface && msg.Body[1] == "ContentType" {
 			var content ibusContentType
-			if ibusStore(msg.Body[2], &content) == nil {
-				e.content = content
+			if value, ok := msg.Body[2].(dbus.Variant); ok && value.Signature().String() == "(uu)" && ibusStore(value, &content) == nil {
+				e.content, e.contentKnown = content, true
 			}
 		}
 		return
@@ -380,36 +396,70 @@ func (e *insertPureEngine) observe(msg *dbus.Message) {
 	case "Disable":
 		if len(msg.Body) == 0 {
 			e.enabled = false
+			e.focusGeneration++
 		}
 	case "FocusInId":
 		if len(msg.Body) == 2 {
 			path, pOK := msg.Body[0].(string)
 			client, cOK := msg.Body[1].(string)
-			if pOK && cOK {
-				e.focus, e.client, e.focusAt = path, client, now
+			if pOK && cOK && validIBusInputContext(path) && client != "" {
+				if !e.focused || e.focus != path {
+					e.focusGeneration++
+					e.focusAt = now
+				}
+				e.focused, e.focus, e.client = true, path, client
 			}
 		}
 	case "FocusOutId":
 		if len(msg.Body) == 1 {
-			if path, ok := msg.Body[0].(string); ok && path == e.focus {
-				e.focus, e.client = "", ""
+			if path, ok := msg.Body[0].(string); ok && validIBusInputContext(path) && (path == e.focus || e.focus == "") {
+				e.clearFocus()
 			}
 		}
-	case "FocusIn", "FocusOut":
-		// Legacy FocusIn cannot prove the client's identity. Fail closed.
+	case "FocusIn":
 		if len(msg.Body) == 0 {
-			e.focus, e.client = "", ""
+			// Before 1.5.32, IBus can negotiate FocusId after sending this
+			// callback without replaying FocusInId. Resolve its context in
+			// the control goroutine; never block the reader on a bus call.
+			e.focusGeneration++
+			e.focused, e.focus, e.client, e.focusAt = true, "", "", now
+		}
+	case "FocusOut":
+		if len(msg.Body) == 0 {
+			e.clearFocus()
 		}
 	}
 }
 
+func validIBusInputContext(path string) bool {
+	const prefix = "/org/freedesktop/IBus/InputContext_"
+	suffix, ok := strings.CutPrefix(path, prefix)
+	return ok && suffix != "" && !strings.Contains(suffix, "/") && dbus.ObjectPath(path).IsValid()
+}
+
+// clearFocus and eligible require e.mu. Enable and ContentType are cached by
+// IBus across focus cycles: it need not resend unchanged values. Keep those
+// values, and drain pending updates with a daemon round trip before using them.
+func (e *insertPureEngine) clearFocus() {
+	e.focusGeneration++
+	e.focused, e.focus, e.client = false, "", ""
+}
+
 func (e *insertPureEngine) eligible() bool {
-	client := strings.ToLower(e.client)
-	return e.created && !e.destroyed && e.enabled && !e.submitted &&
+	return e.created && !e.destroyed && e.enabled && e.focused && e.contentKnown && !e.submitted &&
 		!e.enabledAt.After(e.deadline) && !e.focusAt.After(e.deadline) &&
-		dbus.ObjectPath(e.focus).IsValid() && strings.HasPrefix(e.focus, "/org/freedesktop/IBus/InputContext_") &&
-		client != "" && !strings.HasPrefix(client, "fake") &&
+		validIBusInputContext(e.focus) && !strings.HasPrefix(strings.ToLower(e.client), "fake") &&
 		e.content.Purpose != 8 && e.content.Purpose != 9 // PASSWORD, PIN
+}
+
+// bindFocus requires e.mu and accepts a legacy lookup only within the generation
+// that requested it. Legacy IBus exposes no client identity; a known fake client
+// is still rejected by eligible whenever FocusInId supplies that identity.
+func (e *insertPureEngine) bindFocus(generation uint64, path string) {
+	if e.focusGeneration == generation && e.created && !e.destroyed && e.enabled && e.focused &&
+		e.focus == "" && validIBusInputContext(path) {
+		e.focus = path
+	}
 }
 
 // queuePropertyReply runs under e.mu on the reader. godbus normally dispatches
@@ -580,7 +630,7 @@ func init() {
 
 // Preparation activates the engine before the caller's focus window. IBus can
 // initially send legacy FocusIn while its asynchronous FocusId query is pending.
-// Submission still requires a later FocusInId with a real client identity.
+// Readiness resolves legacy focus without relying on a later FocusInId replay.
 func prepareIBusInserter(ctx context.Context, deadline time.Time) (_ *ibusTextInserter, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -683,24 +733,48 @@ func (i *ibusTextInserter) waitReady(ctx context.Context) error {
 	defer cancel()
 	deadline, _ := ready.Deadline()
 	for {
+		if err := ready.Err(); err != nil {
+			return fmt.Errorf("IBus did not provide an eligible focused input context: %w", err)
+		}
 		i.engine.mu.Lock()
 		i.engine.deadline = deadline
-		eligible, destroyed := i.engine.eligible(), i.engine.destroyed
-		protected := i.engine.content.Purpose == 8 || i.engine.content.Purpose == 9
-		fake := strings.HasPrefix(strings.ToLower(i.engine.client), "fake")
+		generation := i.engine.focusGeneration
+		candidate := i.engine.created && i.engine.enabled && i.engine.focused && !i.engine.destroyed
+		destroyed := i.engine.destroyed
 		i.engine.mu.Unlock()
-		if protected || fake {
-			return errors.New("IBus focus is a password, PIN, or fake input context; no text submitted")
-		}
-		if eligible {
-			return nil
-		}
 		if destroyed {
 			return errors.New("the temporary IBus engine was destroyed before it became ready")
+		}
+		if candidate {
+			// This also drains the daemon's preceding ContentType updates.
+			// In particular, do not use a normal field's cached content type
+			// while a password field's FocusIn callback is still arriving.
+			value, err := i.connection.property(ready, "CurrentInputContext")
+			path, valid := ibusUnwrap(value).(dbus.ObjectPath)
+			i.engine.mu.Lock()
+			if err == nil && valid {
+				i.engine.bindFocus(generation, string(path))
+			}
+			current := err == nil && valid && i.engine.focusGeneration == generation && i.engine.focus == string(path)
+			eligible := current && i.engine.eligible()
+			protected := current && (i.engine.content.Purpose == 8 || i.engine.content.Purpose == 9)
+			fake := current && strings.HasPrefix(strings.ToLower(i.engine.client), "fake")
+			i.engine.mu.Unlock()
+			if ready.Err() != nil {
+				return fmt.Errorf("IBus focus validation: %w", ready.Err())
+			}
+			if protected || fake {
+				return errors.New("IBus focus is a password, PIN, or fake input context; no text submitted")
+			}
+			if eligible {
+				return nil
+			}
 		}
 		select {
 		case <-ready.Done():
 			return fmt.Errorf("IBus did not provide an eligible focused input context: %w", ready.Err())
+		case <-i.connection.Context().Done():
+			return errors.New("the IBus connection closed before it became ready")
 		case <-i.engine.changed:
 		}
 	}
@@ -744,7 +818,7 @@ func submitInsertPure(ctx context.Context, c *ibusConnection, engine *insertPure
 		return errors.New("the IBus submission deadline expired")
 	}
 	engine.mu.Lock()
-	ready, focus := engine.eligible(), engine.focus
+	ready, focus, generation := engine.eligible(), engine.focus, engine.focusGeneration
 	engine.mu.Unlock()
 	if !ready {
 		return errors.New("no enabled, eligible IBus input context at insertion time")
@@ -760,7 +834,7 @@ func submitInsertPure(ctx context.Context, c *ibusConnection, engine *insertPure
 		return errors.New("IBus focus changed before submission")
 	}
 	engine.mu.Lock()
-	if !engine.eligible() || engine.focus != focus || send.Err() != nil || time.Now().After(engine.deadline.Add(insertPureSendGrace)) {
+	if !engine.eligible() || engine.focus != focus || engine.focusGeneration != generation || send.Err() != nil || time.Now().After(engine.deadline.Add(insertPureSendGrace)) {
 		engine.mu.Unlock()
 		return errors.New("IBus readiness changed or the submission deadline expired")
 	}
