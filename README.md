@@ -1,53 +1,31 @@
-# Voice Type
+# What's voice-type?
 
-System-wide speech-to-text for Linux. Press a key, speak, press again — the text
-appears wherever your cursor is in the system. Super accurate and cheap.
+A system-wide speech-to-text app. Press a key, speak, press again — the text
+appears wherever your cursor is in the system.
 
-# Why I built it
+# Why voice-type?
 
-I needed high quality transcription, near real time, cheap or free, while using minimal system resources, that works mainly in Arch Linux and Fedora, both x64 and ARM64. Most solutions don't meet these requirements. 
+- Productivity: You speak faster than what you type.
+- Less typing: Avoid wrist pain and strain.
+- It's cool, accurate, almost free, open-source, and near 0 RAM usage.
 
-# V4
+# Requirements
 
-Uses a hidden chromium instance to take advantage of Google's Speech to Text infrastructure. Install with 
+- Linux, internet connectivity.
+- An openai (recommended) or openrouter api key. This is required for transcription. Cost is very low (cents per month), so don't worry about pricing. I recommend you put on it a small credit limit, like 1 or 2 USD, per month.
 
-```bash
-curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/v4/install.sh | bash
-```
-
-Uninstall with
-
-```bash
-curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/v4/uninstall.sh | bash
-```
-
-# V5
-
-A single static Go binary that records audio and sends it to OpenRouter. New
-configurations use Microsoft MAI-Transcribe-2 with Azure phrase-list vocabulary
-and clean transcription; retryable provider failures fall back to OpenAI GPT
-Transcribe for that dictation. MAI-Transcribe-2 is currently a public-preview
-service without an SLA, which is why the fallback remains enabled.
-
-Existing configurations keep their explicitly selected model during upgrades.
-Run `voice-type models` to see the available models, vocabulary support, prices,
-and fallback policy. Workspace-specific vocabulary can be selected with
-`voice-type vocab set <name>`.
-
-When the daemon is started without a terminal, it records privacy-safe request
-metrics in `~/.voice-type-logs.jsonl`, useful for troubleshooting.
-
-Install with
+# Installation
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/v5/install.sh | bash
 ```
 
-Uninstall with
+# Troubleshooting
 
-```bash
-curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/v5/uninstall.sh | bash
-```
+Logs are stored in `~/.voice-type-logs.jsonl`
 
-Only one version can be installed at a time: both use the `voice-type` command,
-`~/.voice-type-config.jsonc`, and port 3232, so installing one replaces the other.
+They don't include your actual transcriptions, but are helpful in case you experience any issue.
+
+# Issues & Contributing
+
+If you experience a problem with voice-type, please let me know! Open an issue, text me directly, or feel free to fix it yourself and drop a PR. All contributions are welcome, but please, no AI slop.
