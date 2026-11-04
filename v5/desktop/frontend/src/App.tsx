@@ -104,6 +104,7 @@ export function App() {
               ? {
                   ...current,
                   shortcut_error: freshInfo.shortcut_error,
+                  last_shortcut_at: freshInfo.last_shortcut_at,
                   tray_available: freshInfo.tray_available,
                 }
               : freshInfo,
@@ -160,6 +161,7 @@ export function App() {
       api_keys: keys,
     });
     setSettings(saved);
+    setSelected((current) => current.trim());
     setKeys({});
     setDirty(false);
     setNotice("Settings saved. Changes apply to your next dictation.");
@@ -173,7 +175,9 @@ export function App() {
     if (!settings) return;
     patch({
       vocabulary: settings.vocabulary.map((v) =>
-        v.name === selected ? { name, terms } : v,
+        v.name === selected
+          ? { ...v, original_name: v.original_name ?? v.name, name, terms }
+          : v,
       ),
     });
     setSelected(name);
@@ -216,7 +220,9 @@ export function App() {
             {status.state === "disconnected"
               ? "Daemon offline"
               : status.state === "idle"
-                ? "Ready when you are"
+                ? status.error
+                  ? "Setup needed"
+                  : "Ready when you are"
                 : status.state}
           </span>
           <small>v{info?.version ?? "—"}</small>
@@ -268,6 +274,29 @@ export function App() {
             <AudioLines size={40} />
             <h2>Connecting to Voice Type</h2>
             <p>Your settings will appear here once the daemon is ready.</p>
+            {error && status.state !== "disconnected" && (
+              <button
+                onClick={() =>
+                  void run(async () => {
+                    const revision = await api.recoveryRevision();
+                    setConfirm({
+                      title: "Reset unreadable configuration?",
+                      description:
+                        "Your original file will be preserved in a private backup beside it. Provider keys and vocabulary must be set up again. A valid configuration will never be reset.",
+                      run: async () => {
+                        await api.resetBrokenSettings(revision);
+                        await load();
+                        setNotice(
+                          "Configuration reset. Your original file is preserved in a private recovery backup.",
+                        );
+                      },
+                    });
+                  })
+                }
+              >
+                Back up and reset broken settings
+              </button>
+            )}
           </div>
         ) : (
           <>
@@ -293,7 +322,9 @@ export function App() {
                   <button
                     className="primary large"
                     disabled={
-                      busy || !["idle", "recording"].includes(status.state)
+                      busy ||
+                      !["idle", "recording"].includes(status.state) ||
+                      (status.state === "idle" && !!status.error)
                     }
                     onClick={() =>
                       void run(async () => {
@@ -586,6 +617,12 @@ export function App() {
                     >
                       Save desktop preferences
                     </button>
+                    {info.last_shortcut_at && (
+                      <p className="hint">
+                        Shortcut last activated at{" "}
+                        {new Date(info.last_shortcut_at).toLocaleTimeString()}.
+                      </p>
+                    )}
                     {info.shortcut_error && (
                       <p className="alert error">{info.shortcut_error}</p>
                     )}
@@ -731,7 +768,7 @@ export function App() {
                           value={list.terms.join("\n")}
                           placeholder={"Wails\nOpenRouter\nYour project name"}
                           onChange={(e) =>
-                            updateList(selected, e.target.value.split("\n"))
+                            updateList(selected, e.target.value.split(/\r?\n/))
                           }
                         />
                         <p className="hint">

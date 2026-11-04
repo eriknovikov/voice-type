@@ -32,7 +32,8 @@ Port changes require saving settings and restarting the daemon from Settings.
 
 The existing `~/.voice-type-config.jsonc` remains the config file. The first
 save keeps an exact private `.before-desktop` backup and converts comments to
-formatted JSON, preserving unknown fields. Separate provider keys are stored
+formatted JSON, preserving unknown fields. An unreadable configuration can be
+reset from the app after saving a private recovery backup beside the original. Separate provider keys are stored
 with mode 0600. `OPENAI_API_KEY` / `OPENROUTER_API_KEY` override saved keys.
 
 Workspace and desktop preferences live under `$XDG_STATE_HOME/voice-type`
@@ -55,3 +56,23 @@ make check-desktop      # from v5
 Uninstall preserves configuration, vocabulary, preferences and logs. Quit the
 app first. `VOICE_TYPE_BIN_DIR`, `XDG_DATA_HOME` and `XDG_CONFIG_HOME` can redirect
 installation for testing.
+
+## Integration checks
+
+After building, `python3 scripts/smoke.py` (from this directory) briefly launches
+the actual native app with an isolated home and socket, tests microphone-level
+capture and single-instance behavior, and shuts its test processes down.
+
+From `v5/`, `VOICE_TYPE_TEST_IBUS_DAEMON=/usr/bin/ibus-daemon go test ./...`
+checks both provider request formats through real IBus insertion on a private
+bus. `VOICE_TYPE_TEST_LIVE_WAV=/path/to/synthetic.wav go test -run TestLiveProviders -v`
+opts into a live provider request using configured keys; providers without keys
+are skipped. Only use a synthetic fixture for that test. The test does not print
+credentials or transcripts.
+
+To exercise native tray registration and menu actions without installing a shell
+extension, run `VOICE_TYPE_DESKTOP_TEST_BINARY="$PWD/build/voice-type-app"
+CGO_ENABLED=1 go test -run TestNativeTray -v` from this directory (as one command).
+The test uses a private session bus and a test tray host. Real GNOME shortcut
+approval must be completed in GNOME's own dialog; Audio & shortcuts shows the
+last activation time to verify the selected binding.

@@ -1,5 +1,6 @@
 import { Call } from "@wailsio/runtime";
 export interface VocabularyList {
+  original_name?: string;
   name: string;
   terms: string[];
 }
@@ -32,6 +33,7 @@ export interface Preferences {
   setup_complete: boolean;
 }
 export interface DesktopInfo {
+  last_shortcut_at?: string;
   preferences: Preferences;
   tray_available: boolean;
   shortcut_error: string;
@@ -59,6 +61,9 @@ const call = <T>(method: string, ...args: unknown[]): Promise<T> =>
     ...args,
   );
 export const api = {
+  recoveryRevision: () => call<string>("RecoveryRevision"),
+  resetBrokenSettings: (revision: string) =>
+    call<Settings>("ResetBrokenSettings", revision),
   settings: () => call<Settings>("Settings"),
   save: (update: SettingsUpdate) => call<Settings>("SaveSettings", update),
   workspace: (name: string) => call<void>("SelectWorkspace", name),

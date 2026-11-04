@@ -3,6 +3,7 @@ package voicetype
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -84,7 +85,7 @@ func TestDesktopSettingsValidationAndWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	update := SettingsUpdate{Revision: view.Revision, Provider: "openai", Port: 3232, Vocabulary: []VocabularyList{{"general", []string{"Go"}}, {"work", []string{"Wails"}}}}
+	update := SettingsUpdate{Revision: view.Revision, Provider: "openai", Port: 3232, Vocabulary: []VocabularyList{{Name: "general", Terms: []string{"Go"}}, {Name: "work", Terms: []string{"Wails"}}}}
 	if _, err := SaveSettings(update); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +103,7 @@ func TestDesktopSettingsValidationAndWorkspace(t *testing.T) {
 	}
 	view, _ = ReadSettings()
 	update.Revision = view.Revision
-	update.Vocabulary = []VocabularyList{{"general", []string{"secret\nterm"}}}
+	update.Vocabulary = []VocabularyList{{Name: "general", Terms: []string{"secret\nterm"}}}
 	if _, err := SaveSettings(update); err == nil {
 		t.Fatal("invalid keyword accepted")
 	}
@@ -111,5 +112,73 @@ func TestDesktopSettingsValidationAndWorkspace(t *testing.T) {
 	}
 	if _, err := SaveSettings(update); err == nil {
 		t.Fatal("malformed config overwritten")
+	}
+}
+
+func TestDesktopWorkspaceRenameAndDeletion(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	view, _ := ReadSettings()
+	update := SettingsUpdate{Revision: view.Revision, Provider: "openai", Port: 3232, Vocabulary: []VocabularyList{{Name: "general"}, {Name: "work", Terms: []string{"Wails"}}}}
+	view, err := SaveSettings(update)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SelectWorkspace("work"); err != nil {
+		t.Fatal(err)
+	}
+	update.Revision = view.Revision
+	update.Vocabulary[1].Name = "renamed"
+	update.Vocabulary[1].OriginalName = "work"
+	view, err = SaveSettings(update)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Workspace != "renamed" {
+		t.Fatal("renamed active workspace lost selection")
+	}
+	update.Revision = view.Revision
+	update.Vocabulary = update.Vocabulary[:1]
+	view, err = SaveSettings(update)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Workspace != "" {
+		t.Fatal("deleted workspace is still selected")
+	}
+}
+
+func TestRecoverMalformedSettings(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	broken := []byte(`{"api_key":"keep-in-backup",`)
+	if err := os.WriteFile(configFilePath(), broken, 0600); err != nil {
+		t.Fatal(err)
+	}
+	revision, err := RecoveryRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResetBrokenSettings("stale"); err == nil {
+		t.Fatal("stale reset accepted")
+	}
+	if _, err := ResetBrokenSettings(revision); err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(os.Getenv("HOME"), ".voice-type-config-recovery-*.jsonc"))
+	if err != nil || len(files) != 1 {
+		t.Fatal("recovery backup missing")
+	}
+	data, _ := os.ReadFile(files[0])
+	if string(data) != string(broken) {
+		t.Fatal("recovery backup changed content")
+	}
+	info, _ := os.Stat(files[0])
+	if info.Mode().Perm() != 0600 {
+		t.Fatal("recovery backup not private")
+	}
+	revision, _ = RecoveryRevision()
+	if _, err := ResetBrokenSettings(revision); err == nil {
+		t.Fatal("valid config was reset")
 	}
 }
