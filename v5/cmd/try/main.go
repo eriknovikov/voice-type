@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -21,19 +21,38 @@ func main() {
 	}
 }
 
-func run(ctx context.Context) (err error) {
-	inserter, err := voicetype.NewTextInserter(ctx, voicetype.InsertBackendIBus)
+func run(ctx context.Context) error {
+	recorder, err := voicetype.NewRecorder()
+	name := os.Args[1]
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, inserter.Close()) }()
+	defer recorder.Close()
 
-	timer := time.NewTimer(2 * time.Second)
+	if err := recorder.Start(); err != nil {
+		return err
+	}
+	fmt.Println("Recording for 15 seconds...")
+	timer := time.NewTimer(15 * time.Second)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-timer.C:
 	}
-	return inserter.Insert(ctx, "Hello Insertion")
+
+	samples, err := recorder.Stop()
+	if err != nil {
+		return err
+	}
+	if len(samples) == 0 {
+		return fmt.Errorf("no audio captured")
+	}
+
+	rawPath := filepath.Join(os.TempDir(), fmt.Sprintf("raw_%s.wav", name))
+	if err := os.WriteFile(rawPath, voicetype.WavEncode(samples), 0o600); err != nil {
+		return fmt.Errorf("save raw WAV: %w", err)
+	}
+	fmt.Println("Saved", rawPath)
+	return nil
 }
