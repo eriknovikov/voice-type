@@ -15,9 +15,11 @@ import (
 // Config holds file settings. Model overrides belong to the process, not the
 // file. Unknown fields remain compatible with older files.
 type Config struct {
-	Provider string
-	APIKey   string
-	Port     int
+	Provider   string
+	APIKey     string
+	APIKeys    map[string]string
+	Microphone string
+	Port       int
 	// Vocabulary is the named term lists. generalWorkspace rides along with
 	// every dictation; the rest are one at a time, picked with `voice-type
 	// vocab set`, so a term only costs where it earns its keep.
@@ -418,6 +420,16 @@ func configValidate(raw map[string]json.RawMessage) (Config, error) {
 		cfg.APIKey = strings.TrimSpace(cfg.APIKey)
 	}
 
+	if v, ok := raw["api_keys"]; ok {
+		if err := json.Unmarshal(v, &cfg.APIKeys); err != nil {
+			return cfg, errors.New("api_keys must map provider names to keys")
+		}
+	}
+	if v, ok := raw["microphone"]; ok {
+		if err := json.Unmarshal(v, &cfg.Microphone); err != nil {
+			return cfg, errors.New("microphone must be a string")
+		}
+	}
 	modelWarning := ""
 	if v, ok := raw["model"]; ok {
 		var s string
@@ -479,6 +491,9 @@ func configReadStrict() (Config, error) {
 func configAPIKey(cfg Config) string {
 	if k := strings.TrimSpace(os.Getenv(cfg.keyEnv())); k != "" {
 		return k
+	}
+	if k, ok := cfg.APIKeys[cfg.Provider]; ok {
+		return strings.TrimSpace(k)
 	}
 	return strings.TrimSpace(cfg.APIKey)
 }

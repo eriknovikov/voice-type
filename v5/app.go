@@ -246,31 +246,27 @@ func runDaemon(version, modelOverride string) (exitCode int) {
 		runLog.close(outcome)
 	}()
 
-	cfg, err := configReadStrict()
-	if err != nil {
-		logf("CONFIG", "%v", err)
-		return 1
+	cfg, configErr := configReadStrict()
+	if configErr != nil {
+		cfg = configDefaults()
+	}
+	if portInUse(cfg.Port) {
+		logf("PREFLIGHT", "port %d already in use", cfg.Port)
+		return 0
 	}
 	settings, err := cfg.resolveSTT(modelOverride, workspaceLoad())
 	if err != nil {
-		logf("CONFIG", "%v", err)
-		return 1
+		configErr = err
+		settings = sttSettings{Provider: cfg.Provider, Model: providerModel(cfg.Provider)}
 	}
-
-	result, res, err := runPreflight(cfg, settings)
-	switch result {
-	case preflightAlreadyRunning:
-		// Matches v4: an existing daemon is a successful no-op, which is what
-		// makes the F10 `curl /exit || voice-type` toggle work.
-		logf("PREFLIGHT", "%v", err)
-		return 0
-	case preflightFailed:
-		logf("PREFLIGHT", "%v", err)
-		return 1
-	}
+	res := &resources{Recorder: &Recorder{}}
 	defer res.Close()
-
 	d := newDaemon(cfg, res, settings, modelOverride)
+	if configErr != nil {
+		d.configError = configErr.Error()
+	} else if err := settings.validateCredentials(); err != nil {
+		d.configError = err.Error()
+	}
 	d.runLog = runLog
 
 	sigCh := make(chan os.Signal, 1)

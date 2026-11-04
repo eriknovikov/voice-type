@@ -2,6 +2,7 @@ package voicetype
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -21,8 +22,11 @@ type Recorder struct {
 	streamMu sync.Mutex
 	stream   *pulse.RecordStream
 
-	bufMu   sync.Mutex
-	samples []int16
+	bufMu     sync.Mutex
+	samples   []int16
+	sourceID  string
+	level     float64
+	meterOnly bool
 }
 
 type audioRecorder interface {
@@ -70,7 +74,17 @@ func (r *Recorder) Start() error {
 	r.samples = r.samples[:0]
 	r.bufMu.Unlock()
 
+	if r.client == nil {
+		client, err := pulse.NewClient(pulse.ClientApplicationName("voice-type"), pulse.ClientTimeout(time.Second))
+		if err != nil {
+			return fmt.Errorf("connect to audio server: %w", err)
+		}
+		r.client = client
+	}
 	source, err := r.client.DefaultSource()
+	if r.sourceID != "" {
+		source, err = r.client.SourceByID(r.sourceID)
+	}
 	if err != nil {
 		return fmt.Errorf("resolve default source: %w", err)
 	}
@@ -78,7 +92,17 @@ func (r *Recorder) Start() error {
 	stream, err := r.client.NewRecord(
 		pulse.Int16Writer(func(b []int16) (int, error) {
 			r.bufMu.Lock()
-			r.samples = append(r.samples, b...)
+			var peak float64
+			for _, sample := range b {
+				value := math.Abs(float64(sample)) / 32768
+				if value > peak {
+					peak = value
+				}
+			}
+			r.level = peak
+			if !r.meterOnly {
+				r.samples = append(r.samples, b...)
+			}
 			r.bufMu.Unlock()
 			return len(b), nil
 		}),
@@ -122,3 +146,31 @@ func (r *Recorder) Stop() ([]int16, error) {
 	}
 	return out, streamErr
 }
+
+type AudioSource struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func ListAudioSources() ([]AudioSource, error) {
+	r, err := NewRecorder()
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	sources, err := r.client.ListSources()
+	if err != nil {
+		return nil, err
+	}
+	out := []AudioSource{}
+	for _, source := range sources {
+		out = append(out, AudioSource{source.ID(), source.Name()})
+	}
+	return out, nil
+}
+func (r *Recorder) SetSource(id string) {
+	r.streamMu.Lock()
+	defer r.streamMu.Unlock()
+	r.sourceID = id
+}
+func (r *Recorder) Level() float64 { r.bufMu.Lock(); defer r.bufMu.Unlock(); return r.level }
