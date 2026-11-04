@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const cliUsage = "usage: voice-type [start|version|config|models|vocab|config-port] [--model ID]"
+const cliUsage = "usage: voice-type [start|version] [--model ID]"
 
 type cliOptions struct {
 	Command string
@@ -31,12 +31,10 @@ func parseCLI(args []string) (cliOptions, error) {
 	rest := flags.Args()
 	if len(rest) > 0 {
 		opts.Command, rest = rest[0], rest[1:]
-		if opts.Command != "vocab" && opts.Command != "vocabulary" {
-			if err := flags.Parse(rest); err != nil {
-				return opts, err
-			}
-			rest = flags.Args()
+		if err := flags.Parse(rest); err != nil {
+			return opts, err
 		}
+		rest = flags.Args()
 	}
 	modelSet := false
 	flags.Visit(func(f *flag.Flag) {
@@ -49,8 +47,8 @@ func parseCLI(args []string) (cliOptions, error) {
 		if opts.Model == "" || strings.HasPrefix(opts.Model, "-") || strings.ContainsFunc(opts.Model, func(r rune) bool { return r <= ' ' }) {
 			return opts, errors.New("--model needs a nonempty model ID")
 		}
-		if opts.Version || (opts.Command != "start" && opts.Command != "config") {
-			return opts, errors.New("--model is only valid with start or config")
+		if opts.Version || opts.Command != "start" {
+			return opts, errors.New("--model is only valid with start")
 		}
 	}
 	if opts.Version && (opts.Command != "start" || len(flags.Args()) > 0 || len(args) > 1) {
@@ -65,16 +63,10 @@ func parseCLI(args []string) (cliOptions, error) {
 
 func validateCLICommand(command string, args []string) error {
 	switch command {
-	case "start", "config", "config-port", "models", "version":
+	case "start", "version":
 		if len(args) != 0 {
 			return fmt.Errorf("unexpected arguments for %s", command)
 		}
-	case "vocab", "vocabulary":
-		if len(args) == 0 || (len(args) == 1 && args[0] == "ls") ||
-			(len(args) == 2 && args[0] == "set" && !strings.HasPrefix(args[1], "--")) {
-			return nil
-		}
-		return errors.New("usage: voice-type vocab [ls|set <name|none>]")
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}

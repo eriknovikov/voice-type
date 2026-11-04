@@ -20,6 +20,17 @@ appears wherever your cursor is in the system.
 curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/v5/install.sh | bash
 ```
 
+# Desktop app (from source)
+
+The optional Wails desktop app provides settings, provider keys, vocabulary,
+input-device testing, shortcuts and diagnostic logs. From `v5/`, run
+`make install-desktop`, then open **Voice Type** from your application launcher.
+See [desktop build requirements and setup](v5/desktop/README.md).
+
+The daemon-only installation above remains available. Its CLI supports
+`start`, `version`, `--help` and the optional `--model` override. Configuration
+and vocabulary management are in the desktop app.
+
 # Troubleshooting
 
 Logs are stored in `~/.voice-type-logs.jsonl`
