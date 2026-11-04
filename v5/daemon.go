@@ -24,10 +24,13 @@ const (
 	stateChecking
 	stateRecording
 	stateTranscribing
+	stateTesting
 )
 
 func (s sessionState) String() string {
 	switch s {
+	case stateTesting:
+		return "testing"
 	case stateChecking:
 		return "checking"
 	case stateRecording:
@@ -62,7 +65,9 @@ type daemon struct {
 	sessionCtx    context.Context
 	sessionCancel context.CancelFunc
 
-	exitOnce sync.Once
+	testRecorder *Recorder
+	testTimer    *time.Timer
+	exitOnce     sync.Once
 }
 
 func newDaemon(cfg Config, res *resources, settings sttSettings, modelOverride string) *daemon {
@@ -134,6 +139,9 @@ func (d *daemon) startSession() (int, string) {
 	}
 	d.mu.Unlock()
 
+	if rec, ok := d.res.Recorder.(*Recorder); ok {
+		rec.SetSource(d.cfg.Microphone)
+	}
 	err := d.res.Recorder.Start()
 	d.mu.Lock()
 	if err != nil {
@@ -203,7 +211,7 @@ func (d *daemon) stopSession() (int, string) {
 
 // stopSessionFor ignores an expired duration timer from an older session. A
 // zero session ID is an explicit user stop and applies to the current session.
-func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
+func (d *daemon) stopSessionFor(sessionID uint64) (code int, message string) {
 	d.mu.Lock()
 	if d.state != stateRecording || (sessionID != 0 && sessionID != d.sessionID) {
 		state := d.state
@@ -284,7 +292,18 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 	if finalModel == "" && len(attempts) > 0 {
 		finalModel = attempts[len(attempts)-1].Model
 	}
-	d.runLog.complete(stt.settings.Provider, requestedModel, finalModel, requestOutcome(err), requestDuration, duration, attempts, err)
+	defer func() {
+		outcome := requestOutcome(err)
+		logErr := err
+		if code >= 400 && logErr == nil {
+			outcome = "insertion_error"
+			if code == http.StatusBadGateway {
+				outcome = "vocabulary_echo"
+			}
+			logErr = errors.New(outcome)
+		}
+		d.runLog.complete(stt.settings.Provider, requestedModel, finalModel, outcome, time.Since(t0), duration, attempts, logErr)
+	}()
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			logf("STT", "cancelled during shutdown")
@@ -312,7 +331,7 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 		return http.StatusBadGateway, "transcription matched the vocabulary prompt; " + retained
 	}
 	if prompt != "" && strings.HasPrefix(normalizeTranscript(result.Text), "vocabulary:") {
-		logf("STT", "possible vocabulary echo contained other words; preserving transcript: %s", truncate(result.Text, 120))
+		logf("STT", "possible vocabulary echo contained other words; preserving transcript")
 	}
 	if err := ctx.Err(); err != nil {
 		logf("OUTPUT", "cancelled before insertion")
@@ -329,7 +348,7 @@ func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
 		return http.StatusInternalServerError, fmt.Sprintf("IBus insertion failed: %v", err)
 	}
 
-	logf("OUTPUT", "submitted via IBus in %v: %s", time.Since(outputStart).Round(time.Millisecond), truncate(result.Text, 120))
+	logf("OUTPUT", "submitted via IBus in %v", time.Since(outputStart).Round(time.Millisecond))
 	return http.StatusOK, result.Text
 }
 
@@ -489,6 +508,13 @@ func (d *daemon) shutdown() {
 
 // Run serves until /exit or a signal, then drains and releases the handles.
 func (d *daemon) Run() error {
+	management, err := d.serveManagement()
+	if err != nil {
+		return err
+	}
+	defer management.Close()
+	defer d.stopMicrophoneTest()
+
 	d.srv = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", d.cfg.Port),
 		Handler: requireLoopbackHost(d.routes()),

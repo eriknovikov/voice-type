@@ -1,10 +1,12 @@
 package voicetype
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,6 +34,7 @@ type runLogAttempt struct {
 }
 
 type runLogRecord struct {
+	Timestamp       string          `json:"timestamp,omitempty"`
 	Event           string          `json:"event"`
 	Version         string          `json:"version"`
 	Provider        string          `json:"provider"`
@@ -67,9 +70,7 @@ func openRunLog(version string) *runLog {
 
 func newRunLog(version string, terminal bool) *runLog {
 	l := &runLog{version: version}
-	if terminal {
-		return l
-	}
+	_ = terminal // Desktop logs must also persist when launched from a terminal.
 
 	l.path = runLogFilePath()
 	if err := os.MkdirAll(filepath.Dir(l.path), 0o700); err != nil {
@@ -130,6 +131,9 @@ func (l *runLog) close(outcome string) {
 }
 
 func (l *runLog) write(record runLogRecord) {
+	if record.Timestamp == "" {
+		record.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
+	}
 	line, err := json.Marshal(record)
 	if err != nil {
 		return
@@ -184,4 +188,52 @@ func requestOutcome(err error) string {
 		}
 	}
 	return "error"
+}
+
+// records returns at most two bounded log segments, newest entries first.
+func (l *runLog) records() ([]runLogRecord, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := []runLogRecord{}
+	for _, path := range []string{runLogFilePath() + ".1", runLogFilePath()} {
+		f, err := os.Open(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		scanner := bufio.NewScanner(io.LimitReader(f, runLogMaxBytes+1))
+		scanner.Buffer(make([]byte, 4096), 1<<20)
+		for scanner.Scan() {
+			var record runLogRecord
+			if json.Unmarshal(scanner.Bytes(), &record) == nil {
+				out = append(out, record)
+			}
+		}
+		err = scanner.Err()
+		f.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
+}
+func (l *runLog) clear() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.file != nil {
+		if err := l.file.Truncate(0); err != nil {
+			return err
+		}
+	} else if err := os.Truncate(runLogFilePath(), 0); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Remove(runLogFilePath() + ".1"); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
