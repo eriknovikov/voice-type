@@ -103,13 +103,13 @@ func Run(version string) error {
 	tray.OnClick(show)
 	updateMenu := func(state string) {
 		menu := app.NewMenu()
-		statusLabel, action := "Idle", "Start"
+		statusLabel, action := "Idle", "Start recording"
 		if state == "recording" {
-			statusLabel, action = "Recording", "Stop"
+			statusLabel, action = "Recording", "Stop recording"
 		}
 		menu.Add(statusLabel).SetEnabled(false)
 		menu.Add(action).OnClick(func(_ *application.Context) { go b.toggleFromTray() })
-		menu.Add("Open Voice Type").OnClick(func(_ *application.Context) { show() })
+		menu.Add("Open settings").OnClick(func(_ *application.Context) { show() })
 		menu.Add("Quit").OnClick(func(_ *application.Context) {
 			go func() {
 				if err := b.Quit(); err != nil {
