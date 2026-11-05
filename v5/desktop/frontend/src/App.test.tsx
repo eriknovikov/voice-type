@@ -208,19 +208,18 @@ it("opens General first and supports creating and using vocabulary without works
     target: { value: "Medical" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Create vocabulary" }));
-  fireEvent.change(screen.getByLabelText("New term"), {
-    target: { value: "tachycardia" },
+  fireEvent.change(screen.getByLabelText("Words and phrases"), {
+    target: { value: "tachycardia\nECG\nheart rate" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "Add" }));
-  expect((screen.getByLabelText("Term 1") as HTMLInputElement).value).toBe(
-    "tachycardia",
+  expect((screen.getByLabelText("Words and phrases") as HTMLTextAreaElement).value).toBe(
+    "tachycardia\nECG\nheart rate",
   );
   fireEvent.click(screen.getByRole("button", { name: "Use this vocabulary" }));
   await waitFor(() => expect(api.workspace).toHaveBeenCalledWith("Medical"));
   expect(api.save).toHaveBeenCalledWith(
     expect.objectContaining({
       vocabulary: expect.arrayContaining([
-        { name: "Medical", terms: ["tachycardia"], original_name: "Medical" },
+        { name: "Medical", terms: ["tachycardia", "ECG", "heart rate"], original_name: "Medical" },
       ]),
     }),
   );
@@ -239,13 +238,13 @@ it("renames and deletes a vocabulary while preserving General terms", async () =
   fireEvent.change(screen.getByLabelText("Vocabulary name"), {
     target: { value: "Health" },
   });
-  expect((screen.getByLabelText("Term 1") as HTMLInputElement).value).toBe(
+  expect((screen.getByLabelText("Words and phrases") as HTMLTextAreaElement).value).toBe(
     "ECG",
   );
   fireEvent.click(screen.getByRole("button", { name: "Delete vocabulary" }));
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   await waitFor(() =>
-    expect((screen.getByLabelText("Term 1") as HTMLInputElement).value).toBe(
+    expect((screen.getByLabelText("Words and phrases") as HTMLTextAreaElement).value).toBe(
       "Wails",
     ),
   );

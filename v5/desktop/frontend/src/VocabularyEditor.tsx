@@ -1,6 +1,6 @@
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Plus, Trash2, Check, X, BookOpen } from "lucide-react";
+import { Plus, Trash2, Check, BookOpen } from "lucide-react";
 import type { VocabularyList } from "./api";
 export function VocabularyEditor({
   lists,
@@ -28,21 +28,7 @@ export function VocabularyEditor({
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
-  const [term, setTerm] = useState("");
   const list = lists.find((item) => item.name === selected);
-  const addTerms = (values: string[]) => {
-    if (!list) return;
-    const seen = new Set(list.terms.map((value) => value.trim().toLowerCase()));
-    const added = values
-      .map((value) => value.trim())
-      .filter((value) => {
-        if (!value || seen.has(value.toLowerCase())) return false;
-        seen.add(value.toLowerCase());
-        return true;
-      });
-    if (added.length) onTerms([...list.terms, ...added]);
-    setTerm("");
-  };
   const inUse = selected === "general" ? active === "" : selected === active;
   return (
     <div className="vocabulary-layout">
@@ -73,10 +59,7 @@ export function VocabularyEditor({
               key={item.original_name ?? item.name}
               className={selected === item.name ? "selected" : ""}
               aria-current={selected === item.name ? "true" : undefined}
-              onClick={() => {
-                onSelect(item.name);
-                setTerm("");
-              }}
+              onClick={() => onSelect(item.name)}
             >
               <BookOpen size={15} />
               <span>{item.name === "general" ? "General" : item.name}</span>
@@ -139,73 +122,20 @@ export function VocabularyEditor({
                 )}
               </div>
             </div>
-            <form
-              className="add-term"
-              onSubmit={(event) => {
-                event.preventDefault();
-                addTerms([term]);
-              }}
-            >
-              <input
-                disabled={busy}
-                aria-label="New term"
-                placeholder="Add a name or term"
-                value={term}
-                onChange={(event) => setTerm(event.target.value)}
-                onPaste={(event) => {
-                  const pasted = event.clipboardData.getData("text");
-                  if (pasted.includes("\n")) {
-                    event.preventDefault();
-                    addTerms(pasted.split(/\r?\n/));
-                  }
-                }}
-              />
-              <button disabled={busy || !term.trim()} type="submit">
-                <Plus size={15} />
-                Add
-              </button>
-            </form>
-            <div className="term-list">
-              {list.terms.length ? (
-                list.terms.map((value, index) => (
-                  <div className="term-row" key={index}>
-                    <input
-                      disabled={busy}
-                      aria-label={`Term ${index + 1}`}
-                      value={value}
-                      onChange={(event) =>
-                        onTerms(
-                          list.terms.map((previous, i) =>
-                            i === index ? event.target.value : previous,
-                          ),
-                        )
-                      }
-                    />
-                    <button
-                      className="icon-button"
-                      disabled={busy}
-                      title="Remove term"
-                      aria-label={`Remove term ${index + 1}`}
-                      onClick={() =>
-                        onTerms(list.terms.filter((_, i) => i !== index))
-                      }
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                ))
-              ) : (
-                <div className="empty-terms">
-                  <BookOpen size={24} />
-                  <h3>No terms yet</h3>
-                  <p>
-                    Add names or terminology you use.
-                    <br />
-                    You can also paste several lines at once.
-                  </p>
-                </div>
-              )}
-            </div>
+            <label htmlFor="vocabulary-terms">Words and phrases</label>
+            <p id="vocabulary-terms-hint" className="quiet vocabulary-terms-hint">
+              One word or phrase per line.
+            </p>
+            <textarea
+              id="vocabulary-terms"
+              className="vocabulary-terms"
+              aria-describedby="vocabulary-terms-hint"
+              disabled={busy}
+              placeholder={"Voice Type\nOpenAI\nWails"}
+              value={list.terms.join("\n")}
+              onChange={(event) => onTerms(event.target.value.split(/\r?\n/))}
+              spellCheck={false}
+            />
             <p className="quiet term-help">
               Changes apply to the next dictation after saving.
             </p>
