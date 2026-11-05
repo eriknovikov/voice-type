@@ -342,7 +342,10 @@ input[type="number"] {
 .meter > div {
   height: 100%;
   background: var(--accent);
-  transition: width 0.1s;
+  width: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
+  will-change: transform;
 }
 .checkbox {
   display: flex;

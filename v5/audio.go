@@ -72,6 +72,7 @@ func (r *Recorder) Start() error {
 
 	r.bufMu.Lock()
 	r.samples = r.samples[:0]
+	r.level = 0
 	r.bufMu.Unlock()
 
 	if r.client == nil {
@@ -90,22 +91,7 @@ func (r *Recorder) Start() error {
 	}
 
 	stream, err := r.client.NewRecord(
-		pulse.Int16Writer(func(b []int16) (int, error) {
-			r.bufMu.Lock()
-			var peak float64
-			for _, sample := range b {
-				value := math.Abs(float64(sample)) / 32768
-				if value > peak {
-					peak = value
-				}
-			}
-			r.level = peak
-			if !r.meterOnly {
-				r.samples = append(r.samples, b...)
-			}
-			r.bufMu.Unlock()
-			return len(b), nil
-		}),
+		pulse.Int16Writer(r.acceptSamples),
 		pulse.RecordMono,
 		pulse.RecordSampleRate(wavSampleRate),
 		pulse.RecordLatency(0.02),
@@ -174,3 +160,28 @@ func (r *Recorder) SetSource(id string) {
 	r.sourceID = id
 }
 func (r *Recorder) Level() float64 { r.bufMu.Lock(); defer r.bufMu.Unlock(); return r.level }
+
+// TakeLevel retains transients between meter frames, then starts a fresh window.
+func (r *Recorder) TakeLevel() float64 {
+	r.bufMu.Lock()
+	defer r.bufMu.Unlock()
+	level := r.level
+	r.level = 0
+	return level
+}
+
+func (r *Recorder) acceptSamples(samples []int16) (int, error) {
+	r.bufMu.Lock()
+	defer r.bufMu.Unlock()
+	if r.meterOnly {
+		for _, sample := range samples {
+			value := math.Abs(float64(sample)) / 32768
+			if value > r.level {
+				r.level = value
+			}
+		}
+	} else {
+		r.samples = append(r.samples, samples...)
+	}
+	return len(samples), nil
+}

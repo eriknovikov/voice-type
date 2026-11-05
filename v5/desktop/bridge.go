@@ -50,6 +50,8 @@ type Bridge struct {
 	shortcutError     string
 	lastShortcutAt    string
 	version           string
+	meterMu           sync.Mutex
+	meterCancel       context.CancelFunc
 }
 
 func (b *Bridge) request(method, path string, body, out any) error {
@@ -120,10 +122,17 @@ func (b *Bridge) Microphones() ([]vt.AudioSource, error) {
 	return out, err
 }
 func (b *Bridge) StartMicrophoneTest(id string) error {
-	return b.request("POST", "/microphone-test", map[string]string{"id": id}, nil)
+	if err := b.request("POST", "/microphone-test", map[string]string{"id": id}, nil); err != nil {
+		return err
+	}
+	b.startLevelStream()
+	return nil
 }
-func (b *Bridge) StopMicrophoneTest() error { return b.request("DELETE", "/microphone-test", nil, nil) }
-func (b *Bridge) Toggle() error             { return b.request("POST", "/toggle", nil, nil) }
+func (b *Bridge) StopMicrophoneTest() error {
+	b.cancelLevelStream()
+	return b.request("DELETE", "/microphone-test", nil, nil)
+}
+func (b *Bridge) Toggle() error { return b.request("POST", "/toggle", nil, nil) }
 func (b *Bridge) Logs() ([]map[string]any, error) {
 	var out []map[string]any
 	err := b.request("GET", "/logs", nil, &out)
@@ -438,4 +447,61 @@ func (b *Bridge) releaseShortcuts() error {
 		return applyGNOMEShortcuts(b.prefs, true)
 	}
 	return b.app.GlobalShortcut.UnregisterAll()
+}
+
+func (b *Bridge) cancelLevelStream() {
+	b.meterMu.Lock()
+	defer b.meterMu.Unlock()
+	if b.meterCancel != nil {
+		b.meterCancel()
+		b.meterCancel = nil
+	}
+}
+func (b *Bridge) startLevelStream() {
+	b.meterMu.Lock()
+	if b.meterCancel != nil {
+		b.meterCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	b.meterCancel = cancel
+	b.meterMu.Unlock()
+	go func() {
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, "GET", "http://desktop/microphone-levels", nil)
+		if err != nil {
+			return
+		}
+		resp, err := b.client.Do(req)
+		if err != nil {
+			if ctx.Err() == nil {
+				b.app.Event.Emit("operation-error", "Microphone meter disconnected.")
+			}
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			b.app.Event.Emit("operation-error", "Microphone meter unavailable. Restart the daemon and try again.")
+			return
+		}
+		decoder := json.NewDecoder(resp.Body)
+		for {
+			var frame struct {
+				Level   float64 `json:"level"`
+				Testing bool    `json:"testing"`
+			}
+			if err := decoder.Decode(&frame); err != nil {
+				if ctx.Err() == nil && err != io.EOF {
+					b.app.Event.Emit("operation-error", "Microphone meter disconnected.")
+				}
+				return
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			b.app.Event.Emit("microphone-level", frame.Level)
+			if !frame.Testing {
+				return
+			}
+		}
+	}()
 }

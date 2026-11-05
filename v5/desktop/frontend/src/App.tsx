@@ -25,6 +25,7 @@ import {
   type LogRecord,
 } from "./api";
 import "./style.css";
+import { MicrophoneMeter } from "./MicrophoneMeter";
 import { Dropdown } from "./Dropdown";
 import { ShortcutPicker } from "./ShortcutPicker";
 
@@ -117,17 +118,28 @@ export function App() {
     const poll = async () => {
       try {
         const next = await api.status();
-        if (alive) setStatus(next);
+        if (alive)
+          setStatus((previous) =>
+            previous.state === next.state &&
+            previous.error === next.error &&
+            previous.port === next.port
+              ? previous
+              : next,
+          );
         const freshInfo = await api.info();
         if (alive)
           setInfo((current) =>
             current
-              ? {
-                  ...current,
-                  shortcut_error: freshInfo.shortcut_error,
-                  last_shortcut_at: freshInfo.last_shortcut_at,
-                  tray_available: freshInfo.tray_available,
-                }
+              ? current.shortcut_error === freshInfo.shortcut_error &&
+                current.last_shortcut_at === freshInfo.last_shortcut_at &&
+                current.tray_available === freshInfo.tray_available
+                ? current
+                : {
+                    ...current,
+                    shortcut_error: freshInfo.shortcut_error,
+                    last_shortcut_at: freshInfo.last_shortcut_at,
+                    tray_available: freshInfo.tray_available,
+                  }
               : freshInfo,
           );
       } catch {
@@ -611,20 +623,7 @@ export function App() {
                     ]}
                   />
 
-                  <div
-                    className="meter"
-                    role="meter"
-                    aria-label="Microphone level"
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={Math.round(status.level * 100)}
-                  >
-                    <div
-                      style={{
-                        width: `${Math.max(0, Math.min(100, status.level * 100))}%`,
-                      }}
-                    />
-                  </div>
+                  <MicrophoneMeter active={status.state === "testing"} />
                   <div className="row">
                     <button
                       disabled={
@@ -632,8 +631,21 @@ export function App() {
                       }
                       onClick={() =>
                         void run(async () => {
-                          if (status.state === "testing") await api.stopTest();
-                          else await api.startTest(settings.microphone);
+                          if (status.state === "testing") {
+                            await api.stopTest();
+                            setStatus((current) => ({
+                              ...current,
+                              state: "idle",
+                              level: 0,
+                            }));
+                          } else {
+                            await api.startTest(settings.microphone);
+                            setStatus((current) => ({
+                              ...current,
+                              state: "testing",
+                              level: 0,
+                            }));
+                          }
                         })
                       }
                     >
