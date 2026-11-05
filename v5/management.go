@@ -87,6 +87,7 @@ func managementResult(w http.ResponseWriter, value any, err error) {
 }
 func (d *daemon) managementRoutes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /microphone-levels", d.streamMicrophoneLevels)
 	mux.HandleFunc("GET /recovery", func(w http.ResponseWriter, r *http.Request) {
 		value, err := RecoveryRevision()
 		managementResult(w, value, err)
@@ -225,4 +226,46 @@ func NewManagementClient() *http.Client {
 	return &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", ManagementSocketPath())
 	}}, Timeout: 12 * time.Minute}
+}
+
+// One bounded stream per microphone test; no audio data leaves the daemon.
+func (d *daemon) streamMicrophoneLevels(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unavailable", 500)
+		return
+	}
+	d.mu.Lock()
+	rec := d.testRecorder
+	d.mu.Unlock()
+	if rec == nil {
+		http.Error(w, "no microphone test is active", 409)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-store")
+	encoder := json.NewEncoder(w)
+	ticker := time.NewTicker(time.Second / 30)
+	defer ticker.Stop()
+	for {
+		d.mu.Lock()
+		active := d.testRecorder == rec && !d.shuttingDown
+		d.mu.Unlock()
+		if !active {
+			_ = encoder.Encode(map[string]any{"level": 0, "testing": false})
+			flusher.Flush()
+			return
+		}
+		if err := encoder.Encode(map[string]any{"level": rec.TakeLevel(), "testing": true}); err != nil {
+			return
+		}
+		flusher.Flush()
+		select {
+		case <-r.Context().Done():
+			return
+		case <-d.done:
+			return
+		case <-ticker.C:
+		}
+	}
 }
