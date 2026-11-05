@@ -213,6 +213,30 @@ export function App() {
     void run(async () => {
       await api.exportLogs(query, outcome);
     });
+  const saveShortcut = async (
+    field: "shortcut" | "daemon_shortcut",
+    value: string,
+  ) => {
+    const current = await api.info();
+    await api.preferences({
+      ...current.preferences,
+      [field]: value,
+      setup_complete: true,
+    });
+    setInfo((state) =>
+      state
+        ? {
+            ...state,
+            shortcut_error: "",
+            preferences: {
+              ...state.preferences,
+              [field]: value,
+              setup_complete: true,
+            },
+          }
+        : state,
+    );
+  };
   const credential = settings?.credentials[settings.provider];
   return (
     <div className="app">
@@ -641,55 +665,20 @@ export function App() {
                   name="Transcription toggle"
                   value={info.preferences.shortcut}
                   onError={setError}
-                  onChange={(value) =>
-                    setInfo({
-                      ...info,
-                      preferences: { ...info.preferences, shortcut: value },
-                    })
-                  }
+                  onChange={(value) => saveShortcut("shortcut", value)}
                 />
                 <ShortcutPicker
                   name="Daemon toggle"
                   value={info.preferences.daemon_shortcut}
                   onError={setError}
-                  onChange={(value) =>
-                    setInfo({
-                      ...info,
-                      preferences: {
-                        ...info.preferences,
-                        daemon_shortcut: value,
-                      },
-                    })
-                  }
+                  onChange={(value) => saveShortcut("daemon_shortcut", value)}
                 />
                 <p className="hint">
-                  Click a shortcut to change it. Your desktop may ask you to
-                  approve the keys.
+                  Click a shortcut and press the keys. Click elsewhere to save.
+                  Escape disables it.
                 </p>
-                <button
-                  className="primary"
-                  disabled={busy}
-                  onClick={() =>
-                    void run(async () => {
-                      await api.preferences({
-                        ...info.preferences,
-                        setup_complete: true,
-                      });
-                      setInfo(await api.info());
-                      setNotice("Keyboard shortcuts saved.");
-                    })
-                  }
-                >
-                  Save shortcuts
-                </button>
                 {info.shortcut_error && (
                   <p className="alert error">{info.shortcut_error}</p>
-                )}
-                {info.last_shortcut_at && (
-                  <p className="hint">
-                    Last used:{" "}
-                    {new Date(info.last_shortcut_at).toLocaleTimeString()}.
-                  </p>
                 )}
               </section>
             )}

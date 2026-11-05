@@ -10,6 +10,15 @@ DESKTOP_FILE="$DATA_DIR/applications/io.github.eriknovikov.voice-type.desktop"
 ICON_FILE="$DATA_DIR/icons/hicolor/512x512/apps/voice-type.png"
 case "${1:-}" in
  --uninstall)
+  if command -v gsettings >/dev/null 2>&1; then
+   if SHORTCUT_PATHS=$(gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings 2>/dev/null); then
+    SHORTCUT_PATHS=$(printf '%s' "$SHORTCUT_PATHS" | sed -E "s@'/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/voice-type-(transcription|daemon)/',? ?@@g; s@, ?\]@]@")
+    gsettings set org.gnome.settings-daemon.plugins.media-keys custom-keybindings "$SHORTCUT_PATHS"
+    for ACTION in transcription daemon; do
+     gsettings reset-recursively "org.gnome.settings-daemon.plugins.media-keys.custom-keybinding:/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/voice-type-$ACTION/"
+    done
+   fi
+  fi
   rm -f "$BIN_DIR/voice-type-app" "$BIN_DIR/voice-type" "$DESKTOP_FILE" "$ICON_FILE" "$DATA_DIR/icons/hicolor/scalable/apps/voice-type.svg" "$CONFIG_DIR/autostart/voice-type.desktop"
   printf '%s\n' 'Voice Type binaries and desktop integration removed. Settings and logs were kept.'
   exit 0 ;;

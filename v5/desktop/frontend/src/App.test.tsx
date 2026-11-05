@@ -154,28 +154,32 @@ it("tray events navigate to settings and update workspace without discarding edi
   expect(screen.getByText("Unsaved changes")).toBeTruthy();
 });
 
-it("captures a shortcut interactively without activating dictation", async () => {
+it("captures inline, saves on blur, and disables with Escape", async () => {
+  vi.mocked(api.preferences).mockResolvedValue();
   render(<App />);
   await screen.findByText("Dictation");
   fireEvent.click(screen.getByRole("button", { name: "Keyboard Shortcuts" }));
-  fireEvent.click(
-    screen.getByRole("button", {
-      name: "Change transcription toggle shortcut",
-    }),
-  );
-  await screen.findByText("Press the keys you want to use.");
-  expect(document.activeElement).toBe(
-    screen.getByRole("group", { name: "Shortcut keys" }),
-  );
-  fireEvent.keyDown(screen.getByRole("group", { name: "Shortcut keys" }), {
-    key: " ",
-    ctrlKey: true,
-    shiftKey: true,
+  const button = screen.getByRole("button", {
+    name: "Change transcription toggle shortcut",
   });
-  fireEvent.click(screen.getByRole("button", { name: "Set shortcut" }));
-  await waitFor(() => expect(api.endShortcutCapture).toHaveBeenCalled());
-  expect(
-    screen.getByRole("button", { name: "Change transcription toggle shortcut" })
-      .textContent,
-  ).toBe("Ctrl + Shift + Space");
+  fireEvent.click(button);
+  await screen.findByText("Press keys…");
+  fireEvent.keyDown(button, { key: " ", ctrlKey: true, shiftKey: true });
+  fireEvent.blur(button);
+  await waitFor(() =>
+    expect(api.preferences).toHaveBeenCalledWith(
+      expect.objectContaining({ shortcut: "Ctrl+Shift+Space" }),
+    ),
+  );
+  await waitFor(() => expect(button.textContent).toBe("Ctrl + Shift + Space"));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  fireEvent.click(button);
+  await screen.findByText("Press keys…");
+  fireEvent.keyDown(button, { key: "Escape" });
+  await waitFor(() =>
+    expect(api.preferences).toHaveBeenCalledWith(
+      expect.objectContaining({ shortcut: "" }),
+    ),
+  );
+  await waitFor(() => expect(button.textContent).toBe("Disabled"));
 });

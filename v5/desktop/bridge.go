@@ -254,14 +254,12 @@ func (b *Bridge) SavePreferences(prefs Preferences) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	old := b.prefs
-	if strings.TrimSpace(prefs.Shortcut) == "" || strings.TrimSpace(prefs.DaemonShortcut) == "" {
-		return errors.New("choose both keyboard shortcuts")
-	}
+
 	changed := prefs.Shortcut != old.Shortcut || prefs.DaemonShortcut != old.DaemonShortcut || b.shortcutError != ""
 	if changed {
-		_ = b.app.GlobalShortcut.UnregisterAll()
+		_ = b.releaseShortcuts()
 		if err := b.registerShortcuts(prefs); err != nil {
-			_ = b.app.GlobalShortcut.UnregisterAll()
+			_ = b.releaseShortcuts()
 			_ = b.registerShortcuts(old)
 			b.shortcutError = err.Error()
 			return err
@@ -359,8 +357,20 @@ func (b *Bridge) ResetBrokenSettings(revision string) (vt.Settings, error) {
 }
 
 func (b *Bridge) registerShortcuts(prefs Preferences) error {
-	if err := b.app.GlobalShortcut.Register(prefs.Shortcut, b.activateShortcut); err != nil {
-		return err
+	if isGNOME() {
+		return applyGNOMEShortcuts(prefs, false)
+	}
+	if os.Getenv("XDG_SESSION_TYPE") == "wayland" {
+		return errors.New("configure global shortcuts in your desktop on this Wayland session")
+	}
+
+	if prefs.Shortcut != "" {
+		if err := b.app.GlobalShortcut.Register(prefs.Shortcut, b.activateShortcut); err != nil {
+			return err
+		}
+	}
+	if prefs.DaemonShortcut == "" {
+		return nil
 	}
 	return b.app.GlobalShortcut.Register(prefs.DaemonShortcut, func() {
 		b.mu.Lock()
@@ -402,7 +412,7 @@ func (b *Bridge) BeginShortcutCapture() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.capturingShortcut = true
-	if err := b.app.GlobalShortcut.UnregisterAll(); err != nil {
+	if err := b.releaseShortcuts(); err != nil {
 		b.capturingShortcut = false
 		return err
 	}
@@ -415,10 +425,17 @@ func (b *Bridge) EndShortcutCapture() error {
 		return nil
 	}
 	b.capturingShortcut = false
-	_ = b.app.GlobalShortcut.UnregisterAll()
+	_ = b.releaseShortcuts()
 	err := b.registerShortcuts(b.prefs)
 	if err != nil {
 		b.shortcutError = err.Error()
 	}
 	return err
+}
+
+func (b *Bridge) releaseShortcuts() error {
+	if isGNOME() {
+		return applyGNOMEShortcuts(b.prefs, true)
+	}
+	return b.app.GlobalShortcut.UnregisterAll()
 }
