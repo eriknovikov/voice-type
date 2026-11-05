@@ -18,7 +18,7 @@ make install-desktop
 
 Launch **Voice Type** from the application launcher. Set your OpenAI or
 OpenRouter key, test the microphone, and save your shortcut and startup
-preferences. Wayland shows a desktop-owned shortcut approval dialog.
+preferences. GNOME stores the two app shortcuts directly, without an approval dialog.
 
 The app installs alongside `voice-type` in `~/.local/bin`. The desktop window
 closes to the background; Quit Voice Type stops both processes. A second launch
@@ -73,12 +73,15 @@ credentials or transcripts.
 To exercise native tray registration and menu actions without installing a shell
 extension, run `VOICE_TYPE_DESKTOP_TEST_BINARY="$PWD/build/voice-type-app"
 CGO_ENABLED=1 go test -run TestNativeTray -v` from this directory (as one command).
-The test uses a private session bus and a test tray host. Real GNOME shortcut
-approval must be completed in GNOME's own dialog; Keyboard Shortcuts shows the
-last activation time to verify the selected binding.
+The test uses a private session bus and a test tray host.
 
 Keyboard Shortcuts has two defaults: Ctrl+Space toggles transcription and
 Ctrl+Alt+Space starts or stops the daemon. The desktop app remains running when
 the daemon is stopped. Existing custom transcription shortcuts are retained;
 the previous default moves to Ctrl+Space when loading older preferences.
-Click a shortcut to capture new keys, then save. GNOME may ask for approval.
+Click a shortcut, press the keys, then click elsewhere to save. Escape disables it.
+
+On GNOME the app manages only its own two custom-shortcut entries. Other
+shortcuts are preserved. Capture is inline; no GNOME Settings window or portal
+dialog is opened. Other Wayland desktops currently require configuring global
+shortcuts in the desktop itself. X11 uses Wails' direct shortcut registration.

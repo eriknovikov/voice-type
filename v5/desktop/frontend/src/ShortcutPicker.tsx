@@ -1,5 +1,4 @@
 import { useEffect, useState, useRef, type KeyboardEvent } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
 import { api } from "./api";
 // Keep releases and captures in order when switching between the two pickers.
 let captureTransition: Promise<unknown> = Promise.resolve();
@@ -53,109 +52,100 @@ export function ShortcutPicker({
 }: {
   name: string;
   value: string;
-  onChange: (value: string) => void;
+  onChange: (value: string) => Promise<void>;
   onError: (message: string) => void;
 }) {
-  const captureRef = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [ready, setReady] = useState(false);
-  const [pending, setPending] = useState("");
-  useEffect(() => {
-    if (!open) return;
-    let canceled = false;
+  const [pending, setPending] = useState<string | null>(null);
+  const active = useRef(false);
+  const draft = useRef<string | null>(null);
+  const change = useRef(onChange);
+  change.current = onChange;
+  const finish = (next: string | null) => {
+    if (!active.current) return;
+    active.current = false;
+    setEditing(false);
     setReady(false);
-    setPending("");
-    void changeCapture(api.beginShortcutCapture)
-      .then(() => {
-        if (!canceled) setReady(true);
-      })
-      .catch((error) => {
-        onError(String(error));
-        setOpen(false);
-      });
-    return () => {
-      canceled = true;
-      void changeCapture(api.endShortcutCapture).catch((error) =>
-        onError(String(error)),
-      );
-    };
-  }, [open]);
+    void changeCapture(async () => {
+      await api.endShortcutCapture();
+      if (next !== null) await change.current(next);
+    }).catch((error) => onError(String(error)));
+  };
+  useEffect(
+    () => () => {
+      if (active.current) {
+        active.current = false;
+        const next = draft.current;
+        void changeCapture(async () => {
+          await api.endShortcutCapture();
+          if (next !== null) await change.current(next);
+        }).catch((error) => onError(String(error)));
+      }
+    },
+    [],
+  );
   useEffect(() => {
-    const close = () => setOpen(false);
+    const close = () => finish(draft.current);
     window.addEventListener("voice-type-cancel-capture", close);
     return () => window.removeEventListener("voice-type-cancel-capture", close);
   }, []);
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen}>
-      <div className="shortcut-row">
-        <span>{name}</span>
-        <Dialog.Trigger asChild>
-          <button
-            className="shortcut-key"
-            aria-label={`Change ${name.toLowerCase()} shortcut`}
-          >
-            {value.split("+").join(" + ")}
-          </button>
-        </Dialog.Trigger>
-      </div>
-      <Dialog.Portal>
-        <Dialog.Overlay className="dialog-overlay" />
-        <Dialog.Content
-          className="dialog shortcut-dialog"
-          onOpenAutoFocus={(event) => {
-            event.preventDefault();
-            captureRef.current?.focus();
-          }}
-        >
-          <Dialog.Title>{name}</Dialog.Title>
-          <Dialog.Description>
-            {ready
-              ? "Press the keys you want to use."
-              : "Preparing key capture…"}
-          </Dialog.Description>
-          <div
-            ref={captureRef}
-            tabIndex={0}
-            role="group"
-            aria-label="Shortcut keys"
-            className="shortcut-preview"
-            aria-live="polite"
-            onKeyDown={(event) => {
-              if (
-                event.key === "Escape" ||
-                (event.key === "Tab" &&
-                  !event.ctrlKey &&
-                  !event.altKey &&
-                  !event.metaKey)
-              )
-                return;
-              event.preventDefault();
-              event.stopPropagation();
-              if (ready && !event.repeat) {
-                const result = shortcutFromKey(event);
-                if (result) setPending(result);
-              }
-            }}
-          >
-            {pending ? pending.split("+").join(" + ") : "Press a shortcut"}
-          </div>
-          <div className="row">
-            <Dialog.Close asChild>
-              <button>Cancel</button>
-            </Dialog.Close>
-            <button
-              className="primary"
-              disabled={!pending || !ready}
-              onClick={() => {
-                onChange(pending);
-                setOpen(false);
-              }}
-            >
-              Set shortcut
-            </button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <div className="shortcut-row">
+      <span>{name}</span>
+      <button
+        className="shortcut-key"
+        aria-label={`Change ${name.toLowerCase()} shortcut`}
+        aria-pressed={editing}
+        onClick={() => {
+          if (active.current) return;
+          active.current = true;
+          draft.current = null;
+          setPending(null);
+          setEditing(true);
+          setReady(false);
+          void changeCapture(api.beginShortcutCapture)
+            .then(() => {
+              if (active.current) setReady(true);
+            })
+            .catch((error) => {
+              active.current = false;
+              setEditing(false);
+              onError(String(error));
+            });
+        }}
+        onBlur={() => finish(draft.current)}
+        onKeyDown={(event) => {
+          if (!active.current) return;
+          if (event.key === "Tab") {
+            finish(draft.current);
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.key === "Escape") {
+            finish("");
+            return;
+          }
+          if (!ready || event.repeat) return;
+          if (event.key === "Enter" && draft.current !== null) {
+            finish(draft.current);
+            return;
+          }
+          const shortcut = shortcutFromKey(event);
+          if (shortcut) {
+            draft.current = shortcut;
+            setPending(shortcut);
+          }
+        }}
+      >
+        {editing
+          ? (pending?.split("+").join(" + ") ??
+            (ready ? "Press keys…" : "Preparing…"))
+          : value
+            ? value.split("+").join(" + ")
+            : "Disabled"}
+      </button>
+    </div>
   );
 }
