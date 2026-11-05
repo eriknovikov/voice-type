@@ -36,7 +36,7 @@ formatted JSON, preserving unknown fields. An unreadable configuration can be
 reset from the app after saving a private recovery backup beside the original. Separate provider keys are stored
 with mode 0600. `OPENAI_API_KEY` / `OPENROUTER_API_KEY` override saved keys.
 
-Workspace and desktop preferences live under `$XDG_STATE_HOME/voice-type`
+Vocabulary selection and desktop preferences live under `$XDG_STATE_HOME/voice-type`
 (default `~/.local/state/voice-type`). Logs stay at `~/.voice-type-logs.jsonl`,
 with one rotated segment. No transcript history is stored.
 

@@ -84,7 +84,7 @@ afterEach(cleanup);
 describe("desktop workflows", () => {
   it("loads diagnostics only when the logs section is opened", async () => {
     render(<App />);
-    await screen.findByText("Dictation");
+    await screen.findByLabelText("API key");
     expect(api.logs).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Logs" }));
     await screen.findByText("No logs yet");
@@ -93,7 +93,7 @@ describe("desktop workflows", () => {
   it("sends only editable settings and new credentials, without read-only fields", async () => {
     vi.mocked(api.save).mockResolvedValue({ ...settings, revision: "r2" });
     render(<App />);
-    await screen.findByText("Dictation");
+    await screen.findByLabelText("API key");
     fireEvent.click(screen.getByRole("button", { name: "General" }));
     fireEvent.change(screen.getByLabelText("API key"), {
       target: { value: "replacement-key" },
@@ -119,7 +119,7 @@ describe("desktop workflows", () => {
       new Error("settings changed elsewhere; reload before saving"),
     );
     render(<App />);
-    await screen.findByText("Dictation");
+    await screen.findByLabelText("API key");
     fireEvent.click(screen.getByRole("button", { name: "General" }));
     fireEvent.change(screen.getByLabelText("Local control port"), {
       target: { value: "4242" },
@@ -133,31 +133,36 @@ describe("desktop workflows", () => {
   });
   it("stops the microphone test when navigating away from audio", async () => {
     render(<App />);
-    await screen.findByText("Dictation");
+    await screen.findByLabelText("API key");
     fireEvent.click(screen.getByRole("button", { name: "Audio" }));
     await screen.findByText("Test microphone");
-    fireEvent.click(screen.getByRole("button", { name: "Overview" }));
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
     await waitFor(() => expect(api.stopTest).toHaveBeenCalled());
   });
 });
 
-it("tray events navigate to settings and update workspace without discarding edits", async () => {
+it("tray events update the active vocabulary without discarding edits", async () => {
+  vi.mocked(api.settings).mockResolvedValue({
+    ...structuredClone(settings),
+    vocabulary: [...settings.vocabulary, { name: "project", terms: [] }],
+  });
   render(<App />);
-  await screen.findByText("Dictation");
+  await screen.findByLabelText("API key");
   act(() => eventHandlers.get("navigate")?.({ data: ["settings"] }));
   const port = screen.getByLabelText("Local control port") as HTMLInputElement;
   fireEvent.change(port, { target: { value: "4242" } });
   act(() => eventHandlers.get("workspace-changed")?.({ data: ["project"] }));
   expect(port.value).toBe("4242");
-  fireEvent.click(screen.getByRole("button", { name: "Overview" }));
-  expect(screen.getByRole("heading", { name: "project" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "General" }));
+  fireEvent.click(screen.getByRole("button", { name: "Vocabulary" }));
+  expect(screen.getByRole("button", { name: "Use general only" })).toBeTruthy();
   expect(screen.getByText("Unsaved changes")).toBeTruthy();
 });
 
 it("captures inline, saves on blur, and disables with Escape", async () => {
   vi.mocked(api.preferences).mockResolvedValue();
   render(<App />);
-  await screen.findByText("Dictation");
+  await screen.findByLabelText("API key");
   fireEvent.click(screen.getByRole("button", { name: "Keyboard Shortcuts" }));
   const button = screen.getByRole("button", {
     name: "Change transcription toggle shortcut",
@@ -182,4 +187,83 @@ it("captures inline, saves on blur, and disables with Escape", async () => {
     ),
   );
   await waitFor(() => expect(button.textContent).toBe("Disabled"));
+});
+
+it("opens General first and supports creating and using vocabulary without workspace labels", async () => {
+  vi.mocked(api.workspace).mockResolvedValue();
+  vi.mocked(api.save).mockImplementation(async (update) => ({
+    ...settings,
+    ...update,
+    revision: "r2",
+    credentials: settings.credentials,
+    workspace: "",
+  }));
+  render(<App />);
+  await screen.findByLabelText("API key");
+  expect(screen.queryByRole("button", { name: "Overview" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Vocabulary" }));
+  expect(screen.queryByText(/workspace/i)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "New vocabulary" }));
+  fireEvent.change(screen.getByLabelText("Name"), {
+    target: { value: "Medical" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Create vocabulary" }));
+  fireEvent.change(screen.getByLabelText("New term"), {
+    target: { value: "tachycardia" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  expect((screen.getByLabelText("Term 1") as HTMLInputElement).value).toBe(
+    "tachycardia",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Use this vocabulary" }));
+  await waitFor(() => expect(api.workspace).toHaveBeenCalledWith("Medical"));
+  expect(api.save).toHaveBeenCalledWith(
+    expect.objectContaining({
+      vocabulary: expect.arrayContaining([
+        { name: "Medical", terms: ["tachycardia"], original_name: "Medical" },
+      ]),
+    }),
+  );
+});
+
+it("renames and deletes a vocabulary while preserving General terms", async () => {
+  vi.mocked(api.settings).mockResolvedValue({
+    ...structuredClone(settings),
+    vocabulary: [...settings.vocabulary, { name: "Medical", terms: ["ECG"] }],
+  });
+  vi.mocked(api.save).mockResolvedValue({ ...settings, revision: "r2" });
+  render(<App />);
+  await screen.findByLabelText("API key");
+  fireEvent.click(screen.getByRole("button", { name: "Vocabulary" }));
+  fireEvent.click(screen.getByRole("button", { name: /^Medical/ }));
+  fireEvent.change(screen.getByLabelText("Vocabulary name"), {
+    target: { value: "Health" },
+  });
+  expect((screen.getByLabelText("Term 1") as HTMLInputElement).value).toBe(
+    "ECG",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Delete vocabulary" }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  await waitFor(() =>
+    expect((screen.getByLabelText("Term 1") as HTMLInputElement).value).toBe(
+      "Wails",
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await waitFor(() =>
+    expect(api.save).toHaveBeenCalledWith(
+      expect.objectContaining({ vocabulary: settings.vocabulary }),
+    ),
+  );
+});
+it("saves login startup immediately without a separate save step", async () => {
+  vi.mocked(api.preferences).mockResolvedValue();
+  render(<App />);
+  await screen.findByLabelText("API key");
+  fireEvent.click(screen.getByRole("switch", { name: "Start at login" }));
+  await waitFor(() =>
+    expect(api.preferences).toHaveBeenCalledWith(
+      expect.objectContaining({ autostart: true, setup_complete: true }),
+    ),
+  );
 });

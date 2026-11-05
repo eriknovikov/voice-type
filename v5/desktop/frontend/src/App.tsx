@@ -1,14 +1,11 @@
 import React, { useEffect, useState } from "react";
 import {
-  Activity,
   AudioLines,
   BookOpen,
   Check,
-  Circle,
   FileText,
   Mic,
   Keyboard,
-  Plus,
   RefreshCw,
   Settings2,
   Trash2,
@@ -28,11 +25,10 @@ import "./style.css";
 import { MicrophoneMeter } from "./MicrophoneMeter";
 import { Dropdown } from "./Dropdown";
 import { ShortcutPicker } from "./ShortcutPicker";
+import { VocabularyEditor } from "./VocabularyEditor";
 
-type Tab =
-  "overview" | "settings" | "audio" | "shortcuts" | "vocabulary" | "logs";
+type Tab = "settings" | "audio" | "shortcuts" | "vocabulary" | "logs";
 const tabs = [
-  { id: "overview", label: "Overview", icon: Activity },
   { id: "settings", label: "General", icon: Settings2 },
   { id: "audio", label: "Audio", icon: Mic },
   { id: "shortcuts", label: "Keyboard Shortcuts", icon: Keyboard },
@@ -42,7 +38,7 @@ const tabs = [
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 export function App() {
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>("settings");
   const [settings, setSettings] = useState<Settings | null>(null);
   const [info, setInfo] = useState<DesktopInfo | null>(null);
   const [status, setStatus] = useState<Status>({
@@ -58,7 +54,6 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState("general");
-  const [newList, setNewList] = useState("");
   const [logs, setLogs] = useState<LogRecord[]>([]);
   const [query, setQuery] = useState("");
   const [outcome, setOutcome] = useState("all");
@@ -84,6 +79,9 @@ export function App() {
     if (!s.vocabulary.some((v) => v.name === "general"))
       s.vocabulary.unshift({ name: "general", terms: [] });
     setSettings(s);
+    setSelected((current) =>
+      s.vocabulary.some((item) => item.name === current) ? current : "general",
+    );
     setInfo(i);
     setKeys({});
     setDirty(false);
@@ -250,11 +248,28 @@ export function App() {
     );
   };
   const credential = settings?.credentials[settings.provider];
+  const descriptions: Record<Tab, string> = {
+    settings: "Provider, API key, and desktop preferences.",
+    audio: "Choose your microphone and check the input level.",
+    shortcuts: "Set the keys for recording and the background service.",
+    vocabulary: "Add names and terms to improve transcription.",
+    logs: "Review dictation activity and errors. Transcribed text is not stored.",
+  };
+  const activateVocabulary = () =>
+    void run(async () => {
+      if (dirty) await save();
+      const name = selected.trim() === "general" ? "" : selected.trim();
+      await api.workspace(name);
+      setSettings((current) =>
+        current ? { ...current, workspace: name } : current,
+      );
+      setNotice("Vocabulary updated.");
+    });
   return (
     <div className="app">
       <aside>
         <div className="brand">
-          <img src="/icon.png" alt="" className="brand-icon" />
+          <img src="/icon.png" alt="" />
           <span>Voice Type</span>
         </div>
         <nav aria-label="Main navigation">
@@ -262,64 +277,58 @@ export function App() {
             <button
               key={id}
               className={tab === id ? "active" : ""}
+              aria-current={tab === id ? "page" : undefined}
               onClick={() => navigate(id)}
             >
-              <Icon size={18} />
+              <Icon size={17} />
               {label}
             </button>
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <span className={`dot ${status.state}`} />
-          <span>
-            {status.state === "disconnected"
-              ? "Daemon offline"
-              : status.state === "idle"
-                ? status.error
-                  ? "Setup needed"
-                  : "Ready"
-                : status.state}
-          </span>
           <small>v{info?.version ?? "—"}</small>
         </div>
       </aside>
-      <main>
+      <main aria-busy={busy}>
         <header>
           <div>
-            <h1>{tabs.find((t) => t.id === tab)?.label}</h1>
+            <h1>{tabs.find((item) => item.id === tab)?.label}</h1>
+            <p>{descriptions[tab]}</p>
           </div>
-          <div className="window-actions">
-            <span className={`status ${status.state}`}>
-              <span className={`dot ${status.state}`} />
-              {status.state}
-            </span>
-            <button
-              className="window-close"
-              aria-label="Close window"
-              title="Hide to background"
-              onClick={() => void Window.Close()}
-            >
-              <X size={18} />
-            </button>
-          </div>
+          <span className={`status ${status.state}`}>
+            <span className={`dot ${status.state}`} />
+            {status.state === "disconnected" ? "Offline" : status.state}
+          </span>
         </header>
+        <button
+          className="window-close icon-button"
+          aria-label="Close window"
+          title="Hide to background"
+          onClick={() => void Window.Close()}
+        >
+          <X size={17} />
+        </button>
         {error && (
           <div className="alert error" role="alert">
-            {error}
-            <button aria-label="Dismiss error" onClick={() => setError("")}>
-              <X size={16} />
+            <span>{error}</span>
+            <button
+              className="icon-button"
+              aria-label="Dismiss error"
+              onClick={() => setError("")}
+            >
+              <X size={15} />
             </button>
           </div>
         )}
         {notice && (
           <div className="alert success" role="status">
-            <Check size={16} />
+            <Check size={15} />
             {notice}
           </div>
         )}
         {status.state === "disconnected" && (
           <div className="alert">
-            Voice Type is not connected.
+            <span>The background service is stopped.</span>
             <button
               disabled={busy}
               onClick={() =>
@@ -329,15 +338,15 @@ export function App() {
                 })
               }
             >
-              Reconnect
+              Start service
             </button>
           </div>
         )}
         {!settings ? (
           <div className="empty">
-            <AudioLines size={40} />
+            <AudioLines size={28} />
             <h2>Connecting</h2>
-            <p>Waiting for the daemon.</p>
+            <p>Waiting for the background service.</p>
             {error && status.state !== "disconnected" && (
               <button
                 onClick={() =>
@@ -346,511 +355,350 @@ export function App() {
                     setConfirm({
                       title: "Reset unreadable configuration?",
                       description:
-                        "Your original file will be preserved in a private backup beside it. Provider keys and vocabulary must be set up again. A valid configuration will never be reset.",
+                        "A private backup will preserve your original file. You will need to enter your keys and vocabulary again.",
                       run: async () => {
                         await api.resetBrokenSettings(revision);
                         await load();
                         setNotice(
-                          "Configuration reset. Your original file is preserved in a private recovery backup.",
+                          "Configuration reset. A backup of the original file was saved.",
                         );
                       },
                     });
                   })
                 }
               >
-                Back up and reset broken settings
+                Back up and reset settings
               </button>
             )}
           </div>
         ) : (
-          <>
-            {tab === "overview" && (
-              <>
-                <section className="hero">
-                  <h2>
-                    {status.state === "recording"
-                      ? "Recording"
-                      : status.state === "transcribing"
-                        ? "Transcribing"
-                        : "Dictation"}
-                  </h2>
-                  <p>Press your shortcut to start or stop recording.</p>
-                  <button
-                    className="primary large"
-                    disabled={
-                      busy ||
-                      !["idle", "recording"].includes(status.state) ||
-                      (status.state === "idle" && !!status.error)
-                    }
-                    onClick={() =>
-                      void run(async () => {
-                        await api.toggle();
-                      })
-                    }
-                  >
-                    <Mic size={17} />
-                    {status.state === "recording"
-                      ? "Stop dictation"
-                      : "Start dictation"}
-                  </button>
-                  <small>
-                    For insertion into another app, use your global shortcut.
-                  </small>
-                </section>
-                <div className="grid">
-                  <section className="card">
-                    <span className="eyebrow">PROVIDER</span>
-                    <h3>
-                      {settings.provider === "openai" ? "OpenAI" : "OpenRouter"}
-                    </h3>
-                    <p>
-                      {credential?.environment
-                        ? "API key from environment"
-                        : credential?.saved
-                          ? "API key configured"
-                          : "API key missing"}
-                    </p>
-                    <button onClick={() => navigate("settings")}>
-                      Provider settings →
-                    </button>
-                  </section>
-                  <section className="card">
-                    <span className="eyebrow">VOCABULARY</span>
-                    <h3>{settings.workspace || "General only"}</h3>
-                    <p>General terms and the selected workspace.</p>
-                    <button onClick={() => navigate("vocabulary")}>
-                      Manage vocabulary →
-                    </button>
-                  </section>
-                </div>
-                {!info?.preferences.setup_complete && (
-                  <section className="card setup">
-                    <h3>Setup</h3>
-                    <p>
-                      1. Add your API key in General.
-                      <br />
-                      2. Choose and test your microphone.
-                      <br />
-                      3. Set your keyboard shortcuts.
-                    </p>
-                    <button
-                      className="primary"
-                      onClick={() =>
-                        navigate(
-                          credential?.saved || credential?.environment
-                            ? "audio"
-                            : "settings",
-                        )
-                      }
-                    >
-                      Continue setup
-                    </button>
-                  </section>
-                )}
-                {status.error && <div className="alert">{status.error}</div>}
-              </>
-            )}
+          <div className="page-content">
             {tab === "settings" && (
               <>
-                <p className="intro">Select a provider and add your API key.</p>
-                <section className="card">
-                  <h3>Transcription provider</h3>
-                  <div className="provider-options">
-                    {["openai", "openrouter"].map((p) => (
-                      <button
-                        className={settings.provider === p ? "selected" : ""}
-                        key={p}
-                        onClick={() => patch({ provider: p })}
-                      >
-                        <Circle size={16} />
-                        <strong>
-                          {p === "openai" ? "OpenAI" : "OpenRouter"}
-                        </strong>
-                        <span>
-                          {p === "openai" ? "OpenAI API" : "OpenRouter API"}
-                        </span>
-                      </button>
-                    ))}
+                <section className="settings-section">
+                  <div className="section-heading">
+                    <h2>Transcription</h2>
+                    <p>Use your OpenAI or OpenRouter account.</p>
                   </div>
-                  <label htmlFor="key">API key</label>
-                  <input
-                    id="key"
-                    type="password"
-                    autoComplete="off"
-                    spellCheck={false}
-                    value={keys[settings.provider] ?? ""}
-                    placeholder={
-                      credential?.saved
-                        ? "Enter a new key to replace the saved key."
-                        : "Paste your API key"
-                    }
-                    onChange={(e) => {
-                      setKeys({ ...keys, [settings.provider]: e.target.value });
-                      setDirty(true);
-                    }}
-                  />
-                  <p className="hint">
-                    {credential?.environment
-                      ? "An environment variable currently overrides the saved key."
-                      : credential?.saved
-                        ? "API key saved."
-                        : "A key is required to transcribe audio."}
-                  </p>
-                  {credential?.saved && (
-                    <button
-                      className="danger-text"
-                      onClick={() => {
-                        setKeys({ ...keys, [settings.provider]: "" });
-                        setDirty(true);
-                        setNotice("Key removal will apply when you save.");
-                      }}
-                    >
-                      Remove saved key
-                    </button>
-                  )}
+                  <div className="settings-group">
+                    <div className="setting-row">
+                      <div className="setting-label">
+                        <label htmlFor="provider">Provider</label>
+                        <p>Used for speech-to-text requests.</p>
+                      </div>
+                      <div className="setting-control">
+                        <Dropdown
+                          id="provider"
+                          label="Provider"
+                          value={settings.provider}
+                          disabled={busy}
+                          onChange={(value) => patch({ provider: value })}
+                          options={[
+                            { value: "openai", label: "OpenAI" },
+                            { value: "openrouter", label: "OpenRouter" },
+                          ]}
+                        />
+                      </div>
+                    </div>
+                    <div className="setting-row">
+                      <div className="setting-label">
+                        <label htmlFor="key">API key</label>
+                        <p>
+                          {credential?.environment
+                            ? "An environment variable overrides this key."
+                            : credential?.saved
+                              ? "A key is saved for this provider."
+                              : "Required to transcribe audio."}
+                        </p>
+                      </div>
+                      <div className="setting-control">
+                        <input
+                          id="key"
+                          type="password"
+                          autoComplete="off"
+                          spellCheck={false}
+                          disabled={busy}
+                          value={keys[settings.provider] ?? ""}
+                          placeholder={
+                            credential?.saved
+                              ? "Replace saved key"
+                              : "Paste your API key"
+                          }
+                          onChange={(event) => {
+                            setKeys({
+                              ...keys,
+                              [settings.provider]: event.target.value,
+                            });
+                            setDirty(true);
+                          }}
+                        />
+                        {credential?.saved && (
+                          <button
+                            className="text-button danger-text"
+                            disabled={busy}
+                            onClick={() => {
+                              setKeys({ ...keys, [settings.provider]: "" });
+                              setDirty(true);
+                              setNotice("Key will be removed when you save.");
+                            }}
+                          >
+                            Remove saved key
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 </section>
-                <section className="card">
-                  <h3>Daemon</h3>
-                  <label htmlFor="port">Local control port</label>
-                  <input
-                    id="port"
-                    type="number"
-                    min="1024"
-                    max="65535"
-                    value={settings.port}
-                    onChange={(e) => patch({ port: Number(e.target.value) })}
-                  />
-                  <p className="hint">
-                    Existing desktop shortcuts use this port. Port changes
-                    require a restart.
-                  </p>
-                  <button
-                    disabled={busy || status.state !== "idle" || dirty}
-                    onClick={() =>
-                      void run(async () => {
-                        await api.restart();
-                        setNotice("Daemon restarted.");
-                      })
-                    }
-                  >
-                    <RefreshCw size={15} />
-                    Restart daemon
-                  </button>
-                </section>
-              </>
-            )}
-            {tab === "settings" && info && (
-              <section className="card">
-                <h3>Desktop</h3>
-                <label className="checkbox">
-                  <input
-                    type="checkbox"
-                    checked={info.preferences.autostart}
-                    onChange={(event) =>
-                      setInfo({
-                        ...info,
-                        preferences: {
-                          ...info.preferences,
-                          autostart: event.target.checked,
-                        },
-                      })
-                    }
-                  />
-                  Start at login
-                </label>
-                <button
-                  disabled={busy}
-                  onClick={() =>
-                    void run(async () => {
-                      const saved = await api.info();
-                      await api.preferences({
-                        ...saved.preferences,
-                        autostart: info.preferences.autostart,
-                      });
-                      setInfo((current) =>
-                        current
-                          ? {
-                              ...current,
-                              preferences: {
-                                ...current.preferences,
-                                autostart: info.preferences.autostart,
-                              },
-                            }
-                          : current,
-                      );
-                      setNotice("Startup preference saved.");
-                    })
-                  }
-                >
-                  Save startup preference
-                </button>
-                {!info.tray_available && (
-                  <p className="hint">
-                    To show the tray icon on GNOME, enable the AppIndicator
-                    extension.
-                  </p>
+                {info && (
+                  <section className="settings-section">
+                    <div className="section-heading">
+                      <h2>Desktop</h2>
+                    </div>
+                    <div className="settings-group">
+                      <div className="setting-row">
+                        <div className="setting-label">
+                          <label htmlFor="autostart">Start at login</label>
+                          <p>Run Voice Type in the background.</p>
+                        </div>
+                        <div className="setting-control align-end">
+                          <input
+                            id="autostart"
+                            className="switch"
+                            type="checkbox"
+                            role="switch"
+                            checked={info.preferences.autostart}
+                            disabled={busy}
+                            onChange={(event) => {
+                              const enabled = event.target.checked;
+                              void run(async () => {
+                                const saved = await api.info();
+                                await api.preferences({
+                                  ...saved.preferences,
+                                  autostart: enabled,
+                                  setup_complete: true,
+                                });
+                                setInfo((current) =>
+                                  current
+                                    ? {
+                                        ...current,
+                                        preferences: {
+                                          ...current.preferences,
+                                          autostart: enabled,
+                                        },
+                                      }
+                                    : current,
+                                );
+                              });
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    {!info.tray_available && (
+                      <p className="quiet section-note">
+                        GNOME needs the AppIndicator extension to show the tray
+                        icon.
+                      </p>
+                    )}
+                  </section>
                 )}
-              </section>
+                <details className="advanced">
+                  <summary>Advanced</summary>
+                  <div className="settings-group">
+                    <div className="setting-row">
+                      <div className="setting-label">
+                        <label htmlFor="port">Local control port</label>
+                        <p>Port changes require a service restart.</p>
+                      </div>
+                      <div className="setting-control">
+                        <input
+                          id="port"
+                          type="number"
+                          min="1024"
+                          max="65535"
+                          value={settings.port}
+                          disabled={busy}
+                          onChange={(event) =>
+                            patch({ port: Number(event.target.value) })
+                          }
+                        />
+                        <button
+                          disabled={busy || status.state !== "idle" || dirty}
+                          onClick={() =>
+                            void run(async () => {
+                              await api.restart();
+                              setNotice("Service restarted.");
+                            })
+                          }
+                        >
+                          <RefreshCw size={14} />
+                          Restart service
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </details>
+              </>
             )}
             {tab === "audio" && (
-              <>
-                <section className="card">
-                  <h3>Microphone</h3>
-                  <label htmlFor="microphone">Input device</label>
-                  <Dropdown
-                    id="microphone"
-                    label="Input device"
-                    value={settings.microphone}
-                    disabled={busy || status.state === "testing"}
-                    onChange={(value) => patch({ microphone: value })}
-                    options={[
-                      { value: "", label: "System default" },
-                      ...(settings.microphone &&
-                      !sources.some(
-                        (source) => source.id === settings.microphone,
-                      )
-                        ? [
-                            {
-                              value: settings.microphone,
-                              label: `Unavailable: ${settings.microphone}`,
-                            },
-                          ]
-                        : []),
-                      ...sources.map((source) => ({
-                        value: source.id,
-                        label: source.name,
-                      })),
-                    ]}
-                  />
-
-                  <MicrophoneMeter active={status.state === "testing"} />
-                  <div className="row">
-                    <button
-                      disabled={
-                        busy || !["idle", "testing"].includes(status.state)
-                      }
-                      onClick={() =>
-                        void run(async () => {
-                          if (status.state === "testing") {
-                            await api.stopTest();
-                            setStatus((current) => ({
-                              ...current,
-                              state: "idle",
-                              level: 0,
-                            }));
-                          } else {
-                            await api.startTest(settings.microphone);
-                            setStatus((current) => ({
-                              ...current,
-                              state: "testing",
-                              level: 0,
-                            }));
-                          }
-                        })
-                      }
-                    >
-                      {status.state === "testing"
-                        ? "Stop test"
-                        : "Test microphone"}
-                    </button>
-                    <button
-                      disabled={busy}
-                      onClick={() =>
-                        void run(async () =>
-                          setSources(await api.microphones()),
-                        )
-                      }
-                    >
-                      <RefreshCw size={15} />
-                      Refresh devices
-                    </button>
+              <section className="settings-section">
+                <div className="settings-group">
+                  <div className="setting-row">
+                    <div className="setting-label">
+                      <label htmlFor="microphone">Input device</label>
+                      <p>Choose a microphone or use the system default.</p>
+                    </div>
+                    <div className="setting-control">
+                      <Dropdown
+                        id="microphone"
+                        label="Input device"
+                        value={settings.microphone}
+                        disabled={busy || status.state === "testing"}
+                        onChange={(value) => patch({ microphone: value })}
+                        options={[
+                          { value: "", label: "System default" },
+                          ...(settings.microphone &&
+                          !sources.some(
+                            (source) => source.id === settings.microphone,
+                          )
+                            ? [
+                                {
+                                  value: settings.microphone,
+                                  label: `Unavailable: ${settings.microphone}`,
+                                },
+                              ]
+                            : []),
+                          ...sources.map((source) => ({
+                            value: source.id,
+                            label: source.name,
+                          })),
+                        ]}
+                      />
+                      <button
+                        className="text-button"
+                        disabled={busy}
+                        onClick={() =>
+                          void run(async () =>
+                            setSources(await api.microphones()),
+                          )
+                        }
+                      >
+                        <RefreshCw size={13} />
+                        Refresh devices
+                      </button>
+                    </div>
                   </div>
-                  <p className="hint">
-                    Audio is not uploaded. The test stops after 60 seconds.
-                  </p>
-                </section>
-              </>
+                  <div className="setting-row">
+                    <div className="setting-label">
+                      <h3>Input level</h3>
+                      <p>The test stays on this device.</p>
+                    </div>
+                    <div className="setting-control">
+                      <MicrophoneMeter active={status.state === "testing"} />
+                      <div className="meter-actions">
+                        <button
+                          disabled={
+                            busy || !["idle", "testing"].includes(status.state)
+                          }
+                          onClick={() =>
+                            void run(async () => {
+                              if (status.state === "testing") {
+                                await api.stopTest();
+                                setStatus((current) => ({
+                                  ...current,
+                                  state: "idle",
+                                  level: 0,
+                                }));
+                              } else {
+                                await api.startTest(settings.microphone);
+                                setStatus((current) => ({
+                                  ...current,
+                                  state: "testing",
+                                  level: 0,
+                                }));
+                              }
+                            })
+                          }
+                        >
+                          {status.state === "testing"
+                            ? "Stop test"
+                            : "Test microphone"}
+                        </button>
+                        <span className="quiet">Stops after 60 seconds</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
             )}
             {tab === "shortcuts" && info && (
-              <section className="card">
-                <ShortcutPicker
-                  name="Transcription toggle"
-                  value={info.preferences.shortcut}
-                  onError={setError}
-                  onChange={(value) => saveShortcut("shortcut", value)}
-                />
-                <ShortcutPicker
-                  name="Daemon toggle"
-                  value={info.preferences.daemon_shortcut}
-                  onError={setError}
-                  onChange={(value) => saveShortcut("daemon_shortcut", value)}
-                />
-                <p className="hint">
-                  Click a shortcut and press the keys. Click elsewhere to save.
-                  Escape disables it.
+              <section className="settings-section">
+                <div className="settings-group shortcut-settings">
+                  <ShortcutPicker
+                    name="Transcription toggle"
+                    value={info.preferences.shortcut}
+                    onError={setError}
+                    onChange={(value) => saveShortcut("shortcut", value)}
+                  />
+                  <ShortcutPicker
+                    name="Daemon toggle"
+                    value={info.preferences.daemon_shortcut}
+                    onError={setError}
+                    onChange={(value) => saveShortcut("daemon_shortcut", value)}
+                  />
+                </div>
+                <p className="quiet section-note">
+                  Click a shortcut, press the keys, then click elsewhere to
+                  save. Escape disables it.
                 </p>
                 {info.shortcut_error && (
-                  <p className="alert error">{info.shortcut_error}</p>
+                  <div className="alert error" role="alert">
+                    {info.shortcut_error}
+                  </div>
                 )}
               </section>
             )}
             {tab === "vocabulary" && (
-              <>
-                <p className="intro">
-                  Add names and terms to improve transcription.
-                </p>
-                <section className="card">
-                  <label htmlFor="workspace">Active workspace</label>
-                  <Dropdown
-                    id="workspace"
-                    label="Active workspace"
-                    value={settings.workspace}
-                    disabled={dirty || busy}
-                    onChange={(value) =>
-                      void run(async () => {
-                        await api.workspace(value);
-                        setSettings({ ...settings, workspace: value });
-                      })
-                    }
-                    options={[
-                      { value: "", label: "General only" },
-                      ...settings.vocabulary
-                        .filter((list) => list.name !== "general")
-                        .map((list) => ({
-                          value: list.name,
-                          label: list.name,
-                        })),
-                    ]}
-                  />
-
-                  <p className="hint">
-                    General terms are always included. Save edits before
-                    switching workspace.
-                  </p>
-                </section>
-                <div className="vocab-editor">
-                  <section className="card lists">
-                    {settings.vocabulary.map((v) => (
-                      <button
-                        key={v.name}
-                        className={selected === v.name ? "active" : ""}
-                        onClick={() => setSelected(v.name)}
-                      >
-                        <BookOpen size={15} />
-                        {v.name}
-                        <small>{v.terms.filter(Boolean).length}</small>
-                      </button>
-                    ))}
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        const name = newList.trim();
-                        if (
-                          !name ||
-                          settings.vocabulary.some((v) => v.name === name)
-                        ) {
-                          setError("Choose a unique list name.");
-                          return;
-                        }
-                        patch({
-                          vocabulary: [
-                            ...settings.vocabulary,
-                            { name, terms: [] },
-                          ],
-                        });
-                        setSelected(name);
-                        setNewList("");
-                      }}
-                    >
-                      <input
-                        aria-label="New vocabulary list name"
-                        placeholder="New workspace…"
-                        value={newList}
-                        onChange={(e) => setNewList(e.target.value)}
-                      />
-                      <button aria-label="Add vocabulary list" type="submit">
-                        <Plus size={16} />
-                      </button>
-                    </form>
-                  </section>
-                  <section className="card terms">
-                    {list ? (
-                      <>
-                        <div className="row">
-                          <h3>
-                            {selected === "general"
-                              ? "General vocabulary"
-                              : selected}
-                          </h3>
-                          {selected !== "general" && (
-                            <button
-                              className="icon danger-text"
-                              aria-label="Delete vocabulary list"
-                              onClick={() =>
-                                setConfirm({
-                                  title: `Delete ${selected}?`,
-                                  description:
-                                    "The list and its terms will be removed when you save.",
-                                  run: async () => {
-                                    patch({
-                                      vocabulary: settings.vocabulary.filter(
-                                        (v) => v.name !== selected,
-                                      ),
-                                    });
-                                    setSelected("general");
-                                  },
-                                })
-                              }
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          )}
-                        </div>
-                        {selected !== "general" && (
-                          <>
-                            <label htmlFor="list-name">Workspace name</label>
-                            <input
-                              id="list-name"
-                              value={selected}
-                              onChange={(e) =>
-                                updateList(e.target.value, list.terms)
-                              }
-                            />
-                          </>
-                        )}
-                        <label htmlFor="terms">Terms — one per line</label>
-                        <textarea
-                          id="terms"
-                          rows={12}
-                          value={list.terms.join("\n")}
-                          placeholder={"Wails\nOpenRouter\nYour project name"}
-                          onChange={(e) =>
-                            updateList(selected, e.target.value.split(/\r?\n/))
-                          }
-                        />
-                        <p className="hint">
-                          Short, specific terms work best. Duplicates are
-                          removed when saved.
-                        </p>
-                      </>
-                    ) : (
-                      <p>Select a vocabulary list.</p>
-                    )}
-                  </section>
-                </div>
-              </>
+              <VocabularyEditor
+                lists={settings.vocabulary}
+                selected={selected}
+                active={settings.workspace}
+                busy={busy}
+                onSelect={setSelected}
+                onCreate={(name) => {
+                  patch({
+                    vocabulary: [...settings.vocabulary, { name, terms: [] }],
+                  });
+                  setSelected(name);
+                }}
+                onRename={(name) => updateList(name, list?.terms ?? [])}
+                onTerms={(terms) => updateList(selected, terms)}
+                onActivate={activateVocabulary}
+                onDelete={() =>
+                  setConfirm({
+                    title: `Delete ${selected}?`,
+                    description:
+                      "This vocabulary and its terms will be removed when you save.",
+                    run: async () => {
+                      patch({
+                        vocabulary: settings.vocabulary.filter(
+                          (item) => item.name !== selected,
+                        ),
+                      });
+                      setSelected("general");
+                    },
+                  })
+                }
+              />
             )}
             {tab === "logs" && (
               <>
-                <p className="intro">
-                  Dictation logs. Transcribed text is not stored here.
-                </p>
                 <div className="log-tools">
                   <input
                     aria-label="Search logs"
-                    placeholder="Search diagnostics…"
+                    placeholder="Search logs"
                     value={query}
-                    onChange={(e) => setQuery(e.target.value)}
+                    onChange={(event) => setQuery(event.target.value)}
                   />
                   <Dropdown
                     label="Filter logs"
@@ -862,19 +710,19 @@ export function App() {
                       { value: "ok", label: "Successful" },
                     ]}
                   />
-
                   <button disabled={!displayed.length} onClick={exportLogs}>
                     Export
                   </button>
                   <button
-                    className="icon"
+                    className="icon-button"
+                    title="Clear logs"
                     aria-label="Clear logs"
                     disabled={!logs.length}
                     onClick={() =>
                       setConfirm({
-                        title: "Clear diagnostic logs?",
+                        title: "Clear logs?",
                         description:
-                          "This removes the current and rotated logs from this device.",
+                          "Current and rotated logs will be removed from this device.",
                         run: async () => {
                           await api.clearLogs();
                           setLogs([]);
@@ -885,18 +733,18 @@ export function App() {
                     <Trash2 size={16} />
                   </button>
                 </div>
-                <section className="card log-list">
+                <section className="log-list">
                   {displayed.length ? (
-                    displayed.map((row, i) => (
-                      <details key={`${row.timestamp}-${i}`}>
+                    displayed.map((row, index) => (
+                      <details key={`${row.timestamp}-${index}`}>
                         <summary>
                           <span
                             className={`log-icon ${row.outcome === "ok" ? "ok" : "failed"}`}
                           >
                             {row.outcome === "ok" ? (
-                              <Check size={15} />
+                              <Check size={14} />
                             ) : (
-                              <X size={15} />
+                              <X size={14} />
                             )}
                           </span>
                           <span>
@@ -904,7 +752,7 @@ export function App() {
                             <small>
                               {row.timestamp
                                 ? new Date(row.timestamp).toLocaleString()
-                                : "Older entry · time unavailable"}{" "}
+                                : "Time unavailable"}{" "}
                               · {row.provider}
                             </small>
                           </span>
@@ -931,31 +779,37 @@ export function App() {
                     ))
                   ) : (
                     <div className="empty">
-                      <FileText size={32} />
-                      <h3>
-                        {logs.length ? "No matching entries" : "No logs yet"}
-                      </h3>
-                      <p>Diagnostics from your dictations will appear here.</p>
+                      <FileText size={26} />
+                      <h2>
+                        {logs.length ? "No matching logs" : "No logs yet"}
+                      </h2>
+                      <p>
+                        {logs.length
+                          ? "Try another search or filter."
+                          : "Dictation activity will appear here."}
+                      </p>
                     </div>
                   )}
                 </section>
               </>
             )}
-          </>
+          </div>
         )}
         {dirty && (
           <footer>
             <span>Unsaved changes</span>
-            <button disabled={busy} onClick={() => void run(load)}>
-              Discard
-            </button>
-            <button
-              className="primary"
-              disabled={busy}
-              onClick={() => void run(save)}
-            >
-              {busy ? "Saving…" : "Save changes"}
-            </button>
+            <div className="actions">
+              <button disabled={busy} onClick={() => void run(load)}>
+                Discard
+              </button>
+              <button
+                className="primary"
+                disabled={busy}
+                onClick={() => void run(save)}
+              >
+                {busy ? "Saving…" : "Save changes"}
+              </button>
+            </div>
           </footer>
         )}
       </main>
@@ -970,7 +824,7 @@ export function App() {
           <Dialog.Content className="dialog">
             <Dialog.Title>{confirm?.title}</Dialog.Title>
             <Dialog.Description>{confirm?.description}</Dialog.Description>
-            <div className="row">
+            <div className="dialog-actions">
               <Dialog.Close asChild>
                 <button>Cancel</button>
               </Dialog.Close>
