@@ -705,3 +705,32 @@ nav button {
   font-size: 21px;
   margin: 20px 0;
 }
+
+/* Keep WebKit's scrollbar narrow, including while hovered or dragged. */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #494c50;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background: #666a70;
+}
+::-webkit-scrollbar-button {
+  display: none;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #494c50 transparent;
+  }
+}
