@@ -148,7 +148,7 @@ func (d *daemon) managementRoutes() http.Handler {
 		if d.testRecorder != nil {
 			level = d.testRecorder.Level()
 		}
-		writeJSON(w, 200, map[string]any{"state": d.state.String(), "error": d.configError, "port": d.cfg.Port, "level": level})
+		writeJSON(w, 200, map[string]any{"state": d.state.String(), "last_attempt_failed": d.lastAttemptFailed, "error": d.configError, "port": d.cfg.Port, "level": level})
 	})
 	mux.HandleFunc("GET /microphones", func(w http.ResponseWriter, r *http.Request) {
 		value, err := ListAudioSources()

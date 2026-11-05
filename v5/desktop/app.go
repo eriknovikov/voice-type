@@ -40,6 +40,9 @@ func trayIcon(state string) []byte {
 	if state == "disconnected" || state == "setup needed" {
 		c = color.RGBA{145, 150, 158, 255}
 	}
+	if state == "error" {
+		c = color.RGBA{245, 110, 106, 255}
+	}
 	if state == "recording" {
 		c = color.RGBA{116, 195, 170, 255}
 	} else if state == "transcribing" {
@@ -120,7 +123,11 @@ func Run(version string) error {
 		})
 		tray.SetMenu(menu)
 		tray.SetIcon(trayIcon(state))
-		tray.SetTooltip("Voice Type · " + statusLabel)
+		tooltip := "Voice Type · " + statusLabel
+		if state == "error" {
+			tooltip = "Voice Type · Dictation failed — open settings to view logs"
+		}
+		tray.SetTooltip(tooltip)
 	}
 	updateMenu("idle")
 
@@ -140,10 +147,7 @@ func Run(version string) error {
 			}
 			state := "disconnected"
 			if status, err := b.Status(); err == nil {
-				state = status.State
-				if state == "idle" && status.Error != "" {
-					state = "setup needed"
-				}
+				state = trayState(status)
 			}
 			if state != last {
 				last = state
@@ -152,4 +156,17 @@ func Run(version string) error {
 		}
 	}()
 	return app.Run()
+}
+
+func trayState(status Status) string {
+	if status.State == "recording" || status.State == "transcribing" {
+		return status.State
+	}
+	if status.LastAttemptFailed {
+		return "error"
+	}
+	if status.State == "idle" && status.Error != "" {
+		return "setup needed"
+	}
+	return status.State
 }
