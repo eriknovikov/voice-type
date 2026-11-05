@@ -605,65 +605,22 @@ header p {
   align-items: center;
   gap: 8px;
 }
-.add-term {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 14px;
+.vocabulary-terms-hint {
+  margin: 4px 0 10px;
+  font-size: 12px;
 }
-.add-term input {
-  flex: 1;
-  min-width: 0;
-}
-.term-list {
-  max-height: calc(100vh - 340px);
-  min-height: 120px;
-  overflow: auto;
-}
-.term-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border-bottom: 1px solid #2b2e33;
-  min-height: 40px;
-}
-.term-row:last-child {
-  border-bottom: 0;
-}
-.term-row input {
-  flex: 1;
-  border-color: transparent;
-  background: transparent;
-  padding: 8px 4px;
-  border-radius: 3px;
-}
-.term-row input:hover {
-  border-color: #41464d;
-}
-.term-row .icon-button {
-  opacity: 0;
-}
-.term-row:hover .icon-button,
-.term-row:focus-within .icon-button {
-  opacity: 1;
+.vocabulary-terms {
+  display: block;
+  width: 100%;
+  min-height: 240px;
+  line-height: 1.8;
+  resize: vertical;
 }
 .term-help {
   padding-top: 16px;
   border-top: 1px solid var(--line);
   margin-top: 12px;
   font-size: 11px;
-}
-.empty-terms {
-  padding: 25px 12px;
-  text-align: center;
-  color: #68727a;
-}
-.empty-terms h3 {
-  margin: 10px 0 5px;
-  color: #b3bac3;
-}
-.empty-terms p {
-  font-size: 12px;
 }
 .alert {
   max-width: 900px;
