@@ -132,6 +132,9 @@ func TestDesktopPipeline(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				if !d.lastAttemptFailed {
+					t.Fatal("insertion failure did not latch tray error")
+				}
 				if logs[0].Outcome != "insertion_error" {
 					t.Fatal("insertion failure absent from logs")
 				}

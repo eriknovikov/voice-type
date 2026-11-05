@@ -43,9 +43,10 @@ func (s sessionState) String() string {
 }
 
 type daemon struct {
-	cfg           Config
-	modelOverride string
-	configError   string
+	cfg               Config
+	modelOverride     string
+	configError       string
+	lastAttemptFailed bool
 	// workspace is the active vocabulary workspace, re-read from the state file
 	// with the config so desktop changes land on the next dictation.
 	workspace string
@@ -101,7 +102,10 @@ func (d *daemon) startSession() (int, string) {
 		return http.StatusConflict, fmt.Sprintf("already %s", state)
 	}
 
+	d.lastAttemptFailed = false
 	if err := d.reloadConfig(); err != nil {
+		d.lastAttemptFailed = true
+		d.runLog.complete(d.cfg.Provider, providerModel(d.cfg.Provider), "", "configuration_error", 0, 0, nil, err)
 		d.configError = err.Error()
 		d.mu.Unlock()
 		logf("CONFIG", "recording blocked: %v", err)
@@ -145,6 +149,8 @@ func (d *daemon) startSession() (int, string) {
 	err := d.res.Recorder.Start()
 	d.mu.Lock()
 	if err != nil {
+		d.lastAttemptFailed = true
+		d.runLog.complete(d.cfg.Provider, providerModel(d.cfg.Provider), "", "capture_error", 0, 0, nil, err)
 		d.mu.Unlock()
 		logf("AUDIO", "start failed: %v", err)
 		return http.StatusInternalServerError, err.Error()
@@ -236,6 +242,9 @@ func (d *daemon) stopSessionFor(sessionID uint64) (code int, message string) {
 	defer func() {
 		d.mu.Lock()
 		d.state = stateIdle
+		if code >= 400 && !d.shuttingDown {
+			d.lastAttemptFailed = true
+		}
 		if d.sessionCancel != nil {
 			d.sessionCancel()
 		}
@@ -251,13 +260,15 @@ func (d *daemon) stopSessionFor(sessionID uint64) (code int, message string) {
 		return http.StatusOK, "cancelled"
 	}
 	if recordErr != nil {
+		d.runLog.complete(stt.settings.Provider, stt.settings.Model, "", "capture_error", 0, 0, nil, recordErr)
 		logf("AUDIO", "capture failed: %v", recordErr)
 		return http.StatusInternalServerError, recordErr.Error()
 	}
 	duration := wavDurationSeconds(samples)
 	if len(samples) == 0 {
 		logf("AUDIO", "no audio captured")
-		return http.StatusOK, "no audio captured"
+		d.runLog.complete(stt.settings.Provider, stt.settings.Model, "", "no_audio", 0, 0, nil, errors.New("no audio captured"))
+		return http.StatusUnprocessableEntity, "no audio captured"
 	}
 	logf("AUDIO", "captured %.2fs (%d samples)", duration, len(samples))
 
@@ -300,6 +311,9 @@ func (d *daemon) stopSessionFor(sessionID uint64) (code int, message string) {
 			if code == http.StatusBadGateway {
 				outcome = "vocabulary_echo"
 			}
+			if code == http.StatusUnprocessableEntity {
+				outcome = "empty_transcript"
+			}
 			logErr = errors.New(outcome)
 		}
 		d.runLog.complete(stt.settings.Provider, requestedModel, finalModel, outcome, time.Since(t0), duration, attempts, logErr)
@@ -316,7 +330,7 @@ func (d *daemon) stopSessionFor(sessionID uint64) (code int, message string) {
 
 	if result.Text == "" {
 		logf("STT", "empty transcript -- nothing to insert")
-		return http.StatusOK, ""
+		return http.StatusUnprocessableEntity, "provider returned no text; nothing was inserted"
 	}
 
 	prompt := stt.settings.vocabularyPrompt()

@@ -20,10 +20,11 @@ import (
 )
 
 type Status struct {
-	State string  `json:"state"`
-	Error string  `json:"error"`
-	Port  int     `json:"port"`
-	Level float64 `json:"level"`
+	LastAttemptFailed bool    `json:"last_attempt_failed"`
+	State             string  `json:"state"`
+	Error             string  `json:"error"`
+	Port              int     `json:"port"`
+	Level             float64 `json:"level"`
 }
 type Preferences struct {
 	Shortcut       string `json:"shortcut"`
