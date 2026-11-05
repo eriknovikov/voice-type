@@ -7,7 +7,7 @@ BIN_DIR=${VOICE_TYPE_BIN_DIR:-"$HOME/.local/bin"}
 DATA_DIR=${XDG_DATA_HOME:-"$HOME/.local/share"}
 CONFIG_DIR=${XDG_CONFIG_HOME:-"$HOME/.config"}
 DESKTOP_FILE="$DATA_DIR/applications/io.github.eriknovikov.voice-type.desktop"
-ICON_FILE="$DATA_DIR/icons/hicolor/512x512/apps/voice-type.png"
+ICON_FILE="$DATA_DIR/icons/hicolor/512x512/apps/io.github.eriknovikov.voice-type.png"
 case "${1:-}" in
  --uninstall)
   if command -v gsettings >/dev/null 2>&1; then
@@ -19,7 +19,7 @@ case "${1:-}" in
     done
    fi
   fi
-  rm -f "$BIN_DIR/voice-type-app" "$BIN_DIR/voice-type" "$DESKTOP_FILE" "$ICON_FILE" "$DATA_DIR/icons/hicolor/scalable/apps/voice-type.svg" "$CONFIG_DIR/autostart/voice-type.desktop"
+  rm -f "$BIN_DIR/voice-type-app" "$BIN_DIR/voice-type" "$DESKTOP_FILE" "$ICON_FILE" "$DATA_DIR/icons/hicolor/scalable/apps/voice-type.svg" "$DATA_DIR/icons/hicolor/512x512/apps/voice-type.png" "$CONFIG_DIR/autostart/voice-type.desktop"
   printf '%s\n' 'Voice Type binaries and desktop integration removed. Settings and logs were kept.'
   exit 0 ;;
  '') ;;
@@ -34,7 +34,7 @@ for binary in voice-type voice-type-app; do
  mv -f "$BIN_DIR/.$binary.new" "$BIN_DIR/$binary"
 done
 install -m 644 "$SCRIPT_DIR/icon.png" "$ICON_FILE"
-rm -f "$DATA_DIR/icons/hicolor/scalable/apps/voice-type.svg"
+rm -f "$DATA_DIR/icons/hicolor/scalable/apps/voice-type.svg" "$DATA_DIR/icons/hicolor/512x512/apps/voice-type.png"
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then gtk-update-icon-cache -f -t "$DATA_DIR/icons/hicolor" >/dev/null 2>&1 || true; fi
 # Desktop Entry escaping is distinct from shell quoting.
 ESCAPED_BIN=$(printf '%s' "$BIN_DIR/voice-type-app" | sed 's/\\/\\\\/g; s/"/\\"/g; s/`/\\`/g; s/\$/\\$/g; s/%/%%/g')
@@ -44,7 +44,7 @@ Type=Application
 Name=Voice Type
 Comment=System-wide voice dictation
 Exec="$ESCAPED_BIN"
-Icon=voice-type
+Icon=io.github.eriknovikov.voice-type
 Terminal=false
 Categories=Utility;Audio;
 StartupNotify=true
