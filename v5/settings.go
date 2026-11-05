@@ -201,7 +201,7 @@ func SaveSettings(update SettingsUpdate) (Settings, error) {
 	}
 	if nextActive != active {
 		if err := workspaceSave(nextActive); err != nil {
-			return Settings{}, fmt.Errorf("settings saved but workspace could not be updated: %w", err)
+			return Settings{}, fmt.Errorf("settings saved but active vocabulary could not be updated: %w", err)
 		}
 	}
 	return readSettings()
@@ -236,7 +236,7 @@ func SelectWorkspace(name string) error {
 		return err
 	}
 	if name != "" && (name == generalWorkspace || !cfg.hasWorkspace(name)) {
-		return errors.New("choose an existing workspace or general only")
+		return errors.New("choose an existing vocabulary or general only")
 	}
 	return workspaceSave(name)
 }
