@@ -22,11 +22,17 @@ type Recorder struct {
 	streamMu sync.Mutex
 	stream   *pulse.RecordStream
 
-	bufMu     sync.Mutex
-	samples   []int16
-	sourceID  string
-	level     float64
-	meterOnly bool
+	bufMu         sync.Mutex
+	samples       []int16
+	sourceID      string
+	level         float64
+	meterOnly     bool
+	meterWindow   []int16
+	meterPosition int
+	meterCount    int
+	meterSum      float64
+	meterSquares  float64
+	meterAt       time.Time
 }
 
 type audioRecorder interface {
@@ -73,6 +79,12 @@ func (r *Recorder) Start() error {
 	r.bufMu.Lock()
 	r.samples = r.samples[:0]
 	r.level = 0
+	r.meterWindow = nil
+	r.meterPosition = 0
+	r.meterCount = 0
+	r.meterSum = 0
+	r.meterSquares = 0
+	r.meterAt = time.Time{}
 	r.bufMu.Unlock()
 
 	if r.client == nil {
@@ -159,27 +171,48 @@ func (r *Recorder) SetSource(id string) {
 	defer r.streamMu.Unlock()
 	r.sourceID = id
 }
-func (r *Recorder) Level() float64 { r.bufMu.Lock(); defer r.bufMu.Unlock(); return r.level }
 
-// TakeLevel retains transients between meter frames, then starts a fresh window.
-func (r *Recorder) TakeLevel() float64 {
+// Level is a non-consuming 100 ms RMS reading. Audio arrives independently of
+// display ticks: no fresh packet is not the same thing as recorded silence.
+func (r *Recorder) Level() float64 {
 	r.bufMu.Lock()
 	defer r.bufMu.Unlock()
-	level := r.level
-	r.level = 0
-	return level
+	if time.Since(r.meterAt) > 200*time.Millisecond {
+		return 0
+	}
+	return r.level
 }
+
+// TakeLevel remains compatible with earlier management clients.
+func (r *Recorder) TakeLevel() float64 { return r.Level() }
 
 func (r *Recorder) acceptSamples(samples []int16) (int, error) {
 	r.bufMu.Lock()
 	defer r.bufMu.Unlock()
 	if r.meterOnly {
+		if len(samples) == 0 {
+			return 0, nil
+		}
+		if r.meterWindow == nil {
+			r.meterWindow = make([]int16, wavSampleRate/10)
+		}
 		for _, sample := range samples {
-			value := math.Abs(float64(sample)) / 32768
-			if value > r.level {
-				r.level = value
+			old := float64(r.meterWindow[r.meterPosition])
+			value := float64(sample)
+			r.meterSum += value - old
+			r.meterSquares += value*value - old*old
+			r.meterWindow[r.meterPosition] = sample
+			r.meterPosition = (r.meterPosition + 1) % len(r.meterWindow)
+			if r.meterCount < len(r.meterWindow) {
+				r.meterCount++
 			}
 		}
+		count := float64(r.meterCount)
+		mean := r.meterSum / count
+		// Remove DC offset so a biased microphone cannot look like continuous sound.
+		variance := math.Max(0, r.meterSquares/count-mean*mean)
+		r.level = math.Sqrt(variance) / 32768
+		r.meterAt = time.Now()
 	} else {
 		r.samples = append(r.samples, samples...)
 	}

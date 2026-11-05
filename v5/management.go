@@ -256,7 +256,7 @@ func (d *daemon) streamMicrophoneLevels(w http.ResponseWriter, r *http.Request) 
 			flusher.Flush()
 			return
 		}
-		if err := encoder.Encode(map[string]any{"level": rec.TakeLevel(), "testing": true}); err != nil {
+		if err := encoder.Encode(map[string]any{"level": rec.Level(), "testing": true}); err != nil {
 			return
 		}
 		flusher.Flush()
