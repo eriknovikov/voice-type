@@ -193,7 +193,7 @@ p {
 .dot {
   width: 6px;
   height: 6px;
-  background: var(--accent);
+  background: #91969e;
   border-radius: 50%;
   display: inline-block;
 }
@@ -201,9 +201,8 @@ p {
   background: #f56e6a;
 }
 .dot.transcribing,
-.dot.checking,
 .dot.testing {
-  background: #edbc69;
+  background: #74c3aa;
 }
 .dot.disconnected {
   background: #797d84;

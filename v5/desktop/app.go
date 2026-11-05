@@ -36,14 +36,14 @@ func trayAvailable() bool {
 }
 func trayIcon(state string) []byte {
 	canvas := image.NewRGBA(image.Rect(0, 0, 32, 32))
-	c := color.RGBA{116, 195, 170, 255}
+	c := color.RGBA{145, 150, 158, 255}
 	if state == "disconnected" || state == "setup needed" {
 		c = color.RGBA{145, 150, 158, 255}
 	}
 	if state == "recording" {
 		c = color.RGBA{245, 110, 106, 255}
 	} else if state == "transcribing" {
-		c = color.RGBA{237, 188, 105, 255}
+		c = color.RGBA{116, 195, 170, 255}
 	}
 	for i, h := range []int{10, 22, 16, 26, 10} {
 		x := 3 + i*6
