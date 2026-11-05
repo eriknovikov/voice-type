@@ -101,7 +101,7 @@ func (c Config) keyEnv() string {
 
 func (s sttSettings) validateCredentials() error {
 	if s.APIKey == "" {
-		return fmt.Errorf("add your %s API key in Settings, or set %s", s.Provider, (Config{Provider: s.Provider}).keyEnv())
+		return fmt.Errorf("add your %s API key in General, or set %s", s.Provider, (Config{Provider: s.Provider}).keyEnv())
 	}
 	return nil
 }

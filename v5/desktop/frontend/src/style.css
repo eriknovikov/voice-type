@@ -577,3 +577,131 @@ footer > span {
     transition: none !important;
   }
 }
+
+/* The existing header and brand replace the native title bar's drag area. */
+header,
+.brand {
+  --wails-draggable: drag;
+  user-select: none;
+}
+.window-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.window-close {
+  --wails-draggable: no-drag;
+  padding: 7px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.window-close:hover:not(:disabled) {
+  color: #f7bbb5;
+  background: #352322;
+}
+
+.brand-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+}
+.brand > span {
+  font-size: 21px;
+  letter-spacing: -0.6px;
+}
+.window-close {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 40;
+  width: 30px;
+  height: 30px;
+}
+header {
+  padding-right: 15px;
+}
+.hero {
+  text-align: left;
+  background: #1d1f22;
+  padding: 24px;
+}
+.hero h2 {
+  font-size: 24px;
+  margin-top: 0;
+}
+.hero small {
+  text-align: left;
+}
+nav button {
+  font-size: 13px;
+}
+.dropdown-trigger {
+  width: 100%;
+  justify-content: space-between;
+  padding: 11px 12px;
+  background: #151719;
+  text-align: left;
+  min-width: 0;
+}
+.dropdown-trigger > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dropdown-menu {
+  min-width: var(--radix-select-trigger-width);
+  max-width: min(600px, calc(100vw - 32px));
+  max-height: var(--radix-select-content-available-height);
+  background: #25272b;
+  border: 1px solid #42464b;
+  border-radius: 8px;
+  padding: 5px;
+  z-index: 100;
+  box-shadow: 0 8px 30px #0006;
+}
+.dropdown-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  outline: none;
+  cursor: default;
+  padding: 10px 12px;
+  border-radius: 5px;
+  font-size: 13px;
+}
+.dropdown-item[data-highlighted] {
+  background: #34453d;
+  color: #c4ead9;
+}
+.dropdown-item[data-state="checked"] {
+  color: var(--accent);
+}
+.log-tools .dropdown-trigger {
+  width: 155px;
+  flex-shrink: 0;
+}
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--border);
+}
+.shortcut-key {
+  min-width: 170px;
+  font-family: ui-monospace, monospace;
+  background: #151719;
+}
+.shortcut-preview {
+  padding: 28px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-align: center;
+  color: var(--accent);
+  font-size: 21px;
+  margin: 20px 0;
+}

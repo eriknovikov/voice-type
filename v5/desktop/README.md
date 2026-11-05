@@ -74,5 +74,11 @@ To exercise native tray registration and menu actions without installing a shell
 extension, run `VOICE_TYPE_DESKTOP_TEST_BINARY="$PWD/build/voice-type-app"
 CGO_ENABLED=1 go test -run TestNativeTray -v` from this directory (as one command).
 The test uses a private session bus and a test tray host. Real GNOME shortcut
-approval must be completed in GNOME's own dialog; Audio & shortcuts shows the
+approval must be completed in GNOME's own dialog; Keyboard Shortcuts shows the
 last activation time to verify the selected binding.
+
+Keyboard Shortcuts has two defaults: Ctrl+Space toggles transcription and
+Ctrl+Alt+Space starts or stops the daemon. The desktop app remains running when
+the daemon is stopped. Existing custom transcription shortcuts are retained;
+the previous default moves to Ctrl+Space when loading older preferences.
+Click a shortcut to capture new keys, then save. GNOME may ask for approval.

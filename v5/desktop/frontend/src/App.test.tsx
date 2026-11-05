@@ -35,6 +35,9 @@ vi.mock("./api", () => ({
     stopTest: vi.fn(),
     startTest: vi.fn(),
     workspace: vi.fn(),
+    beginShortcutCapture: vi.fn(),
+    endShortcutCapture: vi.fn(),
+    preferences: vi.fn(),
   },
 }));
 const settings: Settings = {
@@ -52,6 +55,8 @@ const settings: Settings = {
 beforeEach(() => {
   vi.clearAllMocks();
   eventHandlers.clear();
+  vi.mocked(api.beginShortcutCapture).mockResolvedValue();
+  vi.mocked(api.endShortcutCapture).mockResolvedValue();
   vi.mocked(api.settings).mockResolvedValue(structuredClone(settings));
   vi.mocked(api.connect).mockResolvedValue();
   vi.mocked(api.status).mockResolvedValue({
@@ -62,7 +67,8 @@ beforeEach(() => {
   });
   vi.mocked(api.info).mockResolvedValue({
     preferences: {
-      shortcut: "Ctrl+Alt+Space",
+      shortcut: "Ctrl+Space",
+      daemon_shortcut: "Ctrl+Alt+Space",
       autostart: false,
       setup_complete: true,
     },
@@ -78,17 +84,17 @@ afterEach(cleanup);
 describe("desktop workflows", () => {
   it("loads diagnostics only when the logs section is opened", async () => {
     render(<App />);
-    await screen.findByText("Speak naturally.");
+    await screen.findByText("Dictation");
     expect(api.logs).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Logs" }));
-    await screen.findByText("Nothing to troubleshoot");
+    await screen.findByText("No logs yet");
     expect(api.logs).toHaveBeenCalledTimes(1);
   });
   it("sends only editable settings and new credentials, without read-only fields", async () => {
     vi.mocked(api.save).mockResolvedValue({ ...settings, revision: "r2" });
     render(<App />);
-    await screen.findByText("Speak naturally.");
-    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await screen.findByText("Dictation");
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
     fireEvent.change(screen.getByLabelText("API key"), {
       target: { value: "replacement-key" },
     });
@@ -103,9 +109,7 @@ describe("desktop workflows", () => {
         api_keys: { openai: "replacement-key" },
       }),
     );
-    await screen.findByText(
-      "Settings saved. Changes apply to your next dictation.",
-    );
+    await screen.findByText("Saved. Changes apply to the next dictation.");
     expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe(
       "",
     );
@@ -115,8 +119,8 @@ describe("desktop workflows", () => {
       new Error("settings changed elsewhere; reload before saving"),
     );
     render(<App />);
-    await screen.findByText("Speak naturally.");
-    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await screen.findByText("Dictation");
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
     fireEvent.change(screen.getByLabelText("Local control port"), {
       target: { value: "4242" },
     });
@@ -129,8 +133,8 @@ describe("desktop workflows", () => {
   });
   it("stops the microphone test when navigating away from audio", async () => {
     render(<App />);
-    await screen.findByText("Speak naturally.");
-    fireEvent.click(screen.getByRole("button", { name: "Audio & shortcuts" }));
+    await screen.findByText("Dictation");
+    fireEvent.click(screen.getByRole("button", { name: "Audio" }));
     await screen.findByText("Test microphone");
     fireEvent.click(screen.getByRole("button", { name: "Overview" }));
     await waitFor(() => expect(api.stopTest).toHaveBeenCalled());
@@ -139,7 +143,7 @@ describe("desktop workflows", () => {
 
 it("tray events navigate to settings and update workspace without discarding edits", async () => {
   render(<App />);
-  await screen.findByText("Speak naturally.");
+  await screen.findByText("Dictation");
   act(() => eventHandlers.get("navigate")?.({ data: ["settings"] }));
   const port = screen.getByLabelText("Local control port") as HTMLInputElement;
   fireEvent.change(port, { target: { value: "4242" } });
@@ -148,4 +152,30 @@ it("tray events navigate to settings and update workspace without discarding edi
   fireEvent.click(screen.getByRole("button", { name: "Overview" }));
   expect(screen.getByRole("heading", { name: "project" })).toBeTruthy();
   expect(screen.getByText("Unsaved changes")).toBeTruthy();
+});
+
+it("captures a shortcut interactively without activating dictation", async () => {
+  render(<App />);
+  await screen.findByText("Dictation");
+  fireEvent.click(screen.getByRole("button", { name: "Keyboard Shortcuts" }));
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Change transcription toggle shortcut",
+    }),
+  );
+  await screen.findByText("Press the keys you want to use.");
+  expect(document.activeElement).toBe(
+    screen.getByRole("group", { name: "Shortcut keys" }),
+  );
+  fireEvent.keyDown(screen.getByRole("group", { name: "Shortcut keys" }), {
+    key: " ",
+    ctrlKey: true,
+    shiftKey: true,
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Set shortcut" }));
+  await waitFor(() => expect(api.endShortcutCapture).toHaveBeenCalled());
+  expect(
+    screen.getByRole("button", { name: "Change transcription toggle shortcut" })
+      .textContent,
+  ).toBe("Ctrl + Shift + Space");
 });

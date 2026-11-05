@@ -7,6 +7,7 @@ import {
   Circle,
   FileText,
   Mic,
+  Keyboard,
   Plus,
   RefreshCw,
   Settings2,
@@ -14,7 +15,7 @@ import {
   X,
 } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Events } from "@wailsio/runtime";
+import { Events, Window } from "@wailsio/runtime";
 import {
   api,
   type Settings,
@@ -24,12 +25,16 @@ import {
   type LogRecord,
 } from "./api";
 import "./style.css";
+import { Dropdown } from "./Dropdown";
+import { ShortcutPicker } from "./ShortcutPicker";
 
-type Tab = "overview" | "settings" | "audio" | "vocabulary" | "logs";
+type Tab =
+  "overview" | "settings" | "audio" | "shortcuts" | "vocabulary" | "logs";
 const tabs = [
   { id: "overview", label: "Overview", icon: Activity },
-  { id: "settings", label: "Settings", icon: Settings2 },
-  { id: "audio", label: "Audio & shortcuts", icon: Mic },
+  { id: "settings", label: "General", icon: Settings2 },
+  { id: "audio", label: "Audio", icon: Mic },
+  { id: "shortcuts", label: "Keyboard Shortcuts", icon: Keyboard },
   { id: "vocabulary", label: "Vocabulary", icon: BookOpen },
   { id: "logs", label: "Logs", icon: FileText },
 ] as const;
@@ -93,12 +98,16 @@ export function App() {
         current ? { ...current, workspace: String(e.data) } : current,
       ),
     );
+    const offCapture = Events.On("cancel-shortcut-capture", () =>
+      window.dispatchEvent(new Event("voice-type-cancel-capture")),
+    );
     const offNavigation = Events.On("navigate", (e) => {
       if (String(e.data) === "settings") setTab("settings");
     });
     return () => {
       off();
       offWorkspace();
+      offCapture();
       offNavigation();
     };
   }, []);
@@ -176,7 +185,7 @@ export function App() {
     setSelected((current) => current.trim());
     setKeys({});
     setDirty(false);
-    setNotice("Settings saved. Changes apply to your next dictation.");
+    setNotice("Saved. Changes apply to the next dictation.");
   };
   const navigate = (next: Tab) => {
     setTab(next);
@@ -209,10 +218,8 @@ export function App() {
     <div className="app">
       <aside>
         <div className="brand">
-          <AudioLines size={27} />
-          <span>
-            voice type<small>YOUR WORDS, EVERYWHERE</small>
-          </span>
+          <img src="/icon.png" alt="" className="brand-icon" />
+          <span>Voice Type</span>
         </div>
         <nav aria-label="Main navigation">
           {tabs.map(({ id, label, icon: Icon }) => (
@@ -234,7 +241,7 @@ export function App() {
               : status.state === "idle"
                 ? status.error
                   ? "Setup needed"
-                  : "Ready when you are"
+                  : "Ready"
                 : status.state}
           </span>
           <small>v{info?.version ?? "—"}</small>
@@ -243,13 +250,22 @@ export function App() {
       <main>
         <header>
           <div>
-            <div className="eyebrow">VOICE TYPE</div>
             <h1>{tabs.find((t) => t.id === tab)?.label}</h1>
           </div>
-          <span className={`status ${status.state}`}>
-            <span className={`dot ${status.state}`} />
-            {status.state}
-          </span>
+          <div className="window-actions">
+            <span className={`status ${status.state}`}>
+              <span className={`dot ${status.state}`} />
+              {status.state}
+            </span>
+            <button
+              className="window-close"
+              aria-label="Close window"
+              title="Hide to background"
+              onClick={() => void Window.Close()}
+            >
+              <X size={18} />
+            </button>
+          </div>
         </header>
         {error && (
           <div className="alert error" role="alert">
@@ -284,8 +300,8 @@ export function App() {
         {!settings ? (
           <div className="empty">
             <AudioLines size={40} />
-            <h2>Connecting to Voice Type</h2>
-            <p>Your settings will appear here once the daemon is ready.</p>
+            <h2>Connecting</h2>
+            <p>Waiting for the daemon.</p>
             {error && status.state !== "disconnected" && (
               <button
                 onClick={() =>
@@ -315,22 +331,14 @@ export function App() {
             {tab === "overview" && (
               <>
                 <section className="hero">
-                  <div className="hero-icon">
-                    <AudioLines size={48} />
-                  </div>
-                  <div className="eyebrow">LESS TYPING. MORE FLOW.</div>
                   <h2>
                     {status.state === "recording"
-                      ? "Listening to you"
+                      ? "Recording"
                       : status.state === "transcribing"
-                        ? "Turning speech into text"
-                        : "Speak naturally."}
+                        ? "Transcribing"
+                        : "Dictation"}
                   </h2>
-                  <p>
-                    Your words appear wherever your cursor is.
-                    <br />
-                    Keep this window tucked away and use your shortcut.
-                  </p>
+                  <p>Press your shortcut to start or stop recording.</p>
                   <button
                     className="primary large"
                     disabled={
@@ -364,16 +372,16 @@ export function App() {
                         ? "API key from environment"
                         : credential?.saved
                           ? "API key configured"
-                          : "Add an API key to get started"}
+                          : "API key missing"}
                     </p>
                     <button onClick={() => navigate("settings")}>
-                      Manage provider →
+                      Provider settings →
                     </button>
                   </section>
                   <section className="card">
                     <span className="eyebrow">VOCABULARY</span>
                     <h3>{settings.workspace || "General only"}</h3>
-                    <p>Names and terminology, just as you spell them.</p>
+                    <p>General terms and the selected workspace.</p>
                     <button onClick={() => navigate("vocabulary")}>
                       Manage vocabulary →
                     </button>
@@ -381,13 +389,13 @@ export function App() {
                 </div>
                 {!info?.preferences.setup_complete && (
                   <section className="card setup">
-                    <h3>Make it yours</h3>
+                    <h3>Setup</h3>
                     <p>
-                      1. Add a provider key in Settings.
+                      1. Add your API key in General.
                       <br />
                       2. Choose and test your microphone.
                       <br />
-                      3. Configure your shortcut and startup preference.
+                      3. Set your keyboard shortcuts.
                     </p>
                     <button
                       className="primary"
@@ -408,10 +416,7 @@ export function App() {
             )}
             {tab === "settings" && (
               <>
-                <p className="intro">
-                  Choose how your speech is transcribed. Your keys stay on this
-                  device.
-                </p>
+                <p className="intro">Select a provider and add your API key.</p>
                 <section className="card">
                   <h3>Transcription provider</h3>
                   <div className="provider-options">
@@ -426,9 +431,7 @@ export function App() {
                           {p === "openai" ? "OpenAI" : "OpenRouter"}
                         </strong>
                         <span>
-                          {p === "openai"
-                            ? "Direct transcription API"
-                            : "Use your OpenRouter credits"}
+                          {p === "openai" ? "OpenAI API" : "OpenRouter API"}
                         </span>
                       </button>
                     ))}
@@ -442,7 +445,7 @@ export function App() {
                     value={keys[settings.provider] ?? ""}
                     placeholder={
                       credential?.saved
-                        ? "A key is saved. Enter a new key to replace it."
+                        ? "Enter a new key to replace the saved key."
                         : "Paste your API key"
                     }
                     onChange={(e) => {
@@ -454,7 +457,7 @@ export function App() {
                     {credential?.environment
                       ? "An environment variable currently overrides the saved key."
                       : credential?.saved
-                        ? "The saved key is never sent back to this window."
+                        ? "API key saved."
                         : "A key is required to transcribe audio."}
                   </p>
                   {credential?.saved && (
@@ -500,32 +503,90 @@ export function App() {
                 </section>
               </>
             )}
+            {tab === "settings" && info && (
+              <section className="card">
+                <h3>Desktop</h3>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={info.preferences.autostart}
+                    onChange={(event) =>
+                      setInfo({
+                        ...info,
+                        preferences: {
+                          ...info.preferences,
+                          autostart: event.target.checked,
+                        },
+                      })
+                    }
+                  />
+                  Start at login
+                </label>
+                <button
+                  disabled={busy}
+                  onClick={() =>
+                    void run(async () => {
+                      const saved = await api.info();
+                      await api.preferences({
+                        ...saved.preferences,
+                        autostart: info.preferences.autostart,
+                      });
+                      setInfo((current) =>
+                        current
+                          ? {
+                              ...current,
+                              preferences: {
+                                ...current.preferences,
+                                autostart: info.preferences.autostart,
+                              },
+                            }
+                          : current,
+                      );
+                      setNotice("Startup preference saved.");
+                    })
+                  }
+                >
+                  Save startup preference
+                </button>
+                {!info.tray_available && (
+                  <p className="hint">
+                    To show the tray icon on GNOME, enable the AppIndicator
+                    extension.
+                  </p>
+                )}
+              </section>
+            )}
             {tab === "audio" && (
               <>
-                <p className="intro">
-                  A good microphone and one shortcut. That’s all you need.
-                </p>
                 <section className="card">
                   <h3>Microphone</h3>
                   <label htmlFor="microphone">Input device</label>
-                  <select
+                  <Dropdown
                     id="microphone"
+                    label="Input device"
                     value={settings.microphone}
-                    onChange={(e) => patch({ microphone: e.target.value })}
-                  >
-                    <option value="">System default</option>
-                    {settings.microphone &&
-                      !sources.some((s) => s.id === settings.microphone) && (
-                        <option value={settings.microphone}>
-                          Unavailable: {settings.microphone}
-                        </option>
-                      )}
-                    {sources.map((s) => (
-                      <option value={s.id} key={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
+                    disabled={busy || status.state === "testing"}
+                    onChange={(value) => patch({ microphone: value })}
+                    options={[
+                      { value: "", label: "System default" },
+                      ...(settings.microphone &&
+                      !sources.some(
+                        (source) => source.id === settings.microphone,
+                      )
+                        ? [
+                            {
+                              value: settings.microphone,
+                              label: `Unavailable: ${settings.microphone}`,
+                            },
+                          ]
+                        : []),
+                      ...sources.map((source) => ({
+                        value: source.id,
+                        label: source.name,
+                      })),
+                    ]}
+                  />
+
                   <div
                     className="meter"
                     role="meter"
@@ -569,115 +630,98 @@ export function App() {
                     </button>
                   </div>
                   <p className="hint">
-                    The test stays local and stops after 60 seconds or when you
-                    leave this page.
+                    Audio is not uploaded. The test stops after 60 seconds.
                   </p>
                 </section>
-                {info && (
-                  <section className="card">
-                    <h3>Shortcut & startup</h3>
-                    <label htmlFor="shortcut">Toggle dictation</label>
-                    <input
-                      id="shortcut"
-                      value={info.preferences.shortcut}
-                      onChange={(e) =>
-                        setInfo({
-                          ...info,
-                          preferences: {
-                            ...info.preferences,
-                            shortcut: e.target.value,
-                          },
-                        })
-                      }
-                    />
-                    <p className="hint">
-                      For example Ctrl+Alt+Space. On Wayland, your desktop asks
-                      you to approve or choose the final shortcut.
-                    </p>
-                    <label className="checkbox">
-                      <input
-                        type="checkbox"
-                        checked={info.preferences.autostart}
-                        onChange={(e) =>
-                          setInfo({
-                            ...info,
-                            preferences: {
-                              ...info.preferences,
-                              autostart: e.target.checked,
-                            },
-                          })
-                        }
-                      />
-                      Start quietly when I log in
-                    </label>
-                    <button
-                      className="primary"
-                      disabled={busy}
-                      onClick={() =>
-                        void run(async () => {
-                          if (dirty) await save();
-                          await api.preferences({
-                            ...info.preferences,
-                            setup_complete: true,
-                          });
-                          setInfo(await api.info());
-                          setNotice(
-                            "Desktop preferences saved. Complete any shortcut approval shown by your desktop.",
-                          );
-                        })
-                      }
-                    >
-                      Save desktop preferences
-                    </button>
-                    {info.last_shortcut_at && (
-                      <p className="hint">
-                        Shortcut last activated at{" "}
-                        {new Date(info.last_shortcut_at).toLocaleTimeString()}.
-                      </p>
-                    )}
-                    {info.shortcut_error && (
-                      <p className="alert error">{info.shortcut_error}</p>
-                    )}
-                  </section>
-                )}
-                {info && !info.tray_available && (
-                  <section className="card">
-                    <h3>Enable a tray icon on GNOME</h3>
-                    <p>
-                      Your desktop is not providing a system tray. Enable the
-                      AppIndicator and KStatusNotifierItem extension to show
-                      Voice Type in the top panel. You can always reopen this
-                      window from your application launcher.
-                    </p>
-                  </section>
-                )}
               </>
+            )}
+            {tab === "shortcuts" && info && (
+              <section className="card">
+                <ShortcutPicker
+                  name="Transcription toggle"
+                  value={info.preferences.shortcut}
+                  onError={setError}
+                  onChange={(value) =>
+                    setInfo({
+                      ...info,
+                      preferences: { ...info.preferences, shortcut: value },
+                    })
+                  }
+                />
+                <ShortcutPicker
+                  name="Daemon toggle"
+                  value={info.preferences.daemon_shortcut}
+                  onError={setError}
+                  onChange={(value) =>
+                    setInfo({
+                      ...info,
+                      preferences: {
+                        ...info.preferences,
+                        daemon_shortcut: value,
+                      },
+                    })
+                  }
+                />
+                <p className="hint">
+                  Click a shortcut to change it. Your desktop may ask you to
+                  approve the keys.
+                </p>
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() =>
+                    void run(async () => {
+                      await api.preferences({
+                        ...info.preferences,
+                        setup_complete: true,
+                      });
+                      setInfo(await api.info());
+                      setNotice("Keyboard shortcuts saved.");
+                    })
+                  }
+                >
+                  Save shortcuts
+                </button>
+                {info.shortcut_error && (
+                  <p className="alert error">{info.shortcut_error}</p>
+                )}
+                {info.last_shortcut_at && (
+                  <p className="hint">
+                    Last used:{" "}
+                    {new Date(info.last_shortcut_at).toLocaleTimeString()}.
+                  </p>
+                )}
+              </section>
             )}
             {tab === "vocabulary" && (
               <>
                 <p className="intro">
-                  Teach Voice Type your names, projects and specialist terms.
+                  Add names and terms to improve transcription.
                 </p>
                 <section className="card">
                   <label htmlFor="workspace">Active workspace</label>
-                  <select
+                  <Dropdown
                     id="workspace"
-                    disabled={dirty || busy}
+                    label="Active workspace"
                     value={settings.workspace}
-                    onChange={(e) =>
+                    disabled={dirty || busy}
+                    onChange={(value) =>
                       void run(async () => {
-                        await api.workspace(e.target.value);
-                        setSettings({ ...settings, workspace: e.target.value });
+                        await api.workspace(value);
+                        setSettings({ ...settings, workspace: value });
                       })
                     }
-                  >
-                    <option value="">General only</option>
-                    {settings.vocabulary
-                      .filter((v) => v.name !== "general")
-                      .map((v) => (
-                        <option key={v.name}>{v.name}</option>
-                      ))}
-                  </select>
+                    options={[
+                      { value: "", label: "General only" },
+                      ...settings.vocabulary
+                        .filter((list) => list.name !== "general")
+                        .map((list) => ({
+                          value: list.name,
+                          label: list.name,
+                        })),
+                    ]}
+                  />
+
                   <p className="hint">
                     General terms are always included. Save edits before
                     switching workspace.
@@ -798,8 +842,7 @@ export function App() {
             {tab === "logs" && (
               <>
                 <p className="intro">
-                  A quiet place for diagnostics. Dictated text is never stored
-                  here.
+                  Dictation logs. Transcribed text is not stored here.
                 </p>
                 <div className="log-tools">
                   <input
@@ -808,15 +851,17 @@ export function App() {
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                   />
-                  <select
-                    aria-label="Filter logs"
+                  <Dropdown
+                    label="Filter logs"
                     value={outcome}
-                    onChange={(e) => setOutcome(e.target.value)}
-                  >
-                    <option value="all">All outcomes</option>
-                    <option value="errors">Errors</option>
-                    <option value="ok">Successful</option>
-                  </select>
+                    onChange={setOutcome}
+                    options={[
+                      { value: "all", label: "All outcomes" },
+                      { value: "errors", label: "Errors" },
+                      { value: "ok", label: "Successful" },
+                    ]}
+                  />
+
                   <button disabled={!displayed.length} onClick={exportLogs}>
                     Export
                   </button>
@@ -887,9 +932,7 @@ export function App() {
                     <div className="empty">
                       <FileText size={32} />
                       <h3>
-                        {logs.length
-                          ? "No matching entries"
-                          : "Nothing to troubleshoot"}
+                        {logs.length ? "No matching entries" : "No logs yet"}
                       </h3>
                       <p>Diagnostics from your dictations will appear here.</p>
                     </div>
