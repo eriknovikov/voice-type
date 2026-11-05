@@ -2,8 +2,8 @@ import { memo, useEffect, useRef } from "react";
 import { Events } from "@wailsio/runtime";
 
 export function meterTarget(amplitude: number): number {
-  if (!Number.isFinite(amplitude) || amplitude <= 0.001) return 0;
-  return Math.min(1, Math.max(0, (20 * Math.log10(amplitude) + 60) / 60));
+  if (!Number.isFinite(amplitude) || amplitude <= 10 ** (-45 / 20)) return 0;
+  return Math.min(1, Math.max(0, (20 * Math.log10(amplitude) + 45) / 39));
 }
 export function smoothMeter(
   current: number,
