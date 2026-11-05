@@ -101,26 +101,16 @@ func Run(version string) error {
 	tray.SetTooltip("Voice Type")
 	show := func() { window.Show(); window.Focus() }
 	tray.OnClick(show)
-	updateMenu := func(state string, settings vt.Settings) {
+	updateMenu := func(state string) {
 		menu := app.NewMenu()
-		menu.Add("Voice Type · " + state).SetEnabled(false)
-		label := "Start dictation"
+		statusLabel, action := "Idle", "Start"
 		if state == "recording" {
-			label = "Stop dictation"
+			statusLabel, action = "Recording", "Stop"
 		}
-		menu.Add(label).SetEnabled(state == "idle" || state == "recording").OnClick(func(_ *application.Context) { go b.toggleFromTray() })
-		submenu := menu.AddSubmenu("Vocabulary")
-		submenu.AddRadio("General only", settings.Workspace == "").OnClick(func(_ *application.Context) { _ = b.SelectWorkspace("") })
-		for _, list := range settings.Vocabulary {
-			if list.Name == "general" {
-				continue
-			}
-			name := list.Name
-			submenu.AddRadio(name, settings.Workspace == name).OnClick(func(_ *application.Context) { _ = b.SelectWorkspace(name) })
-		}
-		menu.AddSeparator()
-		menu.Add("Open Settings").OnClick(func(_ *application.Context) { show(); app.Event.Emit("navigate", "settings") })
-		menu.Add("Quit Voice Type").OnClick(func(_ *application.Context) {
+		menu.Add(statusLabel).SetEnabled(false)
+		menu.Add(action).OnClick(func(_ *application.Context) { go b.toggleFromTray() })
+		menu.Add("Open Voice Type").OnClick(func(_ *application.Context) { show() })
+		menu.Add("Quit").OnClick(func(_ *application.Context) {
 			go func() {
 				if err := b.Quit(); err != nil {
 					app.Event.Emit("operation-error", err.Error())
@@ -130,9 +120,10 @@ func Run(version string) error {
 		})
 		tray.SetMenu(menu)
 		tray.SetIcon(trayIcon(state))
-		tray.SetTooltip("Voice Type · " + state)
+		tray.SetTooltip("Voice Type · " + statusLabel)
 	}
-	updateMenu("idle", vt.Settings{})
+	updateMenu("idle")
+
 	if err := b.registerShortcuts(b.prefs); err != nil {
 		b.shortcutError = err.Error()
 	}
@@ -154,11 +145,9 @@ func Run(version string) error {
 					state = "setup needed"
 				}
 			}
-			settings, _ := b.Settings()
-			key := state + settings.Revision + settings.Workspace
-			if key != last {
-				last = key
-				application.InvokeSync(func() { updateMenu(state, settings) })
+			if state != last {
+				last = state
+				application.InvokeSync(func() { updateMenu(state) })
 			}
 		}
 	}()
