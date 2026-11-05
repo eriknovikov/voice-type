@@ -21,6 +21,9 @@ import (
 //go:embed frontend/dist
 var assets embed.FS
 
+//go:embed icon.png
+var appIcon []byte
+
 func trayAvailable() bool {
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
@@ -58,7 +61,7 @@ func Run(version string) error {
 	b := &Bridge{client: vt.NewManagementClient(), prefs: readPreferences(), version: version}
 	done := make(chan struct{})
 	app := application.New(application.Options{
-		Name: "Voice Type", Description: "System-wide voice dictation",
+		Name: "Voice Type", Icon: appIcon, Description: "System-wide voice dictation",
 		Linux:    application.LinuxOptions{ApplicationID: "io.github.eriknovikov.voice-type"},
 		Services: []application.Service{application.NewService(b)},
 		Assets:   application.AssetOptions{Handler: application.BundledAssetFileServer(frontend)},
@@ -84,9 +87,15 @@ func Run(version string) error {
 			hidden = true
 		}
 	}
-	window := app.Window.NewWithOptions(application.WebviewWindowOptions{Title: "Voice Type", Width: 1040, Height: 740, MinWidth: 760, MinHeight: 560, URL: "/", Hidden: hidden})
+	window := app.Window.NewWithOptions(application.WebviewWindowOptions{Title: "Voice Type", Frameless: true, Width: 1040, Height: 740, MinWidth: 760, MinHeight: 560, URL: "/", Hidden: hidden})
 	b.window = window
-	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) { _ = b.StopMicrophoneTest(); window.Hide(); e.Cancel() })
+	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		_ = b.StopMicrophoneTest()
+		_ = b.EndShortcutCapture()
+		app.Event.Emit("cancel-shortcut-capture")
+		window.Hide()
+		e.Cancel()
+	})
 	tray := app.SystemTray.New()
 	tray.SetIcon(trayIcon("idle"))
 	tray.SetTooltip("Voice Type")
@@ -124,10 +133,8 @@ func Run(version string) error {
 		tray.SetTooltip("Voice Type · " + state)
 	}
 	updateMenu("idle", vt.Settings{})
-	if b.prefs.SetupComplete {
-		if err := app.GlobalShortcut.Register(b.prefs.Shortcut, func() { b.activateShortcut() }); err != nil {
-			b.shortcutError = err.Error()
-		}
+	if err := b.registerShortcuts(b.prefs); err != nil {
+		b.shortcutError = err.Error()
 	}
 	go func() {
 		_ = b.Connect()

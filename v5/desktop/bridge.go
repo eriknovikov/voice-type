@@ -26,9 +26,10 @@ type Status struct {
 	Level float64 `json:"level"`
 }
 type Preferences struct {
-	Shortcut      string `json:"shortcut"`
-	Autostart     bool   `json:"autostart"`
-	SetupComplete bool   `json:"setup_complete"`
+	Shortcut       string `json:"shortcut"`
+	DaemonShortcut string `json:"daemon_shortcut"`
+	Autostart      bool   `json:"autostart"`
+	SetupComplete  bool   `json:"setup_complete"`
 }
 type DesktopInfo struct {
 	LastShortcutAt string      `json:"last_shortcut_at"`
@@ -38,16 +39,17 @@ type DesktopInfo struct {
 	Version        string      `json:"version"`
 }
 type Bridge struct {
-	app            *application.App
-	window         *application.WebviewWindow
-	client         *http.Client
-	mu             sync.Mutex
-	connectMu      sync.Mutex
-	closing        bool
-	prefs          Preferences
-	shortcutError  string
-	lastShortcutAt string
-	version        string
+	app               *application.App
+	window            *application.WebviewWindow
+	client            *http.Client
+	mu                sync.Mutex
+	connectMu         sync.Mutex
+	closing           bool
+	capturingShortcut bool
+	prefs             Preferences
+	shortcutError     string
+	lastShortcutAt    string
+	version           string
 }
 
 func (b *Bridge) request(method, path string, body, out any) error {
@@ -212,10 +214,16 @@ func preferencesPath() string {
 	return filepath.Join(base, "voice-type", "desktop.json")
 }
 func readPreferences() Preferences {
-	prefs := Preferences{Shortcut: "Ctrl+Alt+Space"}
+	prefs := Preferences{Shortcut: "Ctrl+Space", DaemonShortcut: "Ctrl+Alt+Space"}
 	data, err := os.ReadFile(preferencesPath())
 	if err == nil {
 		_ = json.Unmarshal(data, &prefs)
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(data, &fields) == nil {
+			if _, exists := fields["daemon_shortcut"]; !exists && prefs.Shortcut == "Ctrl+Alt+Space" {
+				prefs.Shortcut = "Ctrl+Space"
+			}
+		}
 	}
 	return prefs
 }
@@ -246,19 +254,21 @@ func (b *Bridge) SavePreferences(prefs Preferences) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	old := b.prefs
-	if prefs.Shortcut != old.Shortcut || !old.SetupComplete || b.shortcutError != "" {
-		if old.SetupComplete {
-			_ = b.app.GlobalShortcut.Unregister(old.Shortcut)
-		}
-		if err := b.app.GlobalShortcut.Register(prefs.Shortcut, func() { b.activateShortcut() }); err != nil {
-			if old.SetupComplete {
-				_ = b.app.GlobalShortcut.Register(old.Shortcut, func() { b.activateShortcut() })
-			}
+	if strings.TrimSpace(prefs.Shortcut) == "" || strings.TrimSpace(prefs.DaemonShortcut) == "" {
+		return errors.New("choose both keyboard shortcuts")
+	}
+	changed := prefs.Shortcut != old.Shortcut || prefs.DaemonShortcut != old.DaemonShortcut || b.shortcutError != ""
+	if changed {
+		_ = b.app.GlobalShortcut.UnregisterAll()
+		if err := b.registerShortcuts(prefs); err != nil {
+			_ = b.app.GlobalShortcut.UnregisterAll()
+			_ = b.registerShortcuts(old)
 			b.shortcutError = err.Error()
 			return err
 		}
 		b.shortcutError = ""
 	}
+
 	var err error
 	if prefs.Autostart {
 		err = b.app.Autostart.EnableWithOptions(application.AutostartOptions{Arguments: []string{"--background"}})
@@ -328,6 +338,10 @@ func (b *Bridge) ExportLogs(query, outcome string) error {
 
 func (b *Bridge) activateShortcut() {
 	b.mu.Lock()
+	if b.capturingShortcut {
+		b.mu.Unlock()
+		return
+	}
 	b.lastShortcutAt = time.Now().Format(time.RFC3339)
 	b.mu.Unlock()
 	b.toggleFromTray()
@@ -342,4 +356,69 @@ func (b *Bridge) ResetBrokenSettings(revision string) (vt.Settings, error) {
 	var settings vt.Settings
 	err := b.request("POST", "/recovery", map[string]string{"revision": revision}, &settings)
 	return settings, err
+}
+
+func (b *Bridge) registerShortcuts(prefs Preferences) error {
+	if err := b.app.GlobalShortcut.Register(prefs.Shortcut, b.activateShortcut); err != nil {
+		return err
+	}
+	return b.app.GlobalShortcut.Register(prefs.DaemonShortcut, func() {
+		b.mu.Lock()
+		capturing := b.capturingShortcut
+		b.mu.Unlock()
+		if capturing {
+			return
+		}
+		if err := b.ToggleDaemon(); err != nil {
+			b.app.Event.Emit("operation-error", err.Error())
+		}
+	})
+}
+
+// The desktop app stays alive so its shortcut can start the daemon again.
+func (b *Bridge) ToggleDaemon() error {
+	b.connectMu.Lock()
+	status, err := b.Status()
+	if err != nil {
+		b.connectMu.Unlock()
+		return b.Connect()
+	}
+	defer b.connectMu.Unlock()
+	if status.State != "idle" {
+		return errors.New("stop recording or microphone testing before stopping the daemon")
+	}
+	if err := b.request("POST", "/quit", nil, nil); err != nil {
+		return err
+	}
+	for i := 0; i < 50; i++ {
+		if _, err := b.Status(); err != nil {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return errors.New("daemon is still shutting down")
+}
+func (b *Bridge) BeginShortcutCapture() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.capturingShortcut = true
+	if err := b.app.GlobalShortcut.UnregisterAll(); err != nil {
+		b.capturingShortcut = false
+		return err
+	}
+	return nil
+}
+func (b *Bridge) EndShortcutCapture() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.capturingShortcut {
+		return nil
+	}
+	b.capturingShortcut = false
+	_ = b.app.GlobalShortcut.UnregisterAll()
+	err := b.registerShortcuts(b.prefs)
+	if err != nil {
+		b.shortcutError = err.Error()
+	}
+	return err
 }
