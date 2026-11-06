@@ -23,6 +23,7 @@ type ServiceStatus struct {
 	Error             string  `json:"error"`
 	Port              int     `json:"port"`
 	Level             float64 `json:"level"`
+	Notice            string  `json:"notice"`
 }
 
 // StartService reserves the port before allocating resources. A conflicting
@@ -34,17 +35,41 @@ func StartService(version string) (*Service, error) {
 	}
 	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfg.Port))
 	if err != nil {
+		RecordDiagnostic(version, "startup.failed", "error", "The local control port is unavailable. Close another Voice Type instance and reopen the app.")
 		return nil, fmt.Errorf("cannot start Voice Type on port %d; close any other Voice Type instance: %w", cfg.Port, err)
+	}
+	// Device enumeration failure is not evidence that the saved device vanished.
+	// Only a successful enumeration may replace a saved preference.
+	microphoneChanged := false
+	if cfg.Microphone != "" {
+		if sources, e := ListAudioSources(); e == nil {
+			if changed, e := reconcileMicrophone(cfg.Microphone, sources); e != nil {
+				configErr = e
+			} else if changed {
+				cfg.Microphone = ""
+				microphoneChanged = true
+			}
+		}
 	}
 	settings, err := cfg.resolveSTT("", workspaceLoad())
 	if err != nil {
-		configErr = err
+		if configErr == nil {
+			configErr = err
+		}
 		settings = sttSettings{Provider: cfg.Provider, Model: providerModel(cfg.Provider)}
 	}
 	d := newDaemon(cfg, &resources{Recorder: &Recorder{}}, settings, "")
 	d.runLog = openRunLog(version)
+	if microphoneChanged {
+		d.notice = microphoneFallbackNotice
+		d.runLog.diagnostic("microphone.changed", "ok", microphoneFallbackNotice)
+	}
+	if notice := ConfigNotice(); notice != "" {
+		d.runLog.diagnostic("configuration.recovered", "ok", notice)
+	}
 	if configErr != nil {
 		d.configError = configErr.Error()
+		d.runLog.diagnostic("configuration.failed", "error", "Configuration could not be loaded. Open settings to repair it.")
 	} else if err := settings.validateCredentials(); err != nil {
 		d.configError = err.Error()
 	}
@@ -87,22 +112,51 @@ func (s *Service) Status() ServiceStatus {
 	if d.testRecorder != nil {
 		level = d.testRecorder.Level()
 	}
-	return ServiceStatus{LastAttemptFailed: d.lastAttemptFailed, State: d.state.String(), Error: d.configError, Port: d.cfg.Port, Level: level}
+	return ServiceStatus{LastAttemptFailed: d.lastAttemptFailed, State: d.state.String(), Error: d.configError, Port: d.cfg.Port, Level: level, Notice: d.notice}
 }
 func (s *Service) SaveSettings(update SettingsUpdate) (Settings, error) {
 	value, err := SaveSettings(update)
 	if err == nil {
-		s.d.mu.Lock()
-		if s.d.state == stateIdle {
-			if e := s.d.reloadConfig(); e != nil {
-				s.d.configError = e.Error()
-			} else {
-				s.d.configError = ""
-			}
-		}
-		s.d.mu.Unlock()
+		s.RefreshSettings()
+	} else {
+		s.d.runLog.diagnostic("settings.failed", "error", "Settings could not be saved. Your pending changes are retained in the app.")
 	}
 	return value, err
+}
+
+// RefreshSettings applies idle changes only. An in-flight session keeps its
+// original client until completion, including after profile deletion.
+func (s *Service) RefreshSettings() {
+	s.d.mu.Lock()
+	defer s.d.mu.Unlock()
+	if s.d.state == stateIdle {
+		if err := s.d.reloadConfig(); err != nil {
+			s.d.configError = err.Error()
+		} else {
+			s.d.configError = ""
+		}
+	}
+}
+
+func (s *Service) Microphones() ([]AudioSource, error) {
+	sources, err := ListAudioSources()
+	if err != nil {
+		return nil, err
+	}
+	settings, err := ReadSettings()
+	if err != nil {
+		return nil, err
+	}
+	if changed, err := reconcileMicrophone(settings.Microphone, sources); err != nil {
+		return nil, err
+	} else if changed {
+		s.d.mu.Lock()
+		s.d.notice = microphoneFallbackNotice
+		s.d.mu.Unlock()
+		s.d.runLog.diagnostic("microphone.changed", "ok", microphoneFallbackNotice)
+		s.RefreshSettings()
+	}
+	return sources, nil
 }
 func (s *Service) Toggle() error {
 	var code int
@@ -121,6 +175,10 @@ func (s *Service) Toggle() error {
 func (s *Service) StartMicrophoneTest(id string) error { return s.d.startMicrophoneTest(id) }
 func (s *Service) StopMicrophoneTest()                 { s.d.stopMicrophoneTest() }
 func (s *Service) ClearLogs() error                    { return s.d.runLog.clear() }
+
+func (s *Service) RecordDiagnostic(event, outcome, message string) {
+	s.d.runLog.diagnostic(event, outcome, message)
+}
 
 // DiagnosticRecord is the redacted, bounded diagnostic format shown by the UI.
 type DiagnosticRecord = runLogRecord

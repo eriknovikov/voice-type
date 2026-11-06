@@ -15,6 +15,9 @@ import (
 // Config holds file settings. Model overrides belong to the process, not the
 // file. Unknown fields remain compatible with older files.
 type Config struct {
+	Profiles      []Profile
+	ActiveProfile string
+	// Legacy fields are used only while migrating old files and by diagnostics.
 	Provider   string
 	APIKey     string
 	APIKeys    map[string]string
@@ -101,12 +104,19 @@ func (c Config) keyEnv() string {
 
 func (s sttSettings) validateCredentials() error {
 	if s.APIKey == "" {
-		return fmt.Errorf("add your %s API key in General, or set %s", s.Provider, (Config{Provider: s.Provider}).keyEnv())
+		return errors.New("select a profile with an API key in General")
 	}
 	return nil
 }
 
 func (c Config) resolveSTT(modelOverride, workspace string) (sttSettings, error) {
+	if c.Profiles != nil {
+		profile, ok := c.activeProfile()
+		if !ok {
+			return sttSettings{}, errors.New("select a profile in General before recording")
+		}
+		c.Provider, c.APIKey = profile.Provider, profile.APIKey()
+	}
 	if c.Provider != providerOpenAI && c.Provider != providerOpenRouter {
 		return sttSettings{}, errors.New("provider must be openai or openrouter")
 	}
@@ -242,7 +252,7 @@ func parseVocabulary(raw json.RawMessage) (vocabLists, error) {
 		}
 		name, _ := key.(string) // an object key is always a string
 		if name = strings.TrimSpace(name); name == "" {
-			continue
+			return nil, errors.New("vocabulary names must be nonempty")
 		}
 		// JSON says a repeated key wins with its last value; the row stays where
 		// it first appeared so the list still reads down the file.
@@ -260,13 +270,12 @@ func parseVocabulary(raw json.RawMessage) (vocabLists, error) {
 }
 
 // configFilePath is the one and only config location: ~/.voice-type-config.jsonc,
-// the same path install.sh writes. Without a home directory there is nowhere
-// else to look, so stop rather than fall back to a stray relative file.
+// the same path install.sh writes. An empty result is reported by the loader;
+// it must never terminate the desktop process or use a relative file.
 func configFilePath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "voice-type: cannot locate home directory: %v\n", err)
-		os.Exit(1)
+		return ""
 	}
 	return filepath.Join(home, ".voice-type-config.jsonc")
 }
@@ -400,16 +409,11 @@ func configValidate(raw map[string]json.RawMessage) (Config, error) {
 		cfg.Provider = provider
 	}
 
-	portWarning := ""
 	if v, ok := raw["port"]; ok {
-		var n int
-		if err := json.Unmarshal(v, &n); err == nil && n >= 1024 && n <= 65535 {
-			cfg.Port = n
-		} else {
-			portWarning = fmt.Sprintf("invalid value, using default %d", cfg.Port)
+		if err := json.Unmarshal(v, &cfg.Port); err != nil || cfg.Port < 1024 || cfg.Port > 65535 {
+			return cfg, errors.New("port must be between 1024 and 65535")
 		}
 	}
-	configWarn("port", portWarning)
 
 	if v, ok := raw["api_key"]; ok {
 		if err := json.Unmarshal(v, &cfg.APIKey); err != nil {
@@ -437,17 +441,37 @@ func configValidate(raw map[string]json.RawMessage) (Config, error) {
 	}
 	configWarn("model", modelWarning)
 
-	vocabularyWarning := ""
 	if v, ok := raw["vocabulary"]; ok {
-		vocabulary, err := parseVocabulary(v)
+		var err error
+		cfg.Vocabulary, err = parseVocabulary(v)
 		if err != nil {
-			vocabularyWarning = err.Error()
-		} else {
-			cfg.Vocabulary = vocabulary
+			return cfg, errors.New("vocabulary must contain named lists of terms")
+		}
+		if err := validateVocabulary(cfg.Vocabulary); err != nil {
+			return cfg, err
 		}
 	}
-
-	configWarn("vocabulary", vocabularyWarning)
+	if v, ok := raw["profiles"]; ok {
+		if err := json.Unmarshal(v, &cfg.Profiles); err != nil || cfg.Profiles == nil {
+			return cfg, errors.New("profiles must be a list")
+		}
+		if v, ok := raw["active_profile"]; ok {
+			if err := json.Unmarshal(v, &cfg.ActiveProfile); err != nil {
+				return cfg, errors.New("active_profile must be a profile ID")
+			}
+		}
+		if err := validateProfiles(cfg.Profiles, cfg.ActiveProfile); err != nil {
+			return cfg, err
+		}
+	} else {
+		cfg.Profiles, cfg.ActiveProfile = migrateLegacyProfiles(cfg)
+	}
+	// Keep internal reporting compatible; credentials always come from profiles.
+	cfg.APIKey = ""
+	cfg.APIKeys = nil
+	if profile, ok := cfg.activeProfile(); ok {
+		cfg.Provider, cfg.APIKey = profile.Provider, profile.APIKey()
+	}
 
 	return cfg, nil
 }
@@ -459,7 +483,7 @@ func configParse(data []byte) (Config, error) {
 
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(stripped), &raw); err != nil {
-		return configDefaults(), fmt.Errorf("could not parse config file: %w", err)
+		return configDefaults(), errors.New("configuration is not valid JSON")
 	}
 	if raw == nil {
 		return configDefaults(), errors.New("config must be a JSON object")
@@ -468,27 +492,23 @@ func configParse(data []byte) (Config, error) {
 	return configValidate(raw)
 }
 
-// A missing file means defaults, but invalid files
-// must block recording rather than silently using old credentials or routes.
+// configReadStrict and the settings API share recovery, migration, and validation.
 func configReadStrict() (Config, error) {
-	data, err := os.ReadFile(configFilePath())
+	settingsMu.Lock()
+	defer settingsMu.Unlock()
+	_, raw, err := readConfigDocument()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return configValidate(nil)
-		}
-		return Config{}, fmt.Errorf("could not read %s: %w", configFilePath(), err)
+		return Config{}, err
 	}
-	cfg, err := configParse(data)
-	if err != nil {
-		return cfg, fmt.Errorf("%s: %w", configFilePath(), err)
-	}
-	return cfg, nil
+	return configValidate(raw)
 }
 
-// Only the selected provider's environment key can replace the file key.
 func configAPIKey(cfg Config) string {
-	if k := strings.TrimSpace(os.Getenv(cfg.keyEnv())); k != "" {
-		return k
+	if cfg.Profiles != nil {
+		if profile, ok := cfg.activeProfile(); ok {
+			return profile.APIKey()
+		}
+		return ""
 	}
 	if k, ok := cfg.APIKeys[cfg.Provider]; ok {
 		return strings.TrimSpace(k)
