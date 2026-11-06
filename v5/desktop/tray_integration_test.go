@@ -56,32 +56,6 @@ func TestNativeTray(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	bus := exec.CommandContext(ctx, "dbus-daemon", "--session", "--nofork", "--print-address=1")
-	stdout, err := bus.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = bus.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { bus.Process.Kill(); bus.Wait() }()
-	scanner := bufio.NewScanner(stdout)
-	if !scanner.Scan() {
-		t.Fatal("no private bus address")
-	}
-	address := scanner.Text()
-	conn, err := dbus.Connect(address)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	host := &testTrayHost{registrations: make(chan trayRegistration, 10)}
-	if err := conn.Export(host, "/StatusNotifierWatcher", "org.kde.StatusNotifierWatcher"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := conn.RequestName("org.kde.StatusNotifierWatcher", dbus.NameFlagDoNotQueue); err != nil {
-		t.Fatal(err)
-	}
 	runtime := os.Getenv("XDG_RUNTIME_DIR")
 	display := os.Getenv("WAYLAND_DISPLAY")
 	if display != "" && !filepath.IsAbs(display) {
@@ -93,10 +67,58 @@ func TestNativeTray(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
 	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(home, "runtime"))
-	t.Setenv("DBUS_SESSION_BUS_ADDRESS", address)
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
 	if err := os.MkdirAll(os.Getenv("XDG_RUNTIME_DIR"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GSETTINGS_BACKEND", "keyfile")
+	t.Setenv("XDG_CURRENT_DESKTOP", "GNOME")
+	// Seed another app before launch and verify the real process preserves it.
+	gradia := "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/be.alexandervanhee.gradia/"
+	registered := "['" + gradia + "']"
+	for _, args := range [][]string{
+		{"set", mediaKeysSchema, "custom-keybindings", registered},
+		{"set", customKeySchema + ":" + gradia, "name", "'Gradia'"},
+		{"set", customKeySchema + ":" + gradia, "command", "'gradia --screenshot=INTERACTIVE'"},
+		{"set", customKeySchema + ":" + gradia, "binding", "'Print'"},
+	} {
+		if output, err := exec.Command("gsettings", args...).CombinedOutput(); err != nil {
+			t.Fatalf("seed private settings: %v %s", err, output)
+		}
+	}
+	bus := exec.CommandContext(ctx, "dbus-daemon", "--session", "--nofork", "--print-address=1")
+	bus.Env = os.Environ()
+	stdout, err := bus.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = bus.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		bus.Process.Kill()
+		bus.Wait()
+		// GNOME may activate its document portal on the private bus. Its FUSE
+		// mount must not outlive that bus or obstruct TempDir cleanup.
+		_ = exec.Command("fusermount3", "-uz", filepath.Join(home, "runtime", "doc")).Run()
+	}()
+	scanner := bufio.NewScanner(stdout)
+	if !scanner.Scan() {
+		t.Fatal("no private bus address")
+	}
+	address := scanner.Text()
+	t.Setenv("DBUS_SESSION_BUS_ADDRESS", address)
+	conn, err := dbus.Connect(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	host := &testTrayHost{registrations: make(chan trayRegistration, 10)}
+	if err := conn.Export(host, "/StatusNotifierWatcher", "org.kde.StatusNotifierWatcher"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.RequestName("org.kde.StatusNotifierWatcher", dbus.NameFlagDoNotQueue); err != nil {
 		t.Fatal(err)
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -156,6 +178,23 @@ func TestNativeTray(t *testing.T) {
 			t.Fatalf("missing menu action %q", label)
 		}
 	}
+	// Registration can arrive before startup finishes configuring the shortcut.
+	expected := "['" + gradia + "', '" + shortcutBase + "transcription/']\n"
+	for {
+		value, err := exec.Command("gsettings", "get", mediaKeysSchema, "custom-keybindings").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(value) == expected {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("app startup lost the other shortcut registration")
+		default:
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
 	// Trigger actual native menu callbacks through their published protocol.
 	if err := menu.Call("com.canonical.dbusmenu.Event", 0, findTrayItem(layout, "Open settings"), "clicked", dbus.MakeVariant(int32(0)), uint32(0)).Err; err != nil {
 		t.Fatal(err)
@@ -172,4 +211,20 @@ func TestNativeTray(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("tray quit did not stop app")
 	}
+	// Exercise the actual uninstaller entry point too, entirely in the keyfile.
+	if output, err := exec.Command(binary, "--remove-shortcuts").CombinedOutput(); err != nil {
+		t.Fatalf("remove shortcuts: %v %s", err, output)
+	}
+	for _, check := range []struct{ schema, key, want string }{
+		{mediaKeysSchema, "custom-keybindings", registered + "\n"},
+		{customKeySchema + ":" + gradia, "name", "'Gradia'\n"},
+		{customKeySchema + ":" + gradia, "command", "'gradia --screenshot=INTERACTIVE'\n"},
+		{customKeySchema + ":" + gradia, "binding", "'Print'\n"},
+	} {
+		value, err := exec.Command("gsettings", "get", check.schema, check.key).Output()
+		if err != nil || string(value) != check.want {
+			t.Fatalf("another app's %s changed: %q %v", check.key, value, err)
+		}
+	}
+
 }

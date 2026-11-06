@@ -3,6 +3,7 @@ import http.client
 import json
 import os
 import pathlib
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -17,7 +18,7 @@ with tempfile.TemporaryDirectory(prefix="voice-type-smoke-") as directory:
     env.update(HOME=str(root), XDG_STATE_HOME=str(root / "state"),
                XDG_CONFIG_HOME=str(root / "config"), XDG_DATA_HOME=str(root / "data"),
                XDG_RUNTIME_DIR=str(root / "runtime"), OPENAI_API_KEY="", OPENROUTER_API_KEY="",
-               XDG_CURRENT_DESKTOP="smoke-test", XDG_SESSION_TYPE="wayland", GTK_A11Y="none", NO_AT_BRIDGE="1")
+               GSETTINGS_BACKEND="keyfile", XDG_CURRENT_DESKTOP="smoke-test", XDG_SESSION_TYPE="wayland", GTK_A11Y="none", NO_AT_BRIDGE="1")
     (root / "runtime").mkdir(mode=0o700)
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -25,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix="voice-type-smoke-") as directory:
     (root / ".voice-type-config.jsonc").write_text(json.dumps({"provider": "openai", "port": port}))
     binary = pathlib.Path(__file__).resolve().parents[1] / "build/voice-type-app"
     # Isolate single-instance and tray D-Bus state as well as the filesystem.
-    bus = subprocess.Popen(["dbus-daemon", "--session", "--nofork", "--print-address=1"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    bus = subprocess.Popen(["dbus-daemon", "--session", "--nofork", "--print-address=1"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
     env["DBUS_SESSION_BUS_ADDRESS"] = bus.stdout.readline().strip()
 
     def request(method, path):
@@ -135,3 +136,5 @@ with tempfile.TemporaryDirectory(prefix="voice-type-smoke-") as directory:
                     process.wait()
             bus.terminate()
             bus.wait(timeout=5)
+            if shutil.which("fusermount3"):
+                subprocess.run(["fusermount3", "-uz", str(root / "runtime/doc")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
