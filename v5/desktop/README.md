@@ -113,3 +113,9 @@ On GNOME the app manages only its own transcription shortcut entry. Other
 shortcuts are preserved. Capture is inline; no GNOME Settings window or portal
 dialog is opened. Other Wayland desktops currently require configuring global
 shortcuts in the desktop itself. X11 uses Wails' direct shortcut registration.
+
+GNOME registration uses GSettings' typed API. Normal launches and key capture
+leave the shared shortcut list untouched once Voice Type is registered. Adding
+or removing Voice Type preserves every other entry; shortcut conflicts fail
+without changing another action. The native shortcut/tray checks use a private
+keyfile backend and private D-Bus service environment, never the user's dconf.

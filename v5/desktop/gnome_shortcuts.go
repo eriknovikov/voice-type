@@ -1,17 +1,17 @@
 package desktop
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	vt "github.com/eriknovikov/voice-type"
@@ -21,29 +21,23 @@ const mediaKeysSchema = "org.gnome.settings-daemon.plugins.media-keys"
 const customKeySchema = mediaKeysSchema + ".custom-keybinding"
 const shortcutBase = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/voice-type-"
 
-var shortcutPathPattern = regexp.MustCompile(`['"](/[A-Za-z0-9_/-]+/)['"]`)
+var gnomeShortcutsMu sync.Mutex
+var errGNOMESettingsUnavailable = errors.New("GNOME desktop shortcut settings are unavailable")
+
+type shortcutSettings interface {
+	paths() ([]string, error)
+	setPaths([]string) error
+	binding(string) (string, error)
+	set(string, string, string) error
+	reset(string) error
+}
+
+func ownedShortcutPath(path string) bool {
+	return path == shortcutBase+"transcription/" || path == shortcutBase+"daemon/"
+}
 
 func isGNOME() bool {
 	return strings.Contains(strings.ToUpper(os.Getenv("XDG_CURRENT_DESKTOP")), "GNOME")
-}
-func gsettings(args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	data, err := exec.CommandContext(ctx, "gsettings", args...).CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("could not update desktop shortcuts: %s", strings.TrimSpace(string(data)))
-	}
-	return strings.TrimSpace(string(data)), nil
-}
-func variantString(value string) string {
-	return "'" + strings.ReplaceAll(strings.ReplaceAll(value, "\\", "\\\\"), "'", "\\'") + "'"
-}
-func shortcutPaths(value string) []string {
-	out := []string{}
-	for _, match := range shortcutPathPattern.FindAllStringSubmatch(value, -1) {
-		out = append(out, match[1])
-	}
-	return out
 }
 func gtkShortcut(value string) (string, error) {
 	if value == "" {
@@ -84,17 +78,8 @@ func gtkShortcut(value string) (string, error) {
 	}
 	return canonicalGTKShortcut(mods + key), nil
 }
-func writeShortcutPaths(paths []string) error {
-	items := make([]string, len(paths))
-	for i, path := range paths {
-		items[i] = variantString(path)
-	}
-	_, err := gsettings("set", mediaKeysSchema, "custom-keybindings", "["+strings.Join(items, ",")+"]")
-	return err
-}
-
 func canonicalGTKShortcut(value string) string {
-	value = strings.ToLower(strings.Trim(value, "'\""))
+	value = strings.ToLower(value)
 	value = strings.ReplaceAll(value, "<primary>", "<control>")
 	mods := regexp.MustCompile(`<[^>]+>`).FindAllString(value, -1)
 	sort.Strings(mods)
@@ -102,74 +87,91 @@ func canonicalGTKShortcut(value string) string {
 	return strings.Join(mods, "") + key
 }
 
-// Only our stable transcription path and retired daemon path are managed.
-func applyGNOMEShortcuts(prefs Preferences, suspended bool) error {
-	first, err := gtkShortcut(prefs.Shortcut)
+// The shared array is touched only when adding/removing an owned path. Read it
+// again immediately before that edit: key-capture and normal launches never
+// replace it with a stale snapshot taken before individual settings writes.
+func updateOwnedShortcutPaths(settings shortcutSettings, include bool) error {
+	paths, err := settings.paths()
 	if err != nil {
 		return err
 	}
-	raw, err := gsettings("get", mediaKeysSchema, "custom-keybindings")
-	if err != nil {
-		return err
-	}
-	paths := shortcutPaths(raw)
-	if !suspended {
-		for _, path := range paths {
-			if path == shortcutBase+"transcription/" || path == shortcutBase+"daemon/" {
+	next := make([]string, 0, len(paths)+1)
+	found := false
+	for _, path := range paths {
+		if path == shortcutBase+"daemon/" {
+			continue
+		}
+		if path == shortcutBase+"transcription/" {
+			if !include {
 				continue
 			}
-			value, err := gsettings("get", customKeySchema+":"+path, "binding")
-			if err != nil {
-				return err
-			}
-			existing := canonicalGTKShortcut(value)
-			if existing != "" && first != "" && existing == first {
-				return errors.New("that shortcut is already assigned to another desktop action")
-			}
+			found = true
 		}
+		next = append(next, path)
 	}
-	// Migrate away from the old daemon lifecycle binding, preserving other keys.
-	legacy := shortcutBase + "daemon/"
-	kept := paths[:0]
-	for _, path := range paths {
-		if path == legacy {
-			if _, err := gsettings("reset-recursively", customKeySchema+":"+path); err != nil {
-				return err
-			}
-		} else {
-			kept = append(kept, path)
-		}
+	if include && !found {
+		next = append(next, shortcutBase+"transcription/")
 	}
-	paths = kept
+	if slices.Equal(paths, next) {
+		return nil
+	}
+	return settings.setPaths(next)
+}
+
+func applyGNOMEShortcuts(prefs Preferences, suspended bool) error {
+	gnomeShortcutsMu.Lock()
+	defer gnomeShortcutsMu.Unlock()
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	path := shortcutBase + "transcription/"
-	key := first
-	if suspended {
-		key = ""
+	return applyGNOMEShortcutsTo(nativeShortcutSettings{}, prefs, suspended, exe)
+}
+
+func applyGNOMEShortcutsTo(settings shortcutSettings, prefs Preferences, suspended bool, exe string) error {
+	key, err := gtkShortcut(prefs.Shortcut)
+	if err != nil {
+		return err
 	}
-	for field, value := range map[string]string{
-		"name":    "Voice Type: transcription",
-		"command": strconv.Quote(exe) + " --shortcut-action transcription",
-		"binding": key,
+	path := shortcutBase + "transcription/"
+	// Temporarily releasing our key never edits registrations or another action.
+	if suspended {
+		return settings.set(path, "binding", "")
+	}
+	paths, err := settings.paths()
+	if err != nil {
+		return err
+	}
+	if key != "" {
+		for _, other := range paths {
+			if ownedShortcutPath(other) {
+				continue
+			}
+			binding, err := settings.binding(other)
+			if err != nil {
+				return err
+			}
+			if canonicalGTKShortcut(binding) == key {
+				return errors.New("that shortcut is already assigned to another desktop action")
+			}
+		}
+	}
+	for _, field := range []struct{ name, value string }{
+		{"name", "Voice Type: transcription"},
+		{"command", strconv.Quote(exe) + " --shortcut-action transcription"},
+		{"binding", key},
 	} {
-		if _, err := gsettings("set", customKeySchema+":"+path, field, variantString(value)); err != nil {
+		if err := settings.set(path, field.name, field.value); err != nil {
 			return err
 		}
 	}
-	exists := false
-	for _, other := range paths {
-		if other == path {
-			exists = true
-			break
-		}
+	// A disabled shortcut need not create a registration. Existing registrations
+	// can remain: their empty binding is harmless and avoids a shared-list write.
+	registered := key != "" || slices.Contains(paths, path)
+	if err := updateOwnedShortcutPaths(settings, registered); err != nil {
+		return err
 	}
-	if !exists {
-		paths = append(paths, path)
-	}
-	return writeShortcutPaths(paths)
+	return settings.reset(shortcutBase + "daemon/")
 }
 
 // This command path never creates a Wails window or registers portal shortcuts.
@@ -197,20 +199,23 @@ func RunShortcutAction(action string) error {
 }
 
 func RemoveGNOMEShortcuts() error {
-	if _, err := exec.LookPath("gsettings"); err != nil {
+	gnomeShortcutsMu.Lock()
+	defer gnomeShortcutsMu.Unlock()
+	err := removeGNOMEShortcutsFrom(nativeShortcutSettings{})
+	if errors.Is(err, errGNOMESettingsUnavailable) {
 		return nil
 	}
-	raw, err := gsettings("get", mediaKeysSchema, "custom-keybindings")
-	if err != nil {
+	return err
+}
+
+func removeGNOMEShortcutsFrom(settings shortcutSettings) error {
+	if err := updateOwnedShortcutPaths(settings, false); err != nil {
 		return err
 	}
-	paths := []string{}
-	for _, path := range shortcutPaths(raw) {
-		if path == shortcutBase+"transcription/" || path == shortcutBase+"daemon/" {
-			_, _ = gsettings("reset-recursively", customKeySchema+":"+path)
-			continue
+	for _, action := range []string{"transcription", "daemon"} {
+		if err := settings.reset(shortcutBase + action + "/"); err != nil {
+			return err
 		}
-		paths = append(paths, path)
 	}
-	return writeShortcutPaths(paths)
+	return nil
 }
