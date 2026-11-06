@@ -25,6 +25,8 @@ curl -sSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/v5/insta
 The optional Wails desktop app runs dictation and provides settings, provider keys, vocabulary,
 input-device testing, shortcuts and diagnostic logs. From `v5/`, run
 `make install-desktop`, then open **Voice Type** from your application launcher.
+The desktop app uses Wails command forwarding (`voice-type-app --toggle`), with
+no local control port. The standalone daemon retains its HTTP interface.
 See [desktop build requirements and setup](v5/desktop/README.md).
 
 The daemon-only installation above remains available. Its CLI supports

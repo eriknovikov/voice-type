@@ -468,24 +468,7 @@ header {
 .switch:checked::before {
   transform: translateX(16px);
 }
-.advanced > summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 12px;
-  padding: 4px 0 12px;
-  list-style: none;
-}
-.advanced > summary::before {
-  content: "›";
-  font-size: 18px;
-  line-height: 1;
-}
-.advanced[open] > summary::before {
-  transform: rotate(90deg);
-}
+
 .profile-row {
   display: flex;
   align-items: center;
