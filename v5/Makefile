@@ -41,8 +41,8 @@ dist:
 clean:
 	rm -rf $(BINARY) dist
 
-# The optional desktop companion uses native GTK/WebKit. The daemon above
-# remains a separate static, CGO-disabled build.
+# The desktop app embeds the Go service and uses native GTK/WebKit.
+# The standalone CLI above remains a static, CGO-disabled alternative.
 .PHONY: desktop install-desktop check-desktop
 desktop:
 	$(MAKE) -C desktop build

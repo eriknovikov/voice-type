@@ -1,7 +1,7 @@
 # Voice Type desktop
 
-A Wails v3 companion for the static Voice Type daemon. Linux is the supported
-platform for this release; the UI is portable, but audio and insertion still
+A Wails v3 app with the Go dictation service embedded in the desktop process.
+Linux is the supported platform for this release; the UI is portable, but audio and insertion still
 use PulseAudio/PipeWire and IBus.
 
 ## Install from source
@@ -18,15 +18,17 @@ make install-desktop
 
 Launch **Voice Type** from the application launcher. Set your OpenAI or
 OpenRouter key, test the microphone, and save your shortcut and startup
-preferences. GNOME stores the two app shortcuts directly, without an approval dialog.
+preferences. GNOME stores the recording shortcut directly, without an approval dialog.
 
-The app installs alongside `voice-type` in `~/.local/bin`. The desktop window
-closes to the background; Quit Voice Type stops both processes. A second launch
-reopens the window. GNOME needs the AppIndicator/KStatusNotifierItem extension
+The app installs as `~/.local/bin/voice-type-app`. Closing the settings window
+keeps dictation and the tray running in that same process. Quit stops the entire
+app and releases the microphone and HTTP listener. A second launch reopens settings. GNOME needs the AppIndicator/KStatusNotifierItem extension
 for the tray icon; the launcher remains available without it.
 
-If an older daemon is already running, stop it before opening the new app.
-Port changes require saving settings and restarting the daemon from Settings.
+Stop any standalone `voice-type` daemon before opening the desktop app; a port
+conflict fails startup rather than connecting to another process. The standalone
+CLI remains separately installable. Port changes require saving, quitting and
+reopening Voice Type.
 
 ## Data and build boundaries
 
@@ -40,9 +42,12 @@ Vocabulary selection and desktop preferences live under `$XDG_STATE_HOME/voice-t
 (default `~/.local/state/voice-type`). Logs stay at `~/.voice-type-logs.jsonl`,
 with one rotated segment. No transcript history is stored.
 
-Desktop management uses a mode-0600 Unix socket inside a private directory.
-The existing localhost recording controls remain compatible. Credentials are
-write-only from the frontend's perspective.
+Settings, logs and microphone tests use direct Go calls inside Wails. No desktop
+management socket or daemon subprocess is created. The existing shortcut controls
+remain on `127.0.0.1:3232` (or your configured port): for example,
+`curl -X POST http://127.0.0.1:3232/toggle`. `/exit` quits the entire app.
+Management routes and credentials are never exposed over TCP; browser requests
+are rejected. Credentials are write-only from the frontend's perspective.
 
 This separate Go module deliberately enables CGO for Wails. The daemon module,
 its tests and its release artifacts continue to build with `CGO_ENABLED=0`.
@@ -53,6 +58,7 @@ make check-desktop      # from v5
 ./desktop/install.sh --uninstall
 ```
 
+Install and uninstall leave any separately installed `voice-type` CLI untouched.
 Uninstall preserves configuration, vocabulary, preferences and logs. Quit the
 app first. `VOICE_TYPE_BIN_DIR`, `XDG_DATA_HOME` and `XDG_CONFIG_HOME` can redirect
 installation for testing.
@@ -60,8 +66,9 @@ installation for testing.
 ## Integration checks
 
 After building, `python3 scripts/smoke.py` (from this directory) briefly launches
-the actual native app with an isolated home and socket, tests microphone-level
-capture and single-instance behavior, and shuts its test processes down.
+the actual native app with an isolated home and session bus, verifies listener
+ownership, shortcut requests, shutdown and single-instance behavior, and shuts
+its test processes down.
 
 From `v5/`, `VOICE_TYPE_TEST_IBUS_DAEMON=/usr/bin/ibus-daemon go test ./...`
 checks both provider request formats through real IBus insertion on a private
@@ -75,13 +82,13 @@ extension, run `VOICE_TYPE_DESKTOP_TEST_BINARY="$PWD/build/voice-type-app"
 CGO_ENABLED=1 go test -run TestNativeTray -v` from this directory (as one command).
 The test uses a private session bus and a test tray host.
 
-Keyboard Shortcuts has two defaults: Ctrl+Space toggles transcription and
-Ctrl+Alt+Space starts or stops the daemon. The desktop app remains running when
-the daemon is stopped. Existing custom transcription shortcuts are retained;
+Keyboard Shortcuts defaults to Ctrl+Space to toggle transcription.
+The old daemon toggle and its app-owned GNOME binding are removed automatically.
+Existing custom transcription shortcuts are retained;
 the previous default moves to Ctrl+Space when loading older preferences.
 Click a shortcut, press the keys, then click elsewhere to save. Escape disables it.
 
-On GNOME the app manages only its own two custom-shortcut entries. Other
+On GNOME the app manages only its own transcription shortcut entry. Other
 shortcuts are preserved. Capture is inline; no GNOME Settings window or portal
 dialog is opened. Other Wayland desktops currently require configuring global
 shortcuts in the desktop itself. X11 uses Wails' direct shortcut registration.

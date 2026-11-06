@@ -465,6 +465,12 @@ func (d *daemon) routes() *http.ServeMux {
 // page, never a hotkey.
 func requireLoopbackHost(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// This listener is for local shortcut tools, never browser requests.
+		// Host validation alone does not stop cross-origin forms or fetches.
+		if r.Header.Get("Origin") != "" || (r.Header.Get("Sec-Fetch-Site") != "" && r.Header.Get("Sec-Fetch-Site") != "none") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"status": "error", "message": "browser requests are not allowed"})
+			return
+		}
 		if !isLoopbackHost(r.Host) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"status": "error", "message": "rejected non-local Host header"})
 			return

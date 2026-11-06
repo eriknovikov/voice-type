@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
@@ -100,18 +102,11 @@ func canonicalGTKShortcut(value string) string {
 	return strings.Join(mods, "") + key
 }
 
-// Only our two stable paths are managed. Other user shortcuts are preserved.
+// Only our stable transcription path and retired daemon path are managed.
 func applyGNOMEShortcuts(prefs Preferences, suspended bool) error {
 	first, err := gtkShortcut(prefs.Shortcut)
 	if err != nil {
 		return err
-	}
-	second, err := gtkShortcut(prefs.DaemonShortcut)
-	if err != nil {
-		return err
-	}
-	if first != "" && strings.EqualFold(first, second) {
-		return errors.New("choose different keys for the two shortcuts")
 	}
 	raw, err := gsettings("get", mediaKeysSchema, "custom-keybindings")
 	if err != nil {
@@ -128,54 +123,77 @@ func applyGNOMEShortcuts(prefs Preferences, suspended bool) error {
 				return err
 			}
 			existing := canonicalGTKShortcut(value)
-			if existing != "" && ((first != "" && existing == first) || (second != "" && existing == second)) {
+			if existing != "" && first != "" && existing == first {
 				return errors.New("that shortcut is already assigned to another desktop action")
 			}
 		}
 	}
+	// Migrate away from the old daemon lifecycle binding, preserving other keys.
+	legacy := shortcutBase + "daemon/"
+	kept := paths[:0]
+	for _, path := range paths {
+		if path == legacy {
+			if _, err := gsettings("reset-recursively", customKeySchema+":"+path); err != nil {
+				return err
+			}
+		} else {
+			kept = append(kept, path)
+		}
+	}
+	paths = kept
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	for _, binding := range []struct{ action, name, key string }{{"transcription", "Voice Type: transcription", first}, {"daemon", "Voice Type: daemon", second}} {
-		path := shortcutBase + binding.action + "/"
-		key := binding.key
-		if suspended {
-			key = ""
-		}
-		if _, err := gsettings("set", customKeySchema+":"+path, "name", variantString(binding.name)); err != nil {
+	path := shortcutBase + "transcription/"
+	key := first
+	if suspended {
+		key = ""
+	}
+	for field, value := range map[string]string{
+		"name":    "Voice Type: transcription",
+		"command": strconv.Quote(exe) + " --shortcut-action transcription",
+		"binding": key,
+	} {
+		if _, err := gsettings("set", customKeySchema+":"+path, field, variantString(value)); err != nil {
 			return err
 		}
-		if _, err := gsettings("set", customKeySchema+":"+path, "command", variantString(strconv.Quote(exe)+" --shortcut-action "+binding.action)); err != nil {
-			return err
+	}
+	exists := false
+	for _, other := range paths {
+		if other == path {
+			exists = true
+			break
 		}
-		if _, err := gsettings("set", customKeySchema+":"+path, "binding", variantString(key)); err != nil {
-			return err
-		}
-		exists := false
-		for _, other := range paths {
-			if other == path {
-				exists = true
-			}
-		}
-		if !exists {
-			paths = append(paths, path)
-		}
+	}
+	if !exists {
+		paths = append(paths, path)
 	}
 	return writeShortcutPaths(paths)
 }
 
 // This command path never creates a Wails window or registers portal shortcuts.
 func RunShortcutAction(action string) error {
-	b := &Bridge{client: vt.NewManagementClient()}
-	switch action {
-	case "transcription":
-		return b.Toggle()
-	case "daemon":
-		return b.ToggleDaemon()
-	default:
+	if action != "transcription" {
 		return errors.New("unknown shortcut action")
 	}
+	settings, err := vt.ReadSettings()
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: 12 * time.Minute, Transport: &http.Transport{Proxy: nil}}
+	defer client.CloseIdleConnections()
+	response, err := client.Post(fmt.Sprintf("http://127.0.0.1:%d/toggle", settings.Port), "application/json", nil)
+	if err != nil {
+		return errors.New("Voice Type is not running; open the app first")
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= 400 {
+		// Never print a response body: control responses can include transcripts.
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		return fmt.Errorf("Voice Type could not toggle recording (HTTP %d); open settings for details", response.StatusCode)
+	}
+	return nil
 }
 
 func RemoveGNOMEShortcuts() error {

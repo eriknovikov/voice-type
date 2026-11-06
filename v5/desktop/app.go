@@ -61,7 +61,7 @@ func Run(version string) error {
 	if err != nil {
 		return err
 	}
-	b := &Bridge{client: vt.NewManagementClient(), prefs: readPreferences(), version: version}
+	b := &Bridge{prefs: readPreferences(), version: version}
 	done := make(chan struct{})
 	app := application.New(application.Options{
 		Name: "Voice Type", Icon: appIcon, Description: "System-wide voice dictation",
@@ -81,9 +81,15 @@ func Run(version string) error {
 				b.mu.Unlock()
 			}
 		},
-		OnShutdown: func() { close(done); _ = b.StopMicrophoneTest() },
+		OnShutdown: func() { close(done); b.cancelLevelStream(); b.service.Close() },
 	})
 	b.app = app
+	// application.New has already handed secondary launches to the first instance.
+	b.service, err = vt.StartService(version)
+	if err != nil {
+		return err
+	}
+	defer b.service.Close()
 	hidden := false
 	for _, arg := range os.Args[1:] {
 		if arg == "--background" && b.prefs.SetupComplete {
@@ -135,7 +141,6 @@ func Run(version string) error {
 		b.shortcutError = err.Error()
 	}
 	go func() {
-		_ = b.Connect()
 		last := ""
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
@@ -143,12 +148,12 @@ func Run(version string) error {
 			select {
 			case <-done:
 				return
+			case <-b.service.Done():
+				app.Quit()
+				return
 			case <-ticker.C:
 			}
-			state := "disconnected"
-			if status, err := b.Status(); err == nil {
-				state = trayState(status)
-			}
+			state := trayState(b.Status())
 			if state != last {
 				last = state
 				application.InvokeSync(func() { updateMenu(state) })

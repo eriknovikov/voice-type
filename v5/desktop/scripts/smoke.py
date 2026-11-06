@@ -1,54 +1,116 @@
-# Native Linux smoke test: private config/socket and synthetic credentials.
-# It opens a window briefly, tests audio-level capture, then removes no user data.
-import os, pathlib, subprocess, tempfile, time, json, socket, http.client
-root=pathlib.Path(tempfile.mkdtemp(prefix='voice-type-smoke-'))
-env=os.environ.copy()
-env.update(HOME=str(root),XDG_STATE_HOME=str(root/'state'),XDG_CONFIG_HOME=str(root/'config'),XDG_DATA_HOME=str(root/'data'),OPENAI_API_KEY='',OPENROUTER_API_KEY='')
-runtime=env.get('XDG_RUNTIME_DIR',f'/run/user/{os.getuid()}')
-if env.get('WAYLAND_DISPLAY') and not env['WAYLAND_DISPLAY'].startswith('/'):
- env['WAYLAND_DISPLAY']=runtime+'/'+env['WAYLAND_DISPLAY']
-env['PULSE_SERVER']='unix:'+runtime+'/pulse/native'
-env['XDG_RUNTIME_DIR']=str(root/'runtime');(root/'runtime').mkdir(mode=0o700)
-(root/'.voice-type-config.jsonc').write_text(json.dumps({'provider':'openai','port':33232}))
-exe=pathlib.Path(__file__).resolve().parents[1]/'build'
-class UnixHTTP(http.client.HTTPConnection):
- def connect(self):
-  self.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);self.sock.settimeout(10);self.sock.connect(str(root/'runtime/voice-type/desktop.sock'))
-def request(method,path,data=None):
- c=UnixHTTP('localhost');c.request(method,path,json.dumps(data) if data is not None else None,{'Content-Type':'application/json'});r=c.getresponse();body=json.loads(r.read());c.close();return r.status,body
-log=open(root/'app.log','w')
-p=subprocess.Popen([str(exe/'voice-type-app')],env=env,stdout=log,stderr=log)
-try:
- for i in range(100):
-  if p.poll() is not None: raise RuntimeError('desktop exited '+str(p.returncode))
-  try: status,body=request('GET','/status');break
-  except OSError: time.sleep(.1)
- else: raise RuntimeError('management never started')
- print('Desktop running, status:',body['state'])
- status,s=request('GET','/settings');assert status==200
- update={k:s[k] for k in ['revision','provider','port','microphone','vocabulary']};update['api_keys']={'openai':'fake-test-key'}
- status,s=request('PUT','/settings',update);assert status==200,s
- assert 'fake-test-key' not in json.dumps(s)
- status,sources=request('GET','/microphones');assert status==200,sources
- print('Microphone sources:',len(sources))
- status,result=request('POST','/microphone-test',{'id':''});assert status==200,result
- time.sleep(.4)
- status,s=request('GET','/status');assert s['state']=='testing',s
- status,result=request('POST','/toggle');assert status==409,result
- status,result=request('DELETE','/microphone-test');assert status==200,result
- status,s=request('GET','/status');assert s['state']=='idle',s
- print('Microphone test starts, blocks dictation and releases capture')
- second=subprocess.run([str(exe/'voice-type-app')],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=10)
- assert second.returncode==0,second.stderr.decode()
- print('Second instance exits cleanly')
- time.sleep(2)
- assert p.poll() is None
- print('Native desktop smoke passed; isolated data:',root)
-finally:
- try:request('POST','/quit')
- except OSError:pass
- p.terminate()
- try:p.wait(timeout=10)
- except subprocess.TimeoutExpired:p.kill();p.wait()
- log.close()
- print((root/'app.log').read_text()[-3500:])
+"""Exercise the real desktop process without user settings or provider calls."""
+import http.client
+import json
+import os
+import pathlib
+import socket
+import subprocess
+import tempfile
+import time
+
+with tempfile.TemporaryDirectory(prefix="voice-type-smoke-") as directory:
+    root = pathlib.Path(directory)
+    env = os.environ.copy()
+    runtime = env.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    if env.get("WAYLAND_DISPLAY") and not env["WAYLAND_DISPLAY"].startswith("/"):
+        env["WAYLAND_DISPLAY"] = runtime + "/" + env["WAYLAND_DISPLAY"]
+    env.update(HOME=str(root), XDG_STATE_HOME=str(root / "state"),
+               XDG_CONFIG_HOME=str(root / "config"), XDG_DATA_HOME=str(root / "data"),
+               XDG_RUNTIME_DIR=str(root / "runtime"), OPENAI_API_KEY="", OPENROUTER_API_KEY="",
+               XDG_CURRENT_DESKTOP="smoke-test", XDG_SESSION_TYPE="wayland", GTK_A11Y="none", NO_AT_BRIDGE="1")
+    (root / "runtime").mkdir(mode=0o700)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    (root / ".voice-type-config.jsonc").write_text(json.dumps({"provider": "openai", "port": port}))
+    binary = pathlib.Path(__file__).resolve().parents[1] / "build/voice-type-app"
+    # Isolate single-instance and tray D-Bus state as well as the filesystem.
+    bus = subprocess.Popen(["dbus-daemon", "--session", "--nofork", "--print-address=1"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    env["DBUS_SESSION_BUS_ADDRESS"] = bus.stdout.readline().strip()
+
+    def request(method, path):
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        connection.request(method, path)
+        response = connection.getresponse()
+        data = json.loads(response.read())
+        connection.close()
+        return response.status, data
+
+    with (root / "app.log").open("w+") as log:
+        process = subprocess.Popen([str(binary)], env=env, stdout=log, stderr=log)
+        try:
+            for _ in range(100):
+                if process.poll() is not None:
+                    raise RuntimeError("desktop exited during startup")
+                try:
+                    code, health = request("GET", "/health")
+                    break
+                except OSError:
+                    time.sleep(.1)
+            else:
+                raise RuntimeError("listener never started")
+            assert code == 200 and health["state"] == "idle"
+            assert not (root / "runtime/voice-type/desktop.sock").exists()
+            # Verify Linux attributes the listening socket to the Wails process.
+            listening = []
+            for line in pathlib.Path("/proc/net/tcp").read_text().splitlines()[1:]:
+                columns = line.split()
+                if columns[1] == f"0100007F:{port:04X}" and columns[3] == "0A":
+                    listening.append(columns[9])
+            descriptors = []
+            for descriptor in pathlib.Path(f"/proc/{process.pid}/fd").iterdir():
+                try:
+                    descriptors.append(os.readlink(descriptor))
+                except FileNotFoundError:
+                    pass
+            assert any(f"socket:[{inode}]" in descriptors for inode in listening), "Wails does not own listener"
+            children = pathlib.Path(f"/proc/{process.pid}/task/{process.pid}/children").read_text().split()
+            assert not any(pathlib.Path(f"/proc/{pid}/comm").read_text().strip() == "voice-type" for pid in children)
+            code, _ = request("POST", "/toggle")
+            assert code == 503, "missing credentials must block recording"
+            second = subprocess.run([str(binary)], env=env, capture_output=True, timeout=10)
+            assert second.returncode == 0, second.stderr.decode()
+            assert process.poll() is None
+            # A shortcut helper reaches the same listener and reports missing setup.
+            helper = subprocess.run([str(binary), "--shortcut-action", "transcription"], env=env, capture_output=True, timeout=10)
+            assert helper.returncode != 0 and b"HTTP 503" in helper.stderr
+            request("POST", "/exit")
+            assert process.wait(timeout=10) == 0
+            with socket.socket() as listener:
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                listener.bind(("127.0.0.1", port))
+            # Native OS shutdown follows the same cleanup path as Quit.
+            process = subprocess.Popen([str(binary)], env=env, stdout=log, stderr=log)
+            for _ in range(100):
+                if process.poll() is not None:
+                    raise RuntimeError("desktop exited on relaunch")
+                try:
+                    request("GET", "/health")
+                    break
+                except OSError:
+                    time.sleep(.1)
+            else:
+                raise RuntimeError("relaunch listener never started")
+            # Allow Wails to finish installing its OS signal handler.
+            time.sleep(1)
+            process.terminate()
+            assert process.wait(timeout=10) == 0
+            log.flush()
+            log.seek(0)
+            assert log.read().count("DAEMON: shutting down") == 2
+            print("Native smoke passed: Wails owns HTTP, no daemon/socket, shortcuts reach service, second launch reuses app, exit and SIGTERM clean up.")
+        except Exception:
+            log.flush()
+            log.seek(0)
+            print(log.read()[-6000:])
+            raise
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            bus.terminate()
+            bus.wait(timeout=5)
