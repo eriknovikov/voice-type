@@ -129,7 +129,7 @@ func (s *Service) SaveSettings(update SettingsUpdate) (Settings, error) {
 func (s *Service) RefreshSettings() {
 	s.d.mu.Lock()
 	defer s.d.mu.Unlock()
-	if s.d.state == stateIdle {
+	if s.d.state == stateIdle && !s.d.shuttingDown {
 		if err := s.d.reloadConfig(); err != nil {
 			s.d.configError = err.Error()
 		} else {

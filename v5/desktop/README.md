@@ -16,9 +16,10 @@ From `v5/`, run:
 make install-desktop
 ```
 
-Launch **Voice Type** from the application launcher. Set your OpenAI or
-OpenRouter key, test the microphone, and save your shortcut and startup
-preferences. GNOME stores the recording shortcut directly, without an approval dialog.
+Launch **Voice Type** from the application launcher. Add an OpenAI or
+OpenRouter profile, test the microphone, and choose your shortcut.
+Settings save automatically; profile edits save through their dialog. Start at
+login is enabled unless you previously disabled it. GNOME stores the recording shortcut directly, without an approval dialog.
 
 The app installs as `~/.local/bin/voice-type-app`. Closing the settings window
 keeps dictation and the tray running in that same process. Quit stops the entire
@@ -27,16 +28,30 @@ for the tray icon; the launcher remains available without it.
 
 Stop any standalone `voice-type` daemon before opening the desktop app; a port
 conflict fails startup rather than connecting to another process. The standalone
-CLI remains separately installable. Port changes require saving, quitting and
-reopening Voice Type.
+CLI remains separately installable. Port changes save on blur and apply after quitting and reopening Voice Type.
+Startup failures show a native error dialog, including background launches.
 
 ## Data and build boundaries
 
-The existing `~/.voice-type-config.jsonc` remains the config file. The first
-save keeps an exact private `.before-desktop` backup and converts comments to
-formatted JSON, preserving unknown fields. An unreadable configuration can be
-reset from the app after saving a private recovery backup beside the original. Separate provider keys are stored
-with mode 0600. `OPENAI_API_KEY` / `OPENROUTER_API_KEY` override saved keys.
+The existing `~/.voice-type-config.jsonc` remains the config file. Profiles contain
+stable IDs, names and provider-specific settings; `active_profile` selects the
+account for new dictations. You can keep several profiles for the same provider.
+Switching, editing or deleting one does not change an in-flight dictation.
+Deleting the selected profile leaves no account selected.
+
+Saved legacy keys migrate automatically; the exact original is kept privately as
+`config-before-profiles.jsonc`. Environment API keys are no longer used or imported.
+Last-valid config and desktop-preference backups live in
+`$XDG_DATA_HOME/voice-type/backups` (default `~/.local/share/voice-type/backups`).
+Missing or damaged files recover automatically, with a notice. Corrupt originals
+are preserved privately. Without a valid backup the app opens empty setup;
+unreadable files remain untouched and show an error. Writes are atomic and synced,
+files use mode 0600, and application-owned directories use 0700. Unknown config
+fields are preserved.
+
+Microphone selection persists. If a device disappears, System default becomes the
+saved selection; reconnecting the previous device does not change it back. An
+unavailable audio server leaves your preference unchanged.
 
 Vocabulary selection and desktop preferences live under `$XDG_STATE_HOME/voice-type`
 (default `~/.local/state/voice-type`). Logs stay at `~/.voice-type-logs.jsonl`,
@@ -47,7 +62,8 @@ management socket or daemon subprocess is created. The existing shortcut control
 remain on `127.0.0.1:3232` (or your configured port): for example,
 `curl -X POST http://127.0.0.1:3232/toggle`. `/exit` quits the entire app.
 Management routes and credentials are never exposed over TCP; browser requests
-are rejected. Credentials are write-only from the frontend's perspective.
+are rejected. Routine settings responses contain only masked keys. Explicit Reveal and Copy
+actions are available in the profile editor; copying uses Go's clipboard API.
 
 This separate Go module deliberately enables CGO for Wails. The daemon module,
 its tests and its release artifacts continue to build with `CGO_ENABLED=0`.
@@ -73,8 +89,7 @@ its test processes down.
 From `v5/`, `VOICE_TYPE_TEST_IBUS_DAEMON=/usr/bin/ibus-daemon go test ./...`
 checks both provider request formats through real IBus insertion on a private
 bus. `VOICE_TYPE_TEST_LIVE_WAV=/path/to/synthetic.wav go test -run TestLiveProviders -v`
-opts into a live provider request using configured keys; providers without keys
-are skipped. Only use a synthetic fixture for that test. The test does not print
+opts into a live provider request using saved profiles; profiles without keys are never accepted. Only use a synthetic fixture for that test. The test does not print
 credentials or transcripts.
 
 To exercise native tray registration and menu actions without installing a shell

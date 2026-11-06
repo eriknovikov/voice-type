@@ -61,7 +61,11 @@ func Run(version string) error {
 	if err != nil {
 		return err
 	}
-	b := &Bridge{prefs: readPreferences(), version: version}
+	prefs, notice, preferencesErr := loadPreferences()
+	b := &Bridge{prefs: prefs, version: version, notice: notice}
+	if preferencesErr != nil {
+		b.preferencesError = preferencesErr.Error()
+	}
 	done := make(chan struct{})
 	app := application.New(application.Options{
 		Name: "Voice Type", Icon: appIcon, Description: "System-wide voice dictation",
@@ -81,29 +85,50 @@ func Run(version string) error {
 				b.mu.Unlock()
 			}
 		},
-		OnShutdown: func() { close(done); b.cancelLevelStream(); b.service.Close() },
+		OnShutdown: func() {
+			close(done)
+			b.cancelLevelStream()
+			if b.service != nil {
+				b.service.Close()
+			}
+		},
 	})
 	b.app = app
 	// application.New has already handed secondary launches to the first instance.
 	b.service, err = vt.StartService(version)
 	if err != nil {
-		return err
+		startupErr := err
+		app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+			go func() {
+				dialog := app.Dialog.Error().SetTitle("Voice Type could not start").SetMessage(startupErr.Error())
+				dialog.AddButton("Close").SetAsDefault().SetAsCancel().OnClick(func() { app.Quit() })
+				dialog.Show()
+			}()
+		})
+		if err := app.Run(); err != nil {
+			return err
+		}
+		return startupErr
 	}
 	defer b.service.Close()
+	if b.notice != "" {
+		b.service.RecordDiagnostic("preferences.recovered", "ok", "Desktop preferences were recovered")
+	}
+	if preferencesErr != nil {
+		b.service.RecordDiagnostic("preferences.invalid", "error", "Could not read desktop preferences; check file permissions")
+	}
+	b.initializePreferences()
 	hidden := false
 	for _, arg := range os.Args[1:] {
-		if arg == "--background" && b.prefs.SetupComplete {
+		if arg == "--background" && b.prefs.SetupComplete && b.Status().Error == "" && b.preferencesError == "" && b.notice == "" && vt.ConfigNotice() == "" && b.Status().Notice == "" {
 			hidden = true
 		}
 	}
 	window := app.Window.NewWithOptions(application.WebviewWindowOptions{Title: "Voice Type", Frameless: true, Width: 1040, Height: 740, MinWidth: 760, MinHeight: 560, URL: "/", Hidden: hidden})
 	b.window = window
 	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
-		_ = b.StopMicrophoneTest()
-		_ = b.EndShortcutCapture()
-		app.Event.Emit("cancel-shortcut-capture")
-		window.Hide()
 		e.Cancel()
+		b.RequestHide()
 	})
 	tray := app.SystemTray.New()
 	tray.SetIcon(trayIcon("idle"))
@@ -119,14 +144,7 @@ func Run(version string) error {
 		menu.Add(statusLabel).SetEnabled(false)
 		menu.Add(action).OnClick(func(_ *application.Context) { go b.toggleFromTray() })
 		menu.Add("Open settings").OnClick(func(_ *application.Context) { show() })
-		menu.Add("Quit").OnClick(func(_ *application.Context) {
-			go func() {
-				if err := b.Quit(); err != nil {
-					app.Event.Emit("operation-error", err.Error())
-					show()
-				}
-			}()
-		})
+		menu.Add("Quit").OnClick(func(_ *application.Context) { b.RequestQuit() })
 		tray.SetMenu(menu)
 		tray.SetIcon(trayIcon(state))
 		tooltip := "Voice Type · " + statusLabel

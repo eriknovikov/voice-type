@@ -4,28 +4,41 @@ export interface VocabularyList {
   name: string;
   terms: string[];
 }
+export interface ProfileSummary {
+  id: string;
+  name: string;
+  provider: string;
+  masked_key: string;
+}
 export interface Settings {
   revision: string;
-  provider: string;
+  profiles: ProfileSummary[];
+  active_profile: string;
   port: number;
   microphone: string;
   vocabulary: VocabularyList[];
   workspace: string;
-  credentials: Record<string, { saved: boolean; environment: boolean }>;
+  notice?: string;
 }
 export interface SettingsUpdate {
   revision: string;
+  port?: number;
+  microphone?: string;
+  vocabulary?: VocabularyList[];
+}
+export interface ProfileUpdate {
+  revision: string;
+  id?: string;
+  name: string;
   provider: string;
-  port: number;
-  microphone: string;
-  vocabulary: VocabularyList[];
-  api_keys: Record<string, string>;
+  api_key?: string;
 }
 export interface Status {
   state: string;
   error: string;
   port: number;
   level: number;
+  notice?: string;
 }
 export interface Preferences {
   shortcut: string;
@@ -38,6 +51,8 @@ export interface DesktopInfo {
   tray_available: boolean;
   shortcut_error: string;
   version: string;
+  preferences_error?: string;
+  notice?: string;
 }
 export interface AudioSource {
   id: string;
@@ -46,6 +61,7 @@ export interface AudioSource {
 export interface LogRecord {
   timestamp?: string;
   event: string;
+  message?: string;
   provider: string;
   configured_model: string;
   outcome: string;
@@ -68,6 +84,14 @@ export const api = {
     call<Settings>("ResetBrokenSettings", revision),
   settings: () => call<Settings>("Settings"),
   save: (update: SettingsUpdate) => call<Settings>("SaveSettings", update),
+  upsertProfile: (update: ProfileUpdate) =>
+    call<Settings>("UpsertProfile", update),
+  deleteProfile: (revision: string, id: string) =>
+    call<Settings>("DeleteProfile", revision, id),
+  selectProfile: (revision: string, id: string) =>
+    call<Settings>("SelectProfile", revision, id),
+  revealProfileKey: (id: string) => call<string>("RevealProfileKey", id),
+  copyProfileKey: (id: string) => call<void>("CopyProfileKey", id),
   workspace: (name: string) => call<void>("SelectWorkspace", name),
   status: () => call<Status>("Status"),
   microphones: () => call<AudioSource[]>("Microphones"),
@@ -75,10 +99,13 @@ export const api = {
   stopTest: () => call<void>("StopMicrophoneTest"),
   toggle: () => call<void>("Toggle"),
   logs: () => call<LogRecord[]>("Logs"),
-  exportLogs: (query: string, outcome: string) =>
-    call<void>("ExportLogs", query, outcome),
+  exportLogs: (outcome: string) => call<void>("ExportLogs", outcome),
   clearLogs: () => call<void>("ClearLogs"),
-  quit: () => call<void>("Quit"),
+  frontendReady: () => call<void>("FrontendReady"),
+  requestHide: () => call<void>("RequestHide"),
+  quit: () => call<void>("RequestQuit"),
+  completeWindowAction: (action: "hide" | "quit") =>
+    call<void>("CompleteWindowAction", action),
   info: () => call<DesktopInfo>("Info"),
   preferences: (prefs: Preferences) => call<void>("SavePreferences", prefs),
 };

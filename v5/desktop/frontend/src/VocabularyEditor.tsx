@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Plus, Trash2, Check, BookOpen } from "lucide-react";
 import type { VocabularyList } from "./api";
@@ -20,7 +20,7 @@ export function VocabularyEditor({
   busy: boolean;
   onSelect: (name: string) => void;
   onCreate: (name: string) => void;
-  onRename: (name: string) => void;
+  onRename: (name: string) => boolean;
   onTerms: (terms: string[]) => void;
   onDelete: () => void;
   onActivate: () => void;
@@ -29,6 +29,12 @@ export function VocabularyEditor({
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const list = lists.find((item) => item.name === selected);
+  const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
+  const nameDraft = nameDrafts[selected] ?? selected;
+  const [renameError, setRenameError] = useState("");
+  useEffect(() => {
+    setRenameError("");
+  }, [selected]);
   const inUse = selected === "general" ? active === "" : selected === active;
   return (
     <div className="vocabulary-layout">
@@ -85,9 +91,25 @@ export function VocabularyEditor({
                     className="name-input"
                     disabled={busy}
                     aria-label="Vocabulary name"
-                    value={list.name}
-                    onChange={(event) => onRename(event.target.value)}
+                    value={nameDraft}
+                    aria-invalid={!!renameError}
+                    onChange={(event) => {
+                      setNameDrafts({
+                        ...nameDrafts,
+                        [selected]: event.target.value,
+                      });
+                      setRenameError("");
+                    }}
+                    onBlur={() => {
+                      if (!onRename(nameDraft))
+                        setRenameError("Choose a unique name.");
+                    }}
                   />
+                )}
+                {renameError && (
+                  <p className="field-error" role="alert">
+                    {renameError}
+                  </p>
                 )}
                 <p>
                   {list.terms.filter(Boolean).length} terms
@@ -123,7 +145,10 @@ export function VocabularyEditor({
               </div>
             </div>
             <label htmlFor="vocabulary-terms">Words and phrases</label>
-            <p id="vocabulary-terms-hint" className="quiet vocabulary-terms-hint">
+            <p
+              id="vocabulary-terms-hint"
+              className="quiet vocabulary-terms-hint"
+            >
               One word or phrase per line.
             </p>
             <textarea
@@ -136,9 +161,6 @@ export function VocabularyEditor({
               onChange={(event) => onTerms(event.target.value.split(/\r?\n/))}
               spellCheck={false}
             />
-            <p className="quiet term-help">
-              Changes apply to the next dictation after saving.
-            </p>
           </>
         ) : (
           <div className="empty">
