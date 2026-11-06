@@ -2,9 +2,9 @@ package voicetype
 
 import (
 	"fmt"
-	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,7 +40,7 @@ func TestEmbeddedServiceLifecycleAndIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	if status := service.Status(); status.State != "idle" || status.Port != port || status.Error == "" {
+	if status := service.Status(); status.State != "idle" || status.Error == "" {
 		t.Fatalf("setup status: %+v", status)
 	}
 	if _, err := os.Stat(ManagementSocketPath()); !os.IsNotExist(err) {
@@ -49,25 +49,14 @@ func TestEmbeddedServiceLifecycleAndIsolation(t *testing.T) {
 	if _, err := StartService("second"); err == nil {
 		t.Fatal("second service adopted or replaced the first")
 	}
-	client := &http.Client{Timeout: time.Second}
-	for _, path := range []string{"/settings", "/logs", "/microphone-test", "/status", "/recovery"} {
-		response, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d%s", port, path))
-		if err != nil {
-			t.Fatal(err)
-		}
-		response.Body.Close()
-		if response.StatusCode != 404 {
-			t.Fatalf("private route exposed: %s", path)
-		}
-	}
-	// The real shortcut endpoint reaches this service without a child process.
-	response, err := client.Post(fmt.Sprintf("http://127.0.0.1:%d/toggle", port), "application/json", nil)
+	// There is no embedded TCP interface, even on the configured CLI port.
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("embedded service reserved a TCP port", err)
 	}
-	response.Body.Close()
-	if response.StatusCode != 503 {
-		t.Fatalf("missing key should block capture: %d", response.StatusCode)
+	defer listener.Close()
+	if err := service.Toggle(); err == nil {
+		t.Fatal("missing credentials must block direct capture")
 	}
 	settings, err := ReadSettings()
 	if err != nil {
@@ -92,16 +81,10 @@ func TestEmbeddedServiceLifecycleAndIsolation(t *testing.T) {
 	if err := service.ClearLogs(); err != nil {
 		t.Fatal(err)
 	}
-	// /exit must signal the host to quit, then release the listener.
-	response, err = client.Post(fmt.Sprintf("http://127.0.0.1:%d/exit", port), "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	io.Copy(io.Discard, response.Body)
-	response.Body.Close()
+	service.Close()
 	select {
 	case <-service.Done():
-	case <-time.After(3 * time.Second):
+	default:
 		t.Fatal("service did not finish")
 	}
 	var wg sync.WaitGroup
@@ -110,14 +93,12 @@ func TestEmbeddedServiceLifecycleAndIsolation(t *testing.T) {
 		go func() { defer wg.Done(); service.Close() }()
 	}
 	wg.Wait()
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	// The stable lock inode remains; ownership does not.
+	lock, err := acquireEngineLock()
 	if err != nil {
-		t.Fatal("listener leaked", err)
+		t.Fatal("engine lock leaked", err)
 	}
-	listener.Close()
-	if _, err := os.Stat(filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "voice-type")); !os.IsNotExist(err) {
-		t.Fatal("unexpected IPC state")
-	}
+	lock.Close()
 }
 
 func TestEmbeddedServiceShutdownDiscardsRecording(t *testing.T) {
@@ -149,19 +130,16 @@ func TestEmbeddedServiceShutdownDiscardsRecording(t *testing.T) {
 }
 
 func TestControlRejectsBrowserRequests(t *testing.T) {
-	port := setupServiceTest(t)
-	service, err := StartService("test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer service.Close()
-	client := &http.Client{Timeout: time.Second}
+	setupServiceTest(t)
+	d := newDaemon(configDefaults(), &resources{Recorder: &Recorder{}}, sttSettings{}, "")
+	server := httptest.NewServer(requireLoopbackHost(d.routes()))
+	defer server.Close()
 	for _, headers := range []map[string]string{
 		{"Origin": "https://example.com"},
 		{"Sec-Fetch-Site": "cross-site"},
 		{"Host": "attacker.example"},
 	} {
-		request, _ := http.NewRequest("POST", fmt.Sprintf("http://127.0.0.1:%d/exit", port), nil)
+		request, _ := http.NewRequest("POST", server.URL+"/exit", nil)
 		for name, value := range headers {
 			if name == "Host" {
 				request.Host = value
@@ -169,7 +147,7 @@ func TestControlRejectsBrowserRequests(t *testing.T) {
 				request.Header.Set(name, value)
 			}
 		}
-		response, err := client.Do(request)
+		response, err := server.Client().Do(request)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -178,24 +156,44 @@ func TestControlRejectsBrowserRequests(t *testing.T) {
 			t.Fatalf("unsafe request accepted: %v", headers)
 		}
 	}
-	if service.Status().State != "idle" {
-		t.Fatal("browser altered service")
+	select {
+	case <-d.done:
+		t.Fatal("browser stopped daemon")
+	default:
 	}
 }
 
-func TestEmbeddedServiceStartupConflictPreservesFiles(t *testing.T) {
+func TestEmbeddedServiceIgnoresOccupiedCLIPort(t *testing.T) {
 	port := setupServiceTest(t)
 	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	if _, err := StartService("test"); err == nil || !strings.Contains(err.Error(), "close any other Voice Type instance") {
+	service, err := StartService("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.Close()
+}
+
+func TestEmbeddedServiceStartupConflictPreservesFiles(t *testing.T) {
+	setupServiceTest(t)
+	lock, err := acquireEngineLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	before, _ := os.ReadFile(configFilePath())
+	if _, err := StartService("test"); err == nil || !strings.Contains(err.Error(), "another Voice Type engine") {
 		t.Fatalf("conflict error: %v", err)
 	}
-	raw, err := os.ReadFile(runLogFilePath())
-	if err != nil || !strings.Contains(string(raw), "startup.failed") {
-		t.Fatal("failed startup was not recorded")
+	after, _ := os.ReadFile(configFilePath())
+	if string(before) != string(after) {
+		t.Fatal("conflict changed config")
+	}
+	if _, err := os.Stat(runLogFilePath()); !os.IsNotExist(err) {
+		t.Fatal("conflict opened logs")
 	}
 }
 
@@ -233,5 +231,84 @@ func TestEmbeddedMicrophoneLifecycle(t *testing.T) {
 	status := service.Status()
 	if status.State != "idle" || status.Level != 0 {
 		t.Fatalf("microphone leaked: %+v", status)
+	}
+}
+
+func TestEmbeddedSettingsPreserveCLIPort(t *testing.T) {
+	port := setupServiceTest(t)
+	service, err := StartService("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	settings, err := ReadSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	microphone := "saved-source"
+	if _, err := service.SaveSettings(SettingsUpdate{Revision: settings.Revision, Microphone: &microphone}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := configReadStrict()
+	if err != nil || cfg.Port != port {
+		t.Fatalf("CLI port changed: %d %v", cfg.Port, err)
+	}
+}
+
+type waitingRecorder struct{ entered, release chan struct{} }
+
+func (r *waitingRecorder) Start() error           { close(r.entered); <-r.release; return nil }
+func (r *waitingRecorder) Stop() ([]int16, error) { return make([]int16, 3200), nil }
+func (r *waitingRecorder) Close()                 {}
+func TestEmbeddedToggleAsyncStateRules(t *testing.T) {
+	setupServiceTest(t)
+	settings, _ := ReadSettings()
+	key := "fixture-key"
+	if _, err := UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: "Test", Provider: "openai", APIKey: &key}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := StartService("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	recorder := &waitingRecorder{entered: make(chan struct{}), release: make(chan struct{})}
+	service.d.res.Recorder = recorder
+	started := service.ToggleAsync()
+	<-recorder.entered
+	if err := <-service.ToggleAsync(); err != nil {
+		t.Fatal("checking cancellation:", err)
+	}
+	close(recorder.release)
+	if err := <-started; err == nil {
+		t.Fatal("cancelled checking became a recording")
+	}
+	if service.Status().State != "idle" {
+		t.Fatal("cancelled capture not idle")
+	}
+	service.d.res.Recorder = &fixtureRecorder{}
+	if err := <-service.ToggleAsync(); err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"text":""}`)
+	}))
+	defer server.Close()
+	service.d.stt.endpoint = server.URL
+	stopped := service.ToggleAsync()
+	<-entered
+	for range 10 {
+		if err := <-service.ToggleAsync(); err == nil || !strings.Contains(err.Error(), "transcribing") {
+			t.Fatal("accepted during transcription", err)
+		}
+	}
+	close(release)
+	<-stopped
+	if service.Status().State != "idle" {
+		t.Fatal("replayed a rejected command")
 	}
 }
