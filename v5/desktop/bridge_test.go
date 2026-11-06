@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -230,7 +231,7 @@ func TestCurrentShortcutIsNotRemigrated(t *testing.T) {
 func TestDiagnosticExportFollowsOutcome(t *testing.T) {
 	records := []vt.DiagnosticRecord{
 		{Event: "dictation", Outcome: "ok"},
-		{Event: "startup.failed", Outcome: "error", Message: "The local control port is unavailable."},
+		{Event: "startup.failed", Outcome: "error", Message: "Another Voice Type engine is running."},
 		{Event: "config.recovered", Outcome: "ok", Message: "Settings restored."},
 	}
 	for _, test := range []struct {
@@ -247,5 +248,22 @@ func TestDiagnosticExportFollowsOutcome(t *testing.T) {
 	}
 	if _, err := encodeDiagnosticLogs(records, "query"); err == nil {
 		t.Fatal("accepted unknown outcome")
+	}
+}
+
+func TestShortcutDoesNotWaitForPreferenceChanges(t *testing.T) {
+	b := &Bridge{}
+	b.mu.Lock()
+	done := make(chan struct{})
+	go func() { b.activateShortcut(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		b.mu.Unlock()
+		t.Fatal("shortcut blocked behind native preference registration")
+	}
+	b.mu.Unlock()
+	if b.lastShortcutAt != "" {
+		t.Fatal("blocked shortcut was replayed")
 	}
 }

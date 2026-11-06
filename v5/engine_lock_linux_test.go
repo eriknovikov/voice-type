@@ -2,6 +2,9 @@ package voicetype
 
 import (
 	"bufio"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -70,10 +73,31 @@ func TestEngineOwnershipAcrossProcesses(t *testing.T) {
 						time.Sleep(10 * time.Millisecond)
 					}
 				}
+				if owner == "cli" {
+					client := &http.Client{Timeout: time.Second}
+					for _, check := range []struct {
+						path string
+						code int
+					}{{"/health", 200}, {"/start", 503}, {"/toggle", 503}, {"/stop", 200}} {
+						response, err := client.Post(fmt.Sprintf("http://127.0.0.1:%d%s", port, check.path), "application/json", nil)
+						if err != nil {
+							t.Fatal(err)
+						}
+						io.Copy(io.Discard, response.Body)
+						response.Body.Close()
+						if response.StatusCode != check.code {
+							t.Fatalf("%s: %d", check.path, response.StatusCode)
+						}
+					}
+				}
 				if kill {
 					cmd.Process.Kill()
 				} else if owner == "cli" {
-					cmd.Process.Signal(os.Interrupt)
+					response, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/exit", port), "application/json", nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					response.Body.Close()
 				} else {
 					input.Close()
 				}

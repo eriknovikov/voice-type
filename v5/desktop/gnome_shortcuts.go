@@ -2,9 +2,6 @@ package desktop
 
 import (
 	"errors"
-	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"regexp"
 	"slices"
@@ -12,9 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
-
-	vt "github.com/eriknovikov/voice-type"
 )
 
 const mediaKeysSchema = "org.gnome.settings-daemon.plugins.media-keys"
@@ -158,7 +152,7 @@ func applyGNOMEShortcutsTo(settings shortcutSettings, prefs Preferences, suspend
 	}
 	for _, field := range []struct{ name, value string }{
 		{"name", "Voice Type: transcription"},
-		{"command", strconv.Quote(exe) + " --shortcut-action transcription"},
+		{"command", strconv.Quote(exe) + " --toggle"},
 		{"binding", key},
 	} {
 		if err := settings.set(path, field.name, field.value); err != nil {
@@ -172,30 +166,6 @@ func applyGNOMEShortcutsTo(settings shortcutSettings, prefs Preferences, suspend
 		return err
 	}
 	return settings.reset(shortcutBase + "daemon/")
-}
-
-// This command path never creates a Wails window or registers portal shortcuts.
-func RunShortcutAction(action string) error {
-	if action != "transcription" {
-		return errors.New("unknown shortcut action")
-	}
-	settings, err := vt.ReadSettings()
-	if err != nil {
-		return err
-	}
-	client := &http.Client{Timeout: 12 * time.Minute, Transport: &http.Transport{Proxy: nil}}
-	defer client.CloseIdleConnections()
-	response, err := client.Post(fmt.Sprintf("http://127.0.0.1:%d/toggle", settings.Port), "application/json", nil)
-	if err != nil {
-		return errors.New("Voice Type is not running; open the app first")
-	}
-	defer response.Body.Close()
-	if response.StatusCode >= 400 {
-		// Never print a response body: control responses can include transcripts.
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
-		return fmt.Errorf("Voice Type could not toggle recording (HTTP %d); open settings for details", response.StatusCode)
-	}
-	return nil
 }
 
 func RemoveGNOMEShortcuts() error {

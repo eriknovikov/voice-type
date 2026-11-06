@@ -4,11 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,7 +104,9 @@ func TestNativeTray(t *testing.T) {
 		bus.Wait()
 		// GNOME may activate its document portal on the private bus. Its FUSE
 		// mount must not outlive that bus or obstruct TempDir cleanup.
-		_ = exec.Command("fusermount3", "-uz", filepath.Join(home, "runtime", "doc")).Run()
+		for _, mount := range []string{"doc", "gvfs"} {
+			_ = exec.Command("fusermount3", "-uz", filepath.Join(home, "runtime", mount)).Run()
+		}
 	}()
 	scanner := bufio.NewScanner(stdout)
 	if !scanner.Scan() {
@@ -126,7 +131,7 @@ func TestNativeTray(t *testing.T) {
 		t.Fatal(err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
+	defer listener.Close() // The configured CLI port remains deliberately occupied.
 	config := []byte(`{"port":` + strconv.Itoa(port) + `}`)
 	if err := os.WriteFile(filepath.Join(home, ".voice-type-config.jsonc"), config, 0600); err != nil {
 		t.Fatal(err)
@@ -193,6 +198,70 @@ func TestNativeTray(t *testing.T) {
 			t.Fatal("app startup lost the other shortcut registration")
 		default:
 			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	// A tray registration precedes ApplicationStarted. Wait for the native event
+	// loop rather than treating successful one-way forwarding as completed work.
+	countEvent := func(event string) int {
+		raw, err := os.ReadFile(filepath.Join(home, ".voice-type-logs.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for _, row := range bytes.Split(raw, []byte("\n")) {
+			var record struct{ Event, Outcome string }
+			if json.Unmarshal(row, &record) == nil && record.Event == event {
+				if event == "dictation.completed" && record.Outcome != "configuration_error" {
+					t.Fatal("unexpected provider call")
+				}
+				count++
+			}
+		}
+		return count
+	}
+	waitEvent := func(event string, count int) {
+		for countEvent(event) < count {
+			if ctx.Err() != nil {
+				t.Fatalf("timed out waiting for %s; native output: %s", event, output.String())
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	waitEvent("desktop.started", 1)
+	// Packaged secondary launches exit promptly and target this same engine.
+	attempts := 0
+	for _, args := range [][]string{{"--background"}, {}, {"--show-settings"}, {"--toggle"}, {"--shortcut-action", "transcription"}} {
+		if value, err := exec.CommandContext(ctx, binary, args...).CombinedOutput(); err != nil {
+			t.Fatalf("secondary command %v: %v %s", args, err, value)
+		}
+		if len(args) > 0 && (args[0] == "--toggle" || args[0] == "--shortcut-action") {
+			attempts++
+			waitEvent("dictation.completed", attempts)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, "runtime", "voice-type", "desktop.sock")); !os.IsNotExist(err) {
+		t.Fatal("desktop created management socket")
+	}
+	// The desktop process must not own any TCP LISTEN descriptor.
+	fds, err := os.ReadDir(fmt.Sprintf("/proc/%d/fd", command.Process.Pid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned := map[string]bool{}
+	for _, fd := range fds {
+		value, _ := os.Readlink(fmt.Sprintf("/proc/%d/fd/%s", command.Process.Pid, fd.Name()))
+		owned[value] = true
+	}
+	for _, table := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
+		raw, err := os.ReadFile(table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(string(raw), "\n")[1:] {
+			columns := strings.Fields(line)
+			if len(columns) > 9 && columns[3] == "0A" && owned["socket:["+columns[9]+"]"] {
+				t.Fatal("desktop owns TCP listener")
+			}
 		}
 	}
 	// Trigger actual native menu callbacks through their published protocol.

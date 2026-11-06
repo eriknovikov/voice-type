@@ -108,7 +108,7 @@ func (b *Bridge) Logs() ([]vt.DiagnosticRecord, error) { return b.service.Logs()
 func (b *Bridge) ClearLogs() error                     { return b.service.ClearLogs() }
 
 // Window actions wait for the frontend's serialized autosave queue. External
-// signals and /exit still shut down directly; a failed save keeps settings open.
+// signals still shut down directly; a failed save keeps settings open.
 func (b *Bridge) RequestHide() { b.requestWindowAction("hide") }
 func (b *Bridge) RequestQuit() { b.requestWindowAction("quit") }
 func (b *Bridge) Quit() error  { b.RequestQuit(); return nil }
@@ -161,9 +161,25 @@ func (b *Bridge) Info() DesktopInfo {
 	defer b.mu.Unlock()
 	return DesktopInfo{LastShortcutAt: b.lastShortcutAt, Preferences: b.prefs, TrayAvailable: trayAvailable(), ShortcutError: b.shortcutError, Version: b.version, PreferencesError: b.preferencesError, Notice: b.notice}
 }
-func (b *Bridge) toggleFromTray() {
-	if err := b.Toggle(); err != nil {
-		b.app.Event.Emit("operation-error", err.Error())
+
+// Tray and forwarded shortcuts share one nonblocking recording action.
+func (b *Bridge) toggleRecording() {
+	result := b.service.ToggleAsync()
+	go func() {
+		if err := <-result; err != nil {
+			b.app.Event.Emit("operation-error", err.Error())
+		}
+	}()
+}
+func (b *Bridge) dispatchCommand(command Command) {
+	switch command {
+	case CommandShow:
+		b.window.Show()
+		b.window.Focus()
+	case CommandToggle:
+		b.activateShortcut()
+	case CommandQuit:
+		go b.RequestQuit()
 	}
 }
 
@@ -217,14 +233,18 @@ func encodeDiagnosticLogs(records []vt.DiagnosticRecord, outcome string) ([]byte
 }
 
 func (b *Bridge) activateShortcut() {
-	b.mu.Lock()
+	// Preferences may wait for GTK while replacing native bindings. A shortcut
+	// must not wait on that lock from GTK's thread or replay after the edit.
+	if !b.mu.TryLock() {
+		return
+	}
 	if b.capturingShortcut {
 		b.mu.Unlock()
 		return
 	}
 	b.lastShortcutAt = time.Now().Format(time.RFC3339)
 	b.mu.Unlock()
-	b.toggleFromTray()
+	b.toggleRecording()
 }
 
 func (b *Bridge) RecoveryRevision() (string, error) {
