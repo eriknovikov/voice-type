@@ -11,7 +11,8 @@ func TestGNOMEShortcutsWithoutPortal(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
 	original := "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/custom0/"
-	initial := map[string]any{mediaKeysSchema + "|custom-keybindings": []string{original}, customKeySchema + ":" + original + "|binding": "F9"}
+	legacy := shortcutBase + "daemon/"
+	initial := map[string]any{mediaKeysSchema + "|custom-keybindings": []string{original, legacy}, customKeySchema + ":" + legacy + "|binding": "<Control><Alt>space", customKeySchema + ":" + original + "|binding": "F9"}
 	raw, _ := json.Marshal(initial)
 	if err := os.WriteFile(statePath, raw, 0600); err != nil {
 		t.Fatal(err)
@@ -33,7 +34,7 @@ else: sys.exit(1)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("VOICE_TYPE_GSETTINGS_TEST_STATE", statePath)
 	t.Setenv("XDG_CURRENT_DESKTOP", "GNOME")
-	prefs := Preferences{Shortcut: "Ctrl+Space", DaemonShortcut: "Ctrl+Alt+Space"}
+	prefs := Preferences{Shortcut: "Ctrl+Space"}
 	if err := applyGNOMEShortcuts(prefs, false); err != nil {
 		t.Fatal(err)
 	}
@@ -53,8 +54,11 @@ else: sys.exit(1)
 	}
 	state := read()
 	paths := state[mediaKeysSchema+"|custom-keybindings"].([]any)
-	if len(paths) != 3 || paths[0] != original {
+	if len(paths) != 2 || paths[0] != original {
 		t.Fatal("other shortcuts lost or duplicate paths added")
+	}
+	if _, exists := state[customKeySchema+":"+legacy+"|binding"]; exists {
+		t.Fatal("legacy daemon shortcut retained")
 	}
 	transcriptionKey := customKeySchema + ":" + shortcutBase + "transcription/|binding"
 	if state[transcriptionKey] != "<control>space" {
@@ -85,11 +89,6 @@ else: sys.exit(1)
 	conflict.Shortcut = "F9"
 	if err := applyGNOMEShortcuts(conflict, false); err == nil {
 		t.Fatal("conflicting user shortcut accepted")
-	}
-	duplicate := prefs
-	duplicate.DaemonShortcut = "Ctrl+Space"
-	if err := applyGNOMEShortcuts(duplicate, false); err == nil {
-		t.Fatal("duplicate accepted")
 	}
 	if err := RemoveGNOMEShortcuts(); err != nil {
 		t.Fatal(err)

@@ -27,7 +27,6 @@ vi.mock("./api", () => ({
   api: {
     settings: vi.fn(),
     info: vi.fn(),
-    connect: vi.fn(),
     status: vi.fn(),
     save: vi.fn(),
     logs: vi.fn(),
@@ -58,7 +57,6 @@ beforeEach(() => {
   vi.mocked(api.beginShortcutCapture).mockResolvedValue();
   vi.mocked(api.endShortcutCapture).mockResolvedValue();
   vi.mocked(api.settings).mockResolvedValue(structuredClone(settings));
-  vi.mocked(api.connect).mockResolvedValue();
   vi.mocked(api.status).mockResolvedValue({
     state: "idle",
     error: "",
@@ -68,7 +66,6 @@ beforeEach(() => {
   vi.mocked(api.info).mockResolvedValue({
     preferences: {
       shortcut: "Ctrl+Space",
-      daemon_shortcut: "Ctrl+Alt+Space",
       autostart: false,
       setup_complete: true,
     },
@@ -201,6 +198,13 @@ it("opens General first and supports creating and using vocabulary without works
   render(<App />);
   await screen.findByLabelText("API key");
   expect(screen.queryByRole("button", { name: "Overview" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Keyboard Shortcuts" }));
+  expect(screen.queryByText("Daemon toggle")).toBeNull();
+  expect(
+    screen.getByRole("button", {
+      name: "Change transcription toggle shortcut",
+    }),
+  ).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Vocabulary" }));
   expect(screen.queryByText(/workspace/i)).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "New vocabulary" }));
@@ -211,15 +215,19 @@ it("opens General first and supports creating and using vocabulary without works
   fireEvent.change(screen.getByLabelText("Words and phrases"), {
     target: { value: "tachycardia\nECG\nheart rate" },
   });
-  expect((screen.getByLabelText("Words and phrases") as HTMLTextAreaElement).value).toBe(
-    "tachycardia\nECG\nheart rate",
-  );
+  expect(
+    (screen.getByLabelText("Words and phrases") as HTMLTextAreaElement).value,
+  ).toBe("tachycardia\nECG\nheart rate");
   fireEvent.click(screen.getByRole("button", { name: "Use this vocabulary" }));
   await waitFor(() => expect(api.workspace).toHaveBeenCalledWith("Medical"));
   expect(api.save).toHaveBeenCalledWith(
     expect.objectContaining({
       vocabulary: expect.arrayContaining([
-        { name: "Medical", terms: ["tachycardia", "ECG", "heart rate"], original_name: "Medical" },
+        {
+          name: "Medical",
+          terms: ["tachycardia", "ECG", "heart rate"],
+          original_name: "Medical",
+        },
       ]),
     }),
   );
@@ -238,15 +246,15 @@ it("renames and deletes a vocabulary while preserving General terms", async () =
   fireEvent.change(screen.getByLabelText("Vocabulary name"), {
     target: { value: "Health" },
   });
-  expect((screen.getByLabelText("Words and phrases") as HTMLTextAreaElement).value).toBe(
-    "ECG",
-  );
+  expect(
+    (screen.getByLabelText("Words and phrases") as HTMLTextAreaElement).value,
+  ).toBe("ECG");
   fireEvent.click(screen.getByRole("button", { name: "Delete vocabulary" }));
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
   await waitFor(() =>
-    expect((screen.getByLabelText("Words and phrases") as HTMLTextAreaElement).value).toBe(
-      "Wails",
-    ),
+    expect(
+      (screen.getByLabelText("Words and phrases") as HTMLTextAreaElement).value,
+    ).toBe("Wails"),
   );
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
   await waitFor(() =>

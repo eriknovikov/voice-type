@@ -88,7 +88,6 @@ export function App() {
   };
   useEffect(() => {
     void run(async () => {
-      await api.connect();
       await load();
     });
     const off = Events.On("operation-error", (e) => setError(String(e.data)));
@@ -223,14 +222,11 @@ export function App() {
     void run(async () => {
       await api.exportLogs(query, outcome);
     });
-  const saveShortcut = async (
-    field: "shortcut" | "daemon_shortcut",
-    value: string,
-  ) => {
+  const saveShortcut = async (value: string) => {
     const current = await api.info();
     await api.preferences({
       ...current.preferences,
-      [field]: value,
+      shortcut: value,
       setup_complete: true,
     });
     setInfo((state) =>
@@ -240,7 +236,7 @@ export function App() {
             shortcut_error: "",
             preferences: {
               ...state.preferences,
-              [field]: value,
+              shortcut: value,
               setup_complete: true,
             },
           }
@@ -251,7 +247,7 @@ export function App() {
   const descriptions: Record<Tab, string> = {
     settings: "Provider, API key, and desktop preferences.",
     audio: "Choose your microphone and check the input level.",
-    shortcuts: "Set the keys for recording and the background service.",
+    shortcuts: "Set the keys to start and stop recording.",
     vocabulary: "Add names and terms to improve transcription.",
     logs: "Review dictation activity and errors. Transcribed text is not stored.",
   };
@@ -326,27 +322,11 @@ export function App() {
             {notice}
           </div>
         )}
-        {status.state === "disconnected" && (
-          <div className="alert">
-            <span>The background service is stopped.</span>
-            <button
-              disabled={busy}
-              onClick={() =>
-                void run(async () => {
-                  await api.connect();
-                  await load();
-                })
-              }
-            >
-              Start service
-            </button>
-          </div>
-        )}
         {!settings ? (
           <div className="empty">
             <AudioLines size={28} />
             <h2>Connecting</h2>
-            <p>Waiting for the background service.</p>
+            <p>Loading settings.</p>
             {error && status.state !== "disconnected" && (
               <button
                 onClick={() =>
@@ -508,7 +488,10 @@ export function App() {
                     <div className="setting-row">
                       <div className="setting-label">
                         <label htmlFor="port">Local control port</label>
-                        <p>Port changes require a service restart.</p>
+                        <p>
+                          Save, then quit and reopen Voice Type to change the
+                          port.
+                        </p>
                       </div>
                       <div className="setting-control">
                         <input
@@ -522,18 +505,6 @@ export function App() {
                             patch({ port: Number(event.target.value) })
                           }
                         />
-                        <button
-                          disabled={busy || status.state !== "idle" || dirty}
-                          onClick={() =>
-                            void run(async () => {
-                              await api.restart();
-                              setNotice("Service restarted.");
-                            })
-                          }
-                        >
-                          <RefreshCw size={14} />
-                          Restart service
-                        </button>
                       </div>
                     </div>
                   </div>
@@ -638,13 +609,7 @@ export function App() {
                     name="Transcription toggle"
                     value={info.preferences.shortcut}
                     onError={setError}
-                    onChange={(value) => saveShortcut("shortcut", value)}
-                  />
-                  <ShortcutPicker
-                    name="Daemon toggle"
-                    value={info.preferences.daemon_shortcut}
-                    onError={setError}
-                    onChange={(value) => saveShortcut("daemon_shortcut", value)}
+                    onChange={saveShortcut}
                   />
                 </div>
                 <p className="quiet section-note">

@@ -19,17 +19,17 @@ case "${1:-}" in
     done
    fi
   fi
-  rm -f "$BIN_DIR/voice-type-app" "$BIN_DIR/voice-type" "$DESKTOP_FILE" "$ICON_FILE" "$DATA_DIR/icons/hicolor/scalable/apps/voice-type.svg" "$DATA_DIR/icons/hicolor/512x512/apps/voice-type.png" "$CONFIG_DIR/autostart/voice-type.desktop"
+  rm -f "$BIN_DIR/voice-type-app" "$DESKTOP_FILE" "$ICON_FILE" "$DATA_DIR/icons/hicolor/scalable/apps/voice-type.svg" "$DATA_DIR/icons/hicolor/512x512/apps/voice-type.png" "$CONFIG_DIR/autostart/voice-type.desktop"
   printf '%s\n' 'Voice Type binaries and desktop integration removed. Settings and logs were kept.'
   exit 0 ;;
  '') ;;
  *) printf '%s\n' 'Usage: install.sh [--uninstall]' >&2; exit 2 ;;
 esac
-for binary in voice-type voice-type-app; do
+for binary in voice-type-app; do
  [ -x "$SCRIPT_DIR/build/$binary" ] || { printf 'Missing %s. Run make install-desktop from v5.\n' "$binary" >&2; exit 1; }
 done
 mkdir -p "$BIN_DIR" "$(dirname "$DESKTOP_FILE")" "$(dirname "$ICON_FILE")"
-for binary in voice-type voice-type-app; do
+for binary in voice-type-app; do
  install -m 755 "$SCRIPT_DIR/build/$binary" "$BIN_DIR/.$binary.new"
  mv -f "$BIN_DIR/.$binary.new" "$BIN_DIR/$binary"
 done

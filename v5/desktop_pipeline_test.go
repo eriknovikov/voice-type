@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -32,8 +33,7 @@ func TestDesktopPipeline(t *testing.T) {
 	testIBusCall(t, control, ibusPath, ibusService+".SetGlobalEngine", baseline)
 	client := newTestIBusClient(t, address, "desktop-pipeline-client", 0)
 	client.focus(t)
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	port := setupServiceTest(t)
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
 	for _, provider := range []string{providerOpenAI, providerOpenRouter} {
@@ -42,7 +42,7 @@ func TestDesktopPipeline(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = SaveSettings(SettingsUpdate{Revision: settings.Revision, Provider: provider, Port: 3232, Vocabulary: []VocabularyList{{Name: "general", Terms: []string{"Wails"}}, {Name: "project", Terms: []string{"PipeWire"}}}, APIKeys: map[string]string{provider: "test-credential"}})
+			_, err = SaveSettings(SettingsUpdate{Revision: settings.Revision, Provider: provider, Port: port, Vocabulary: []VocabularyList{{Name: "general", Terms: []string{"Wails"}}, {Name: "project", Terms: []string{"PipeWire"}}}, APIKeys: map[string]string{provider: "test-credential"}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -94,17 +94,27 @@ func TestDesktopPipeline(t *testing.T) {
 				io.WriteString(w, `{"text":"Desktop insertion verified."}`)
 			}))
 			defer server.Close()
-			cfg, _ := configReadStrict()
-			stt, _ := cfg.resolveSTT("", workspaceLoad())
-			d := newDaemon(cfg, &resources{Recorder: &fixtureRecorder{}}, stt, "")
-			d.runLog = newRunLog("test")
-			defer d.runLog.close("ok")
-			code, message := d.startSession()
-			if code != 200 {
-				t.Fatalf("start: %d %s", code, message)
+			service, err := StartService("test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer service.Close()
+			d := service.d
+			d.res.Recorder = &fixtureRecorder{}
+			toggle := func() int {
+				response, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/toggle", port), "application/json", nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				io.Copy(io.Discard, response.Body)
+				response.Body.Close()
+				return response.StatusCode
+			}
+			if code := toggle(); code != 200 {
+				t.Fatalf("start: %d", code)
 			}
 			d.stt.endpoint = server.URL
-			code, _ = d.stopSession()
+			code := toggle()
 			if code != 200 {
 				t.Fatalf("stop returned %d", code)
 			}

@@ -7,7 +7,6 @@ build:
 	npm --prefix frontend ci
 	npm --prefix frontend run build
 	mkdir -p build
-	cd .. && CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o desktop/build/voice-type ./cmd/voice-type
 	CGO_ENABLED=1 go build -ldflags="$(LDFLAGS)" -o build/voice-type-app ./cmd/voice-type-app
 
 check:

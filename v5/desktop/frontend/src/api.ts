@@ -29,7 +29,6 @@ export interface Status {
 }
 export interface Preferences {
   shortcut: string;
-  daemon_shortcut: string;
   autostart: boolean;
   setup_complete: boolean;
 }
@@ -64,7 +63,6 @@ const call = <T>(method: string, ...args: unknown[]): Promise<T> =>
 export const api = {
   beginShortcutCapture: () => call<void>("BeginShortcutCapture"),
   endShortcutCapture: () => call<void>("EndShortcutCapture"),
-  toggleDaemon: () => call<void>("ToggleDaemon"),
   recoveryRevision: () => call<string>("RecoveryRevision"),
   resetBrokenSettings: (revision: string) =>
     call<Settings>("ResetBrokenSettings", revision),
@@ -80,8 +78,6 @@ export const api = {
   exportLogs: (query: string, outcome: string) =>
     call<void>("ExportLogs", query, outcome),
   clearLogs: () => call<void>("ClearLogs"),
-  connect: () => call<void>("Connect"),
-  restart: () => call<void>("Restart"),
   quit: () => call<void>("Quit"),
   info: () => call<DesktopInfo>("Info"),
   preferences: (prefs: Preferences) => call<void>("SavePreferences", prefs),

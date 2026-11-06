@@ -5,11 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
-	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -19,18 +15,11 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-type Status struct {
-	LastAttemptFailed bool    `json:"last_attempt_failed"`
-	State             string  `json:"state"`
-	Error             string  `json:"error"`
-	Port              int     `json:"port"`
-	Level             float64 `json:"level"`
-}
+type Status = vt.ServiceStatus
 type Preferences struct {
-	Shortcut       string `json:"shortcut"`
-	DaemonShortcut string `json:"daemon_shortcut"`
-	Autostart      bool   `json:"autostart"`
-	SetupComplete  bool   `json:"setup_complete"`
+	Shortcut      string `json:"shortcut"`
+	Autostart     bool   `json:"autostart"`
+	SetupComplete bool   `json:"setup_complete"`
 }
 type DesktopInfo struct {
 	LastShortcutAt string      `json:"last_shortcut_at"`
@@ -42,10 +31,8 @@ type DesktopInfo struct {
 type Bridge struct {
 	app               *application.App
 	window            *application.WebviewWindow
-	client            *http.Client
+	service           *vt.Service
 	mu                sync.Mutex
-	connectMu         sync.Mutex
-	closing           bool
 	capturingShortcut bool
 	prefs             Preferences
 	shortcutError     string
@@ -55,75 +42,21 @@ type Bridge struct {
 	meterCancel       context.CancelFunc
 }
 
-func (b *Bridge) request(method, path string, body, out any) error {
-	var input io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		input = bytes.NewReader(data)
-	}
-	req, err := http.NewRequest(method, "http://desktop"+path, input)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	if path == "/toggle" {
-		cancel()
-		ctx, cancel = context.WithTimeout(context.Background(), 12*time.Minute)
-	}
-	defer cancel()
-	req = req.WithContext(ctx)
-	resp, err := b.client.Do(req)
-	if err != nil {
-		return errors.New("cannot connect to Voice Type; reconnect or restart the daemon")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		var failure struct {
-			Error string `json:"error"`
-		}
-		if json.NewDecoder(resp.Body).Decode(&failure) == nil && failure.Error != "" {
-			return errors.New(failure.Error)
-		}
-		return fmt.Errorf("daemon returned HTTP %d", resp.StatusCode)
-	}
-	if out == nil {
-		return nil
-	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 12<<20)).Decode(out)
-}
-func (b *Bridge) Settings() (vt.Settings, error) {
-	var out vt.Settings
-	err := b.request("GET", "/settings", nil, &out)
-	return out, err
-}
+func (b *Bridge) Settings() (vt.Settings, error) { return vt.ReadSettings() }
 func (b *Bridge) SaveSettings(update vt.SettingsUpdate) (vt.Settings, error) {
-	var out vt.Settings
-	err := b.request("PUT", "/settings", update, &out)
-	return out, err
+	return b.service.SaveSettings(update)
 }
 func (b *Bridge) SelectWorkspace(name string) error {
-	if err := b.request("PUT", "/workspace", map[string]string{"name": name}, nil); err != nil {
+	if err := vt.SelectWorkspace(name); err != nil {
 		return err
 	}
 	b.app.Event.Emit("workspace-changed", name)
 	return nil
 }
-func (b *Bridge) Status() (Status, error) {
-	var out Status
-	err := b.request("GET", "/status", nil, &out)
-	return out, err
-}
-func (b *Bridge) Microphones() ([]vt.AudioSource, error) {
-	var out []vt.AudioSource
-	err := b.request("GET", "/microphones", nil, &out)
-	return out, err
-}
+func (b *Bridge) Status() Status                         { return b.service.Status() }
+func (b *Bridge) Microphones() ([]vt.AudioSource, error) { return vt.ListAudioSources() }
 func (b *Bridge) StartMicrophoneTest(id string) error {
-	if err := b.request("POST", "/microphone-test", map[string]string{"id": id}, nil); err != nil {
+	if err := b.service.StartMicrophoneTest(id); err != nil {
 		return err
 	}
 	b.startLevelStream()
@@ -131,87 +64,17 @@ func (b *Bridge) StartMicrophoneTest(id string) error {
 }
 func (b *Bridge) StopMicrophoneTest() error {
 	b.cancelLevelStream()
-	return b.request("DELETE", "/microphone-test", nil, nil)
+	b.service.StopMicrophoneTest()
+	return nil
 }
-func (b *Bridge) Toggle() error { return b.request("POST", "/toggle", nil, nil) }
-func (b *Bridge) Logs() ([]map[string]any, error) {
-	var out []map[string]any
-	err := b.request("GET", "/logs", nil, &out)
-	return out, err
-}
-func (b *Bridge) ClearLogs() error { return b.request("DELETE", "/logs", nil, nil) }
-func (b *Bridge) Connect() error {
-	b.connectMu.Lock()
-	defer b.connectMu.Unlock()
-	if b.closing {
-		return errors.New("Voice Type is shutting down")
-	}
-	if _, err := b.Status(); err == nil {
-		return nil
-	}
-	executable, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	binary := filepath.Join(filepath.Dir(executable), "voice-type")
-	if _, err := os.Stat(binary); err != nil {
-		binary, err = exec.LookPath("voice-type")
-		if err != nil {
-			return errors.New("voice-type daemon is not installed alongside the app")
-		}
-	}
-	// Structured diagnostics live in the daemon's bounded log; do not keep a
-	// second unbounded stderr file, which may contain provider response bodies.
-	command := exec.Command(binary, "start")
-	if err := command.Start(); err != nil {
-		return err
-	}
-	done := make(chan error, 1)
-	go func() { done <- command.Wait() }()
-	for i := 0; i < 50; i++ {
-		if _, err := b.Status(); err == nil {
-			return nil
-		}
-		select {
-		case <-done:
-			return errors.New("daemon did not start; an older version may already be using its port")
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
-	return errors.New("daemon startup timed out")
-}
-func (b *Bridge) Restart() error {
-	status, err := b.Status()
-	if err != nil {
-		return b.Connect()
-	}
-	if status.State != "idle" {
-		return errors.New("finish recording or microphone testing before restarting")
-	}
-	if err := b.request("POST", "/quit", nil, nil); err != nil {
-		return err
-	}
-	for i := 0; i < 50; i++ {
-		if _, err := b.Status(); err != nil {
-			return b.Connect()
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return errors.New("daemon is still shutting down")
-}
+func (b *Bridge) Toggle() error                        { return b.service.Toggle() }
+func (b *Bridge) Logs() ([]vt.DiagnosticRecord, error) { return b.service.Logs() }
+func (b *Bridge) ClearLogs() error                     { return b.service.ClearLogs() }
 func (b *Bridge) Quit() error {
-	b.connectMu.Lock()
-	defer b.connectMu.Unlock()
-	status, err := b.Status()
-	if err == nil && status.State != "idle" && status.State != "testing" {
+	status := b.service.Status()
+	if status.State != "idle" && status.State != "testing" {
 		return errors.New("finish the current dictation before quitting")
 	}
-	if err == nil {
-		if err = b.request("POST", "/quit", nil, nil); err != nil {
-			return err
-		}
-	}
-	b.closing = true
 	b.app.Quit()
 	return nil
 }
@@ -224,7 +87,7 @@ func preferencesPath() string {
 	return filepath.Join(base, "voice-type", "desktop.json")
 }
 func readPreferences() Preferences {
-	prefs := Preferences{Shortcut: "Ctrl+Space", DaemonShortcut: "Ctrl+Alt+Space"}
+	prefs := Preferences{Shortcut: "Ctrl+Space"}
 	data, err := os.ReadFile(preferencesPath())
 	if err == nil {
 		_ = json.Unmarshal(data, &prefs)
@@ -265,7 +128,7 @@ func (b *Bridge) SavePreferences(prefs Preferences) error {
 	defer b.mu.Unlock()
 	old := b.prefs
 
-	changed := prefs.Shortcut != old.Shortcut || prefs.DaemonShortcut != old.DaemonShortcut || b.shortcutError != ""
+	changed := prefs.Shortcut != old.Shortcut || b.shortcutError != ""
 	if changed {
 		_ = b.releaseShortcuts()
 		if err := b.registerShortcuts(prefs); err != nil {
@@ -315,7 +178,7 @@ func (b *Bridge) ExportLogs(query, outcome string) error {
 		if err != nil {
 			return err
 		}
-		ok := record["outcome"] == "ok"
+		ok := record.Outcome == "ok"
 		if outcome == "errors" && ok || outcome == "ok" && !ok {
 			continue
 		}
@@ -356,14 +219,10 @@ func (b *Bridge) activateShortcut() {
 }
 
 func (b *Bridge) RecoveryRevision() (string, error) {
-	var revision string
-	err := b.request("GET", "/recovery", nil, &revision)
-	return revision, err
+	return vt.RecoveryRevision()
 }
 func (b *Bridge) ResetBrokenSettings(revision string) (vt.Settings, error) {
-	var settings vt.Settings
-	err := b.request("POST", "/recovery", map[string]string{"revision": revision}, &settings)
-	return settings, err
+	return vt.ResetBrokenSettings(revision)
 }
 
 func (b *Bridge) registerShortcuts(prefs Preferences) error {
@@ -379,45 +238,9 @@ func (b *Bridge) registerShortcuts(prefs Preferences) error {
 			return err
 		}
 	}
-	if prefs.DaemonShortcut == "" {
-		return nil
-	}
-	return b.app.GlobalShortcut.Register(prefs.DaemonShortcut, func() {
-		b.mu.Lock()
-		capturing := b.capturingShortcut
-		b.mu.Unlock()
-		if capturing {
-			return
-		}
-		if err := b.ToggleDaemon(); err != nil {
-			b.app.Event.Emit("operation-error", err.Error())
-		}
-	})
+	return nil
 }
 
-// The desktop app stays alive so its shortcut can start the daemon again.
-func (b *Bridge) ToggleDaemon() error {
-	b.connectMu.Lock()
-	status, err := b.Status()
-	if err != nil {
-		b.connectMu.Unlock()
-		return b.Connect()
-	}
-	defer b.connectMu.Unlock()
-	if status.State != "idle" {
-		return errors.New("stop recording or microphone testing before stopping the daemon")
-	}
-	if err := b.request("POST", "/quit", nil, nil); err != nil {
-		return err
-	}
-	for i := 0; i < 50; i++ {
-		if _, err := b.Status(); err != nil {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return errors.New("daemon is still shutting down")
-}
 func (b *Bridge) BeginShortcutCapture() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -458,6 +281,8 @@ func (b *Bridge) cancelLevelStream() {
 		b.meterCancel = nil
 	}
 }
+
+// Read the meter at 30 Hz without serialization, sockets or React renders.
 func (b *Bridge) startLevelStream() {
 	b.meterMu.Lock()
 	if b.meterCancel != nil {
@@ -468,39 +293,17 @@ func (b *Bridge) startLevelStream() {
 	b.meterMu.Unlock()
 	go func() {
 		defer cancel()
-		req, err := http.NewRequestWithContext(ctx, "GET", "http://desktop/microphone-levels", nil)
-		if err != nil {
-			return
-		}
-		resp, err := b.client.Do(req)
-		if err != nil {
-			if ctx.Err() == nil {
-				b.app.Event.Emit("operation-error", "Microphone meter disconnected.")
-			}
-			return
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			b.app.Event.Emit("operation-error", "Microphone meter unavailable. Restart the daemon and try again.")
-			return
-		}
-		decoder := json.NewDecoder(resp.Body)
+		ticker := time.NewTicker(time.Second / 30)
+		defer ticker.Stop()
 		for {
-			var frame struct {
-				Level   float64 `json:"level"`
-				Testing bool    `json:"testing"`
-			}
-			if err := decoder.Decode(&frame); err != nil {
-				if ctx.Err() == nil && err != io.EOF {
-					b.app.Event.Emit("operation-error", "Microphone meter disconnected.")
-				}
+			select {
+			case <-ctx.Done():
 				return
+			case <-ticker.C:
 			}
-			if ctx.Err() != nil {
-				return
-			}
-			b.app.Event.Emit("microphone-level", frame.Level)
-			if !frame.Testing {
+			status := b.service.Status()
+			b.app.Event.Emit("microphone-level", status.Level)
+			if status.State != "testing" {
 				return
 			}
 		}
