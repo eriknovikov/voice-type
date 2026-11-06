@@ -3,64 +3,30 @@ name: Test
 on:
   pull_request:
   push:
-    branches:
-      - main
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
-  go:
-    name: v5 (Go)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: v5
+  app:
+    runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-
-      - name: Setup Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Native dependencies
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libx11-dev libxkbcommon-dev pkg-config ibus dbus-x11 xvfb gnome-settings-daemon-common shellcheck
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version-file: v5/go.mod
-
-      - name: gofmt
-        run: |
-          UNFORMATTED=$(gofmt -l .)
-          if [ -n "$UNFORMATTED" ]; then
-            echo "Not gofmt'd:"
-            echo "$UNFORMATTED"
-            exit 1
-          fi
-
-      - name: Vet
-        run: go vet ./...
-
-      # Hermetic: no audio hardware, no network, no /dev/uinput.
-      - name: Test
-        run: go test ./...
-
-      - name: Build
+          go-version-file: go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: make check build
+      - name: Mock providers and isolated IBus
+        run: VOICE_TYPE_TEST_IBUS_DAEMON=/usr/bin/ibus-daemon go test -race ./...
+      - name: Native application and tray
+        run: xvfb-run -a make native-check
         env:
-          CGO_ENABLED: "0"
-        run: go build -o /dev/null ./cmd/voice-type
-
-  shell:
-    name: Installer syntax
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-
-      # sh -n takes one script per invocation; extra arguments become $1, $2...
-      - name: sh -n
-        run: |
-          for f in install.sh uninstall.sh v5/install.sh v5/uninstall.sh \
-                   v4/install.sh v4/uninstall.sh; do
-            echo "checking $f"
-            sh -n "$f"
-          done
-
-      - name: shellcheck
-        run: shellcheck -s sh install.sh uninstall.sh v5/install.sh v5/uninstall.sh
+          GDK_BACKEND: x11

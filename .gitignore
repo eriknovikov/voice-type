@@ -7,8 +7,6 @@ releases
 .cursor
 .env
 .env.*
-/v5/voice-type
 /benchmark*.wav
 tools
 /assets/
-v5/cmd/try/
