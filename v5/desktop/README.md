@@ -21,6 +21,12 @@ OpenRouter profile, test the microphone, and choose your shortcut.
 Settings save automatically; profile edits save through their dialog. Start at
 login is enabled unless you previously disabled it. GNOME stores the recording shortcut directly, without an approval dialog.
 
+Select the profile's radio button to use it. Editing and deleting are in the
+profile editor; closing with unsaved profile changes asks before discarding them,
+including when closing the native window or choosing Quit from the tray.
+Vocabulary terms are edited one per line. Logs can be filtered by outcome and
+expanded for details.
+
 The app installs as `~/.local/bin/voice-type-app`. Closing the settings window
 keeps dictation and the tray running in that same process. Quit stops the entire
 app and releases the microphone and HTTP listener. A second launch reopens settings. GNOME needs the AppIndicator/KStatusNotifierItem extension

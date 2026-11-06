@@ -6,20 +6,13 @@ import React, {
 } from "react";
 import {
   BookOpen,
-  Check,
   FileText,
   Mic,
   Keyboard,
   RefreshCw,
   Settings2,
-  Trash2,
   X,
-  Plus,
-  Pencil,
-  Circle,
-  CheckCircle2,
 } from "lucide-react";
-import * as Dialog from "@radix-ui/react-dialog";
 import { Events } from "@wailsio/runtime";
 import {
   api,
@@ -36,7 +29,10 @@ import { MicrophoneMeter } from "./MicrophoneMeter";
 import { Dropdown } from "./Dropdown";
 import { ShortcutPicker, flushShortcutCapture } from "./ShortcutPicker";
 import { VocabularyEditor } from "./VocabularyEditor";
-import { ProfileEditor, providerName } from "./ProfileEditor";
+import { ProfileEditor } from "./ProfileEditor";
+import { Profiles } from "./Profiles";
+import { LogViewer } from "./LogViewer";
+import { ConfirmDialog } from "./ui";
 import { SettingsStore } from "./settingsStore";
 
 type Tab = "settings" | "audio" | "shortcuts" | "vocabulary" | "logs";
@@ -80,9 +76,19 @@ export function App() {
   const [portError, setPortError] = useState("");
   const [dismissedNotice, setDismissedNotice] = useState("");
   const prefsTail = useRef<Promise<unknown>>(Promise.resolve());
+  const profileGuard = useRef<(() => Promise<boolean>) | null>(null);
+  const windowActionVersion = useRef(0);
+  const [showSaved, setShowSaved] = useState(false);
+  useEffect(() => {
+    setShowSaved(saveStatus === "saved");
+    if (saveStatus !== "saved") return;
+    const timer = setTimeout(() => setShowSaved(false), 1800);
+    return () => clearTimeout(timer);
+  }, [saveStatus]);
   const [confirm, setConfirm] = useState<{
     title: string;
     description: string;
+    label: string;
     run: () => Promise<void>;
   } | null>(null);
   const run = async (operation: () => Promise<void>) => {
@@ -138,14 +144,18 @@ export function App() {
       const data = eventValue(event.data) as { action?: string } | undefined;
       if (data?.action !== "hide" && data?.action !== "quit") return;
       const action = data.action;
-      // Native tray/close actions also commit blur-validated fields.
-      if (document.activeElement instanceof HTMLElement)
-        document.activeElement.blur();
+      const version = ++windowActionVersion.current;
       void (async () => {
         try {
+          if (profileGuard.current && !(await profileGuard.current())) return;
+          if (version !== windowActionVersion.current) return;
+          // Native tray/close actions also commit blur-validated fields.
+          if (document.activeElement instanceof HTMLElement)
+            document.activeElement.blur();
           await store.flush();
           await flushShortcutCapture();
           await prefsTail.current;
+          if (version !== windowActionVersion.current) return;
           await api.completeWindowAction(action);
         } catch (e) {
           setError(errorText(e));
@@ -291,11 +301,6 @@ export function App() {
     }
     return true;
   };
-  const displayed = logs.filter(
-    (row) =>
-      outcome === "all" ||
-      (outcome === "errors" ? row.outcome !== "ok" : row.outcome === "ok"),
-  );
   const notice = [
     ...new Set([settings?.notice, status.notice, info?.notice].filter(Boolean)),
   ].join(" ");
@@ -303,10 +308,13 @@ export function App() {
     error || saveError || info?.preferences_error || status.error;
   return (
     <div className="app">
+      <a className="skip-link" href="#main-content">
+        Skip to settings
+      </a>
       <div className="window-drag" aria-hidden="true" />
       <aside>
         <div className="brand">
-          <img src="/icon.png" alt="" />
+          <img src="/icon.png" alt="" width="32" height="32" />
           <span>Voice Type</span>
         </div>
         <nav aria-label="Main navigation">
@@ -317,50 +325,68 @@ export function App() {
               aria-current={tab === id ? "page" : undefined}
               onClick={() => navigate(id)}
             >
-              <Icon size={17} />
+              <Icon size={18} aria-hidden="true" />
               {label}
             </button>
           ))}
         </nav>
         <div className="sidebar-bottom">
           <small>v{info?.version ?? "—"}</small>
-          <span className={`save-status ${saveStatus}`} role="status">
-            {saveStatus === "saving"
-              ? "Saving…"
-              : saveStatus === "saved"
-                ? "Saved"
-                : saveStatus === "pending"
-                  ? "Unsaved"
-                  : saveStatus === "error"
-                    ? "Not saved"
-                    : ""}
-          </span>
+          <div className={`save-status ${saveStatus}`}>
+            <span role="status">
+              {saveStatus === "saving"
+                ? "Saving…"
+                : saveStatus === "saved" && showSaved
+                  ? "Saved"
+                  : saveStatus === "pending"
+                    ? "Unsaved"
+                    : saveStatus === "error"
+                      ? "Not saved"
+                      : ""}
+            </span>
+            {saveStatus === "error" && (
+              <button
+                className="text-button"
+                aria-label="Retry save"
+                onClick={() => void run(store.retry)}
+              >
+                Retry
+              </button>
+            )}
+          </div>
         </div>
       </aside>
-      <main aria-busy={busy}>
+      <main id="main-content" tabIndex={-1} aria-busy={busy}>
         <header>
           <h1>{tabs.find((item) => item.id === tab)?.label}</h1>
-          <span className={`status ${status.state}`}>
-            <span className={`dot ${status.state}`} />
-            {status.state === "disconnected" ? "Offline" : status.state}
-          </span>
+          <div className="header-actions">
+            <span className={`status ${status.state}`} role="status">
+              <span className={`dot ${status.state}`} aria-hidden="true" />
+              {status.state === "disconnected"
+                ? "Offline"
+                : status.state === "idle"
+                  ? "Idle"
+                  : status.state === "testing"
+                    ? "Testing microphone"
+                    : status.state.charAt(0).toUpperCase() +
+                      status.state.slice(1)}
+            </span>
+            <button
+              className="window-close icon-button"
+              aria-label="Close window"
+              title="Hide to background"
+              onClick={() =>
+                void api.requestHide().catch((e) => setError(errorText(e)))
+              }
+            >
+              <X size={18} aria-hidden="true" />
+            </button>
+          </div>
         </header>
-        <button
-          className="window-close icon-button"
-          aria-label="Close window"
-          title="Hide to background"
-          onClick={() =>
-            void api.requestHide().catch((e) => setError(errorText(e)))
-          }
-        >
-          <X size={17} />
-        </button>
         {visibleError && (
           <div className="alert error" role="alert">
             <span>{visibleError}</span>
-            {saveError ? (
-              <button onClick={() => void run(store.retry)}>Retry save</button>
-            ) : info?.preferences_error && !error ? (
+            {info?.preferences_error && !error && !saveError ? (
               <button onClick={() => void run(() => savePreferences({}))}>
                 Retry
               </button>
@@ -370,20 +396,20 @@ export function App() {
                 aria-label="Dismiss error"
                 onClick={() => setError("")}
               >
-                <X size={15} />
+                <X size={15} aria-hidden="true" />
               </button>
             ) : null}
           </div>
         )}
         {notice && notice !== dismissedNotice && (
-          <div className="alert success" role="status">
+          <div className="alert notice" role="status">
             <span>{notice}</span>
             <button
               className="icon-button"
               aria-label="Dismiss notice"
               onClick={() => setDismissedNotice(notice)}
             >
-              <X size={15} />
+              <X size={15} aria-hidden="true" />
             </button>
           </div>
         )}
@@ -398,113 +424,29 @@ export function App() {
           <div className="page-content">
             {tab === "settings" && (
               <>
-                <section className="settings-section">
-                  <div className="section-heading profile-section-heading">
-                    <h2>Transcription profiles</h2>
-                    <button
-                      className="text-button"
-                      onClick={() => setEditor({ profile: null })}
-                    >
-                      <Plus size={15} />
-                      Add profile
-                    </button>
-                  </div>
-                  <div className="settings-group profile-list">
-                    {settings.profiles.length ? (
-                      settings.profiles.map((profile) => (
-                        <div
-                          className={`profile-row ${settings.active_profile === profile.id ? "is-active" : ""}`}
-                          key={profile.id}
-                        >
-                          <button
-                            className="profile-select"
-                            aria-pressed={
-                              settings.active_profile === profile.id
-                            }
-                            aria-label={`Use ${profile.name}`}
-                            disabled={busy}
-                            onClick={() =>
-                              void run(() =>
-                                store.mutate((revision) =>
-                                  api.selectProfile(revision, profile.id),
-                                ),
-                              )
-                            }
-                          >
-                            {settings.active_profile === profile.id ? (
-                              <CheckCircle2 size={18} />
-                            ) : (
-                              <Circle size={18} />
-                            )}
-                            <span>
-                              <strong>{profile.name}</strong>
-                              <small>
-                                {providerName(profile.provider)}
-                                <span className="profile-key">
-                                  {profile.masked_key}
-                                </span>
-                              </small>
-                            </span>
-                          </button>
-                          <div className="actions">
-                            <button
-                              className="icon-button"
-                              aria-label={`Edit ${profile.name}`}
-                              title="Edit profile"
-                              onClick={() => setEditor({ profile })}
-                            >
-                              <Pencil size={15} />
-                            </button>
-                            <button
-                              className="icon-button danger-text"
-                              aria-label={`Delete ${profile.name}`}
-                              title="Delete profile"
-                              onClick={() =>
-                                setConfirm({
-                                  title: `Delete ${profile.name}?`,
-                                  description:
-                                    settings.active_profile === profile.id
-                                      ? "Choose another profile before your next dictation."
-                                      : "This profile and its API key will be removed.",
-                                  run: () =>
-                                    store.mutate((revision) =>
-                                      api.deleteProfile(revision, profile.id),
-                                    ),
-                                })
-                              }
-                            >
-                              <Trash2 size={15} />
-                            </button>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="profile-empty">
-                        <p>Add a profile to start dictating.</p>
-                        <button
-                          className="primary"
-                          onClick={() => setEditor({ profile: null })}
-                        >
-                          <Plus size={15} />
-                          Add profile
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                  {!!settings.profiles.length && !settings.active_profile && (
-                    <p className="quiet section-note">
-                      Select a profile to start dictating.
-                    </p>
-                  )}
-                </section>
+                <Profiles
+                  profiles={settings.profiles}
+                  active={settings.active_profile}
+                  busy={busy}
+                  onCreate={() => setEditor({ profile: null })}
+                  onEdit={(profile) => setEditor({ profile })}
+                  onSelect={(id) =>
+                    void run(() =>
+                      store.mutate((revision) =>
+                        api.selectProfile(revision, id),
+                      ),
+                    )
+                  }
+                />
                 {info && (
                   <section className="settings-section">
                     <div className="settings-group">
-                      <div className="setting-row">
-                        <div className="setting-label">
-                          <label htmlFor="autostart">Start at login</label>
-                        </div>
-                        <div className="setting-control align-end">
+                      <label
+                        className="setting-row switch-row"
+                        htmlFor="autostart"
+                      >
+                        <span>Start at login</span>
+                        <span className="setting-control align-end">
                           <input
                             id="autostart"
                             className="switch"
@@ -519,8 +461,8 @@ export function App() {
                               );
                             }}
                           />
-                        </div>
-                      </div>
+                        </span>
+                      </label>
                     </div>
                     {!info.tray_available && (
                       <p className="quiet section-note">
@@ -536,16 +478,20 @@ export function App() {
                     <div className="setting-row">
                       <div className="setting-label">
                         <label htmlFor="port">Local control port</label>
-                        <p>Restart Voice Type to apply.</p>
+                        <p id="port-hint">Restart Voice Type to apply.</p>
                       </div>
                       <div className="setting-control">
                         <input
                           id="port"
+                          name="local-control-port"
                           type="number"
                           min="1024"
                           max="65535"
                           value={portDraft}
                           aria-invalid={!!portError}
+                          aria-describedby={
+                            portError ? "port-error" : "port-hint"
+                          }
                           onChange={(event) => {
                             setPortDraft(event.target.value);
                             setPortDirty(true);
@@ -554,7 +500,11 @@ export function App() {
                           onBlur={commitPort}
                         />
                         {portError && (
-                          <span className="field-error" role="alert">
+                          <span
+                            id="port-error"
+                            className="field-error"
+                            role="alert"
+                          >
                             {portError}
                           </span>
                         )}
@@ -567,11 +517,9 @@ export function App() {
             {tab === "audio" && (
               <section className="settings-section">
                 <div className="settings-group">
-                  <div className="setting-row">
-                    <div className="setting-label">
-                      <label htmlFor="microphone">Input device</label>
-                    </div>
-                    <div className="setting-control">
+                  <div className="audio-device">
+                    <label htmlFor="microphone">Input device</label>
+                    <div className="device-control">
                       <Dropdown
                         id="microphone"
                         label="Input device"
@@ -598,47 +546,55 @@ export function App() {
                         ]}
                       />
                       <button
-                        className="text-button"
-                        disabled={busy}
+                        className="icon-button"
+                        aria-label="Refresh devices"
+                        title="Refresh devices"
+                        disabled={busy || status.state === "testing"}
                         onClick={() => void run(refreshSources)}
                       >
-                        <RefreshCw size={13} />
-                        Refresh devices
+                        <RefreshCw size={17} aria-hidden="true" />
                       </button>
                     </div>
                   </div>
-                  <div className="setting-row">
-                    <div className="setting-label">
-                      <h3>Input level</h3>
-                    </div>
-                    <div className="setting-control">
-                      <MicrophoneMeter active={status.state === "testing"} />
-                      <div className="meter-actions">
-                        <button
-                          disabled={
-                            busy || !["idle", "testing"].includes(status.state)
+                </div>
+                <div className="settings-group microphone-test">
+                  <div className="section-heading">
+                    <h2>Microphone test</h2>
+                    <button
+                      disabled={
+                        busy || !["idle", "testing"].includes(status.state)
+                      }
+                      onClick={() =>
+                        void run(async () => {
+                          await store.flush();
+                          if (status.state === "testing") await api.stopTest();
+                          else {
+                            await api.startTest(settings.microphone);
+                            await store.refresh();
                           }
-                          onClick={() =>
-                            void run(async () => {
-                              await store.flush();
-                              if (status.state === "testing")
-                                await api.stopTest();
-                              else {
-                                await api.startTest(settings.microphone);
-                                await store.refresh();
-                              }
-                              setStatus(await api.status());
-                            })
-                          }
-                        >
-                          {status.state === "testing"
-                            ? "Stop test"
-                            : "Test microphone"}
-                        </button>
-                        <span className="quiet">Stops after 60 seconds</span>
-                      </div>
-                    </div>
+                          setStatus(await api.status());
+                        })
+                      }
+                    >
+                      {status.state === "testing"
+                        ? "Stop test"
+                        : "Test microphone"}
+                    </button>
                   </div>
+                  <MicrophoneMeter active={status.state === "testing"} />
+                  {status.state === "testing" ? (
+                    <p className="quiet meter-note" role="status">
+                      Listening… Stops after 60 seconds.
+                    </p>
+                  ) : status.state === "recording" ? (
+                    <p className="quiet meter-note">
+                      Stop recording to test the microphone.
+                    </p>
+                  ) : status.state === "transcribing" ? (
+                    <p className="quiet meter-note">
+                      Wait for transcription to finish before testing.
+                    </p>
+                  ) : null}
                 </div>
               </section>
             )}
@@ -646,16 +602,12 @@ export function App() {
               <section className="settings-section">
                 <div className="settings-group shortcut-settings">
                   <ShortcutPicker
-                    name="Transcription toggle"
+                    name="Start or stop recording"
                     value={info.preferences.shortcut}
                     onError={setError}
                     onChange={(shortcut) => savePreferences({ shortcut })}
                   />
                 </div>
-                <p className="quiet section-note">
-                  Click a shortcut and press the keys. Click elsewhere to save;
-                  Escape disables it.
-                </p>
                 {info.shortcut_error && (
                   <div className="alert error" role="alert">
                     {info.shortcut_error}
@@ -706,6 +658,7 @@ export function App() {
                       title: `Delete ${selected}?`,
                       description:
                         "This vocabulary and its terms will be removed.",
+                      label: "Delete vocabulary",
                       run: async () => {
                         updateVocabulary(
                           settings.vocabulary.filter(
@@ -721,128 +674,24 @@ export function App() {
               </div>
             }
             {tab === "logs" && (
-              <>
-                <div className="log-tools">
-                  <Dropdown
-                    label="Filter logs"
-                    value={outcome}
-                    onChange={setOutcome}
-                    options={[
-                      { value: "all", label: "All outcomes" },
-                      { value: "errors", label: "Errors" },
-                      { value: "ok", label: "Successful" },
-                    ]}
-                  />
-                  <button
-                    disabled={!displayed.length}
-                    onClick={() => void run(() => api.exportLogs(outcome))}
-                  >
-                    Export
-                  </button>
-                  <button
-                    className="icon-button"
-                    title="Clear logs"
-                    aria-label="Clear logs"
-                    disabled={!logs.length}
-                    onClick={() =>
-                      setConfirm({
-                        title: "Clear logs?",
-                        description:
-                          "Current and rotated logs will be removed.",
-                        run: async () => {
-                          await api.clearLogs();
-                          setLogs([]);
-                        },
-                      })
-                    }
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-                <section className="log-list">
-                  {displayed.length ? (
-                    displayed.map((row, index) => {
-                      const dictation =
-                        row.event.startsWith("dictation.") ||
-                        row.event === "dictation";
-                      return (
-                        <details key={`${row.timestamp}-${index}`}>
-                          <summary>
-                            <span
-                              className={`log-icon ${row.outcome === "ok" ? "ok" : "failed"}`}
-                            >
-                              {row.outcome === "ok" ? (
-                                <Check size={14} />
-                              ) : (
-                                <X size={14} />
-                              )}
-                            </span>
-                            <span>
-                              <strong>
-                                {(dictation ? row.outcome : row.event).replace(
-                                  /[_.]/g,
-                                  " ",
-                                )}
-                              </strong>
-                              <small>
-                                {row.timestamp
-                                  ? new Date(row.timestamp).toLocaleString()
-                                  : "Time unavailable"}
-                                {row.provider
-                                  ? ` · ${providerName(row.provider)}`
-                                  : ""}
-                              </small>
-                            </span>
-                            {row.total_ms > 0 && (
-                              <span className="duration">
-                                {(row.total_ms / 1000).toFixed(1)}s
-                              </span>
-                            )}
-                          </summary>
-                          <dl>
-                            {dictation && (
-                              <>
-                                <dt>Model</dt>
-                                <dd>{row.configured_model || "—"}</dd>
-                                <dt>Audio</dt>
-                                <dd>
-                                  {(row.audio_ms / 1000).toFixed(1)} seconds
-                                </dd>
-                                <dt>Attempts</dt>
-                                <dd>{row.attempt_count}</dd>
-                              </>
-                            )}
-                            <dt>Outcome</dt>
-                            <dd>{row.outcome.replaceAll("_", " ")}</dd>
-                            {row.message && (
-                              <>
-                                <dt>Details</dt>
-                                <dd>{row.message}</dd>
-                              </>
-                            )}
-                            {row.error && (
-                              <>
-                                <dt>Error</dt>
-                                <dd>{row.error}</dd>
-                              </>
-                            )}
-                          </dl>
-                          {row.attempts?.length > 0 && (
-                            <pre>{JSON.stringify(row.attempts, null, 2)}</pre>
-                          )}
-                        </details>
-                      );
-                    })
-                  ) : (
-                    <div className="empty">
-                      <FileText size={26} />
-                      <h2>
-                        {logs.length ? "No matching logs" : "No logs yet"}
-                      </h2>
-                    </div>
-                  )}
-                </section>
-              </>
+              <LogViewer
+                logs={logs}
+                outcome={outcome}
+                onOutcome={setOutcome}
+                busy={busy}
+                onExport={() => void run(() => api.exportLogs(outcome))}
+                onClear={() =>
+                  setConfirm({
+                    title: "Clear logs?",
+                    description: "Current and rotated logs will be removed.",
+                    label: "Clear logs",
+                    run: async () => {
+                      await api.clearLogs();
+                      setLogs([]);
+                    },
+                  })
+                }
+              />
             )}
           </div>
         )}
@@ -857,38 +706,23 @@ export function App() {
             )
           }
           onClose={() => setEditor(null)}
+          onDelete={() =>
+            store.mutate((revision) =>
+              api.deleteProfile(revision, editor.profile!.id),
+            )
+          }
+          closeGuard={profileGuard}
         />
       )}
-      <Dialog.Root
-        open={!!confirm}
-        onOpenChange={(open) => {
-          if (!open) setConfirm(null);
-        }}
-      >
-        <Dialog.Portal>
-          <Dialog.Overlay className="dialog-overlay" />
-          <Dialog.Content className="dialog">
-            <Dialog.Title>{confirm?.title}</Dialog.Title>
-            <Dialog.Description>{confirm?.description}</Dialog.Description>
-            <div className="dialog-actions">
-              <Dialog.Close asChild>
-                <button>Cancel</button>
-              </Dialog.Close>
-              <button
-                className="danger"
-                disabled={busy}
-                onClick={() => {
-                  const action = confirm?.run;
-                  setConfirm(null);
-                  if (action) void run(action);
-                }}
-              >
-                Confirm
-              </button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.title}
+          description={confirm.description}
+          confirmLabel={confirm.label}
+          onConfirm={confirm.run}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
     </div>
   );
 }
