@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, type KeyboardEvent } from "react";
 import { api } from "./api";
-// Keep releases and captures in order when switching between the two pickers.
+// Release the global binding before capturing and persist only after release.
 let captureTransition: Promise<unknown> = Promise.resolve();
 let captureResult: Promise<unknown> = Promise.resolve();
 export const flushShortcutCapture = () => captureResult.then(() => {});
@@ -95,60 +95,92 @@ export function ShortcutPicker({
   }, []);
   return (
     <div className="shortcut-row">
-      <span>{name}</span>
-      <button
-        className="shortcut-key"
-        aria-label={`Change ${name.toLowerCase()} shortcut`}
-        aria-pressed={editing}
-        onClick={() => {
-          if (active.current) return;
-          active.current = true;
-          draft.current = null;
-          setPending(null);
-          setEditing(true);
-          setReady(false);
-          void changeCapture(api.beginShortcutCapture)
-            .then(() => {
-              if (active.current) setReady(true);
-            })
-            .catch((error) => {
-              active.current = false;
-              setEditing(false);
-              onError(String(error));
-            });
-        }}
-        onBlur={() => finish(draft.current)}
-        onKeyDown={(event) => {
-          if (!active.current) return;
-          if (event.key === "Tab") {
-            finish(draft.current);
-            return;
-          }
-          event.preventDefault();
-          event.stopPropagation();
-          if (event.key === "Escape") {
-            finish("");
-            return;
-          }
-          if (!ready || event.repeat) return;
-          if (event.key === "Enter" && draft.current !== null) {
-            finish(draft.current);
-            return;
-          }
-          const shortcut = shortcutFromKey(event);
-          if (shortcut) {
-            draft.current = shortcut;
-            setPending(shortcut);
-          }
-        }}
-      >
-        {editing
-          ? (pending?.split("+").join(" + ") ??
-            (ready ? "Press keys…" : "Preparing…"))
-          : value
-            ? value.split("+").join(" + ")
-            : "Disabled"}
-      </button>
+      <div className="shortcut-description">
+        <span>{name}</span>
+        <p className="quiet" id="shortcut-hint">
+          {editing
+            ? "Press keys, then Enter or click away to save. Escape disables."
+            : "Click the shortcut to change it."}
+        </p>
+      </div>
+      <div className="shortcut-control">
+        <button
+          className="shortcut-key"
+          aria-label={`Change ${name.toLowerCase()} shortcut`}
+          aria-pressed={editing}
+          aria-describedby="shortcut-hint"
+          onClick={() => {
+            if (active.current) return;
+            active.current = true;
+            draft.current = null;
+            setPending(null);
+            setEditing(true);
+            setReady(false);
+            void changeCapture(api.beginShortcutCapture)
+              .then(() => {
+                if (active.current) setReady(true);
+              })
+              .catch((error) => {
+                active.current = false;
+                setEditing(false);
+                onError(String(error));
+              });
+          }}
+          onBlur={() => finish(draft.current)}
+          onKeyDown={(event) => {
+            if (!active.current) return;
+            if (event.key === "Tab") {
+              finish(draft.current);
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.key === "Escape") {
+              finish("");
+              return;
+            }
+            if (!ready || event.repeat) return;
+            if (event.key === "Enter" && draft.current !== null) {
+              finish(draft.current);
+              return;
+            }
+            const shortcut = shortcutFromKey(event);
+            if (shortcut) {
+              draft.current = shortcut;
+              setPending(shortcut);
+            }
+          }}
+        >
+          {(editing ? pending : value)
+            ? (editing ? pending! : value).split("+").map((key, index) => (
+                <span className="key-part" key={`${key}-${index}`}>
+                  {index > 0 && (
+                    <span className="key-plus" aria-hidden="true">
+                      +
+                    </span>
+                  )}
+                  <kbd>{key}</kbd>
+                </span>
+              ))
+            : editing
+              ? ready
+                ? "Press keys…"
+                : "Preparing…"
+              : "Disabled"}
+        </button>
+        {!editing && value !== "Ctrl+Space" && (
+          <button
+            className="text-button"
+            onClick={() =>
+              void changeCapture(() => change.current("Ctrl+Space")).catch(
+                (error) => onError(String(error)),
+              )
+            }
+          >
+            Reset to Ctrl+Space
+          </button>
+        )}
+      </div>
     </div>
   );
 }

@@ -21,10 +21,15 @@ export function Dropdown({
       onValueChange={(encoded) => onChange(JSON.parse(encoded))}
       disabled={disabled}
     >
-      <Select.Trigger id={id} aria-label={label} className="dropdown-trigger">
+      <Select.Trigger
+        id={id}
+        aria-label={label}
+        title={options.find((option) => option.value === value)?.label}
+        className="dropdown-trigger"
+      >
         <Select.Value />
         <Select.Icon>
-          <ChevronDown size={16} />
+          <ChevronDown size={16} aria-hidden="true" />
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal>
@@ -43,7 +48,7 @@ export function Dropdown({
               >
                 <Select.ItemText>{option.label}</Select.ItemText>
                 <Select.ItemIndicator>
-                  <Check size={15} />
+                  <Check size={15} aria-hidden="true" />
                 </Select.ItemIndicator>
               </Select.Item>
             ))}
