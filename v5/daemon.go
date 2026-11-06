@@ -47,6 +47,8 @@ type daemon struct {
 	modelOverride     string
 	configError       string
 	notice            string
+	noticeVersion     uint64
+	recoveryVersion   uint64
 	lastAttemptFailed bool
 	// workspace is the active vocabulary workspace, re-read from the state file
 	// with the config so desktop changes land on the next dictation.
@@ -73,13 +75,35 @@ type daemon struct {
 }
 
 func newDaemon(cfg Config, res *resources, settings sttSettings, modelOverride string) *daemon {
-	return &daemon{
-		cfg:           cfg,
-		modelOverride: modelOverride,
-		workspace:     settings.Workspace,
-		res:           res,
-		stt:           newSTTClient(settings),
-		done:          make(chan struct{}),
+	notice, recoveryVersion := configRecoveryNotice()
+	d := &daemon{
+		cfg:             cfg,
+		modelOverride:   modelOverride,
+		workspace:       settings.Workspace,
+		res:             res,
+		stt:             newSTTClient(settings),
+		done:            make(chan struct{}),
+		recoveryVersion: recoveryVersion,
+	}
+	if notice != "" {
+		d.showNotice(notice)
+	}
+	return d
+}
+
+// Call with d.mu held, or before publishing the daemon to other goroutines.
+func (d *daemon) showNotice(message string) {
+	d.notice = message
+	d.noticeVersion++
+}
+func (d *daemon) checkConfigRecovery() {
+	message, version := configRecoveryNotice()
+	if version != d.recoveryVersion {
+		d.recoveryVersion = version
+		if message != "" {
+			d.showNotice(message)
+			d.runLog.diagnostic("configuration.recovered", "ok", message)
+		}
 	}
 }
 
@@ -150,7 +174,7 @@ func (d *daemon) startSession() (int, string) {
 	err := d.res.Recorder.Start()
 	d.mu.Lock()
 	if rec, ok := d.res.Recorder.(*Recorder); ok && rec.sourceFellBack() {
-		d.notice = microphoneFallbackNotice
+		d.showNotice(microphoneFallbackNotice)
 		d.runLog.diagnostic("microphone.changed", "ok", microphoneFallbackNotice)
 	}
 	if err != nil {
@@ -183,6 +207,7 @@ func (d *daemon) startSession() (int, string) {
 func (d *daemon) reloadConfig() error {
 	workspace := workspaceLoad()
 	cfg, err := configReadStrict()
+	d.checkConfigRecovery()
 	if err != nil {
 		return err
 	}

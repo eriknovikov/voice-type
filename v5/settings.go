@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // Settings contains masked profile metadata. Full credentials require an
@@ -52,11 +53,21 @@ type ProfileUpdate struct {
 
 var settingsMu sync.Mutex
 var configNotices sync.Map
+var configNoticeSequence atomic.Uint64
+
+type configNotice struct {
+	message string
+	version uint64
+}
 
 func ConfigNotice() string {
+	message, _ := configRecoveryNotice()
+	return message
+}
+func configRecoveryNotice() (string, uint64) {
 	value, _ := configNotices.Load(configFilePath())
-	text, _ := value.(string)
-	return text
+	notice, _ := value.(configNotice)
+	return notice.message, notice.version
 }
 func configRevision(data []byte) string {
 	sum := sha256.Sum256(data)
@@ -87,7 +98,7 @@ func readConfigDocument() ([]byte, map[string]json.RawMessage, error) {
 		return nil, nil, err
 	}
 	if notice != "" {
-		configNotices.Store(configFilePath(), notice)
+		configNotices.Store(configFilePath(), configNotice{notice, configNoticeSequence.Add(1)})
 	}
 	if data == nil {
 		data = emptyConfigDocument()

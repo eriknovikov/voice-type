@@ -169,6 +169,7 @@ export function App() {
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
     let lastNotice = "";
+    let lastNoticeVersion: number | undefined;
     const poll = async () => {
       try {
         const [next, freshInfo] = await Promise.all([api.status(), api.info()]);
@@ -177,13 +178,20 @@ export function App() {
             previous.state === next.state &&
             previous.error === next.error &&
             previous.port === next.port &&
-            previous.notice === next.notice
+            previous.notice === next.notice &&
+            previous.notice_version === next.notice_version
               ? previous
               : next,
           );
           setInfo(freshInfo);
-          if (next.notice && next.notice !== lastNotice) {
+          if (
+            next.notice &&
+            (next.notice !== lastNotice ||
+              next.notice_version !== lastNoticeVersion)
+          ) {
             lastNotice = next.notice;
+            lastNoticeVersion = next.notice_version;
+            setDismissedNotice("");
             void store.refresh().catch((e) => setError(errorText(e)));
           }
         }

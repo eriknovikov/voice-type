@@ -39,6 +39,7 @@ export interface Status {
   port: number;
   level: number;
   notice?: string;
+  notice_version?: number;
 }
 export interface Preferences {
   shortcut: string;
