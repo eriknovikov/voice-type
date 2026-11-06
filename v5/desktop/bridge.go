@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	vt "github.com/eriknovikov/voice-type"
@@ -33,10 +34,10 @@ type Bridge struct {
 	window              *application.WebviewWindow
 	service             *vt.Service
 	mu                  sync.Mutex
-	capturingShortcut   bool
+	capturingShortcut   atomic.Bool
 	prefs               Preferences
 	shortcutError       string
-	lastShortcutAt      string
+	lastShortcutAt      atomic.Int64
 	version             string
 	preferencesError    string
 	notice              string
@@ -158,8 +159,14 @@ func (b *Bridge) CompleteWindowAction(action string) error {
 }
 func (b *Bridge) Info() DesktopInfo {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	return DesktopInfo{LastShortcutAt: b.lastShortcutAt, Preferences: b.prefs, TrayAvailable: trayAvailable(), ShortcutError: b.shortcutError, Version: b.version, PreferencesError: b.preferencesError, Notice: b.notice}
+	info := DesktopInfo{Preferences: b.prefs, ShortcutError: b.shortcutError, Version: b.version, PreferencesError: b.preferencesError, Notice: b.notice}
+	b.mu.Unlock()
+	// A slow desktop bus must not hold up preference saves or shortcut handling.
+	info.TrayAvailable = trayAvailable()
+	if last := b.lastShortcutAt.Load(); last != 0 {
+		info.LastShortcutAt = time.Unix(0, last).Format(time.RFC3339)
+	}
+	return info
 }
 
 // Tray and forwarded shortcuts share one nonblocking recording action.
@@ -233,17 +240,12 @@ func encodeDiagnosticLogs(records []vt.DiagnosticRecord, outcome string) ([]byte
 }
 
 func (b *Bridge) activateShortcut() {
-	// Preferences may wait for GTK while replacing native bindings. A shortcut
-	// must not wait on that lock from GTK's thread or replay after the edit.
-	if !b.mu.TryLock() {
+	// Native preference registration can wait for GTK. Shortcut activation
+	// neither waits on that lock nor drops an ordinary keypress because of it.
+	if b.capturingShortcut.Load() {
 		return
 	}
-	if b.capturingShortcut {
-		b.mu.Unlock()
-		return
-	}
-	b.lastShortcutAt = time.Now().Format(time.RFC3339)
-	b.mu.Unlock()
+	b.lastShortcutAt.Store(time.Now().UnixNano())
 	b.toggleRecording()
 }
 
@@ -273,9 +275,9 @@ func (b *Bridge) registerShortcuts(prefs Preferences) error {
 func (b *Bridge) BeginShortcutCapture() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.capturingShortcut = true
+	b.capturingShortcut.Store(true)
 	if err := b.releaseShortcuts(); err != nil {
-		b.capturingShortcut = false
+		b.capturingShortcut.Store(false)
 		return err
 	}
 	return nil
@@ -283,10 +285,10 @@ func (b *Bridge) BeginShortcutCapture() error {
 func (b *Bridge) EndShortcutCapture() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.capturingShortcut {
+	if !b.capturingShortcut.Load() {
 		return nil
 	}
-	b.capturingShortcut = false
+	b.capturingShortcut.Store(false)
 	_ = b.releaseShortcuts()
 	err := b.registerShortcuts(b.prefs)
 	if err != nil {
