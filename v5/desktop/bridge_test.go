@@ -252,18 +252,51 @@ func TestDiagnosticExportFollowsOutcome(t *testing.T) {
 }
 
 func TestShortcutDoesNotWaitForPreferenceChanges(t *testing.T) {
-	b := &Bridge{}
-	b.mu.Lock()
+	isolatedPreferences(t)
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	service, err := vt.StartService("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	b := &Bridge{service: service, app: application.New(application.Options{Name: "Voice Type"})}
+	b.mu.Lock() // An Info request or preference change is in progress.
 	done := make(chan struct{})
 	go func() { b.activateShortcut(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
 		b.mu.Unlock()
-		t.Fatal("shortcut blocked behind native preference registration")
+		t.Fatal("shortcut blocked behind preference registration")
 	}
 	b.mu.Unlock()
-	if b.lastShortcutAt != "" {
-		t.Fatal("blocked shortcut was replayed")
+	if b.lastShortcutAt.Load() == 0 {
+		t.Fatal("ordinary shortcut was dropped")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		rows, err := service.Logs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, row := range rows {
+			if row.Event == "dictation.completed" {
+				found = true
+			}
+		}
+		if found {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("shortcut did not reach the engine")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	last := b.lastShortcutAt.Load()
+	b.capturingShortcut.Store(true)
+	b.activateShortcut()
+	if b.lastShortcutAt.Load() != last {
+		t.Fatal("shortcut activated while capturing keys")
 	}
 }
