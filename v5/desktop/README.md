@@ -29,13 +29,48 @@ expanded for details.
 
 The app installs as `~/.local/bin/voice-type-app`. Closing the settings window
 keeps dictation and the tray running in that same process. Quit stops the entire
-app and releases the microphone and HTTP listener. A second launch reopens settings. GNOME needs the AppIndicator/KStatusNotifierItem extension
-for the tray icon; the launcher remains available without it.
+app and releases the microphone and engine lock. A second launch reopens settings.
+GNOME needs the AppIndicator/KStatusNotifierItem extension for the tray icon;
+the launcher remains available without it.
 
-Stop any standalone `voice-type` daemon before opening the desktop app; a port
-conflict fails startup rather than connecting to another process. The standalone
-CLI remains separately installable. Port changes save on blur and apply after quitting and reopening Voice Type.
-Startup failures show a native error dialog, including background launches.
+The desktop app opens no TCP control port or management socket. Commands reach
+its existing Wails instance (session D-Bus on Linux):
+
+| Command | App running | App stopped |
+| --- | --- | --- |
+| `voice-type-app` or `--show-settings` | Open settings | Start and open settings |
+| `voice-type-app --background` | Leave the window unchanged | Start hidden if setup is complete |
+| `voice-type-app --toggle` | Toggle recording without opening settings | Start hidden, then toggle if setup is complete |
+| `voice-type-app --quit` | Quit after pending settings and dictation checks | Exit without starting the engine |
+
+The previous `--shortcut-action transcription` command remains an alias for
+`--toggle`. Commands accept no credentials or arbitrary shell arguments; invalid
+or conflicting commands exit with code 2. A successful secondary command means
+it was forwarded, not that transcription finished. Recording errors appear in
+settings, tray status and logs. During transcription, additional recording
+commands are rejected instead of queued. Startup commands wait for initialization;
+missing setup or recovered settings open settings without starting a recording.
+Closing settings keeps the app running; Quit uses the same save/profile safeguards
+as the tray. `--remove-shortcuts` is a separate uninstall operation.
+
+Stop any standalone `voice-type` daemon before opening the desktop app. Both
+entry points hold the same nonblocking OS file lock under
+`$XDG_RUNTIME_DIR/voice-type/engine.lock` (or the private state directory when
+that variable is unset). The directory is private (0700) and the file is private
+(0600). Only one engine may run; a conflicting launch reports an error and never
+adopts or stops the other engine. Shutdown or a crash releases the lock. The
+file remains in place; do not delete it to bypass a running process.
+Older standalone binaries do not honor this lock: stop them before upgrading.
+An unrelated application using port 3232 does not affect the desktop app.
+Startup failures show a native error dialog, including background launches,
+and report the error on stderr. Lock conflicts do not open another engine's logs.
+
+## Troubleshooting
+
+Use settings status and **Logs** to investigate desktop recording errors.
+Use `voice-type-app --show-settings` to reopen a hidden window and
+`voice-type-app --quit` for a normal shutdown. Port checks and
+`curl http://127.0.0.1:3232/health` apply only to the standalone CLI.
 
 ## Data and build boundaries
 
@@ -63,12 +98,14 @@ Vocabulary selection and desktop preferences live under `$XDG_STATE_HOME/voice-t
 (default `~/.local/state/voice-type`). Logs stay at `~/.voice-type-logs.jsonl`,
 with one rotated segment. No transcript history is stored.
 
-Settings, logs and microphone tests use direct Go calls inside Wails. No desktop
-management socket or daemon subprocess is created. The existing shortcut controls
-remain on `127.0.0.1:3232` (or your configured port): for example,
-`curl -X POST http://127.0.0.1:3232/toggle`. `/exit` quits the entire app.
-Management routes and credentials are never exposed over TCP; browser requests
-are rejected. Routine settings responses contain only masked keys. Explicit Reveal and Copy
+Settings, logs, microphone tests and recording use direct Go calls inside Wails.
+No daemon subprocess is created. The standalone CLI remains separately
+installable and retains its loopback HTTP controls, including `/health`,
+`/start`, `/stop`, `/toggle` and `/exit`. For example,
+`curl -X POST http://127.0.0.1:3232/toggle` controls the standalone daemon only.
+Its stored port is preserved by desktop settings edits but has no desktop UI.
+Outbound provider HTTPS requests are unchanged.
+Routine settings responses contain only masked keys. Explicit Reveal and Copy
 actions are available in the profile editor; copying uses Go's clipboard API.
 
 This separate Go module deliberately enables CGO for Wails. The daemon module,
@@ -88,8 +125,9 @@ installation for testing.
 ## Integration checks
 
 After building, `python3 scripts/smoke.py` (from this directory) briefly launches
-the actual native app with an isolated home and session bus, verifies listener
-ownership, shortcut requests, shutdown and single-instance behavior, and shuts
+the actual native app with an isolated home and session bus. It verifies engine
+ownership without TCP, startup with an occupied CLI port, command forwarding,
+cold Quit, incomplete setup, guarded shutdown and native startup errors. It shuts
 its test processes down.
 
 From `v5/`, `VOICE_TYPE_TEST_IBUS_DAEMON=/usr/bin/ibus-daemon go test ./...`
@@ -101,7 +139,10 @@ credentials or transcripts.
 To exercise native tray registration and menu actions without installing a shell
 extension, run `VOICE_TYPE_DESKTOP_TEST_BINARY="$PWD/build/voice-type-app"
 CGO_ENABLED=1 go test -run TestNativeTray -v` from this directory (as one command).
-The test uses a private session bus and a test tray host.
+The test uses private HOME/XDG directories, a private session bus and keyfile
+GSettings backend, an occupied CLI port and a test tray host. It exercises both
+shortcut command forms and native menu callbacks while preserving a seeded
+Gradia Print binding through startup and uninstall. No paid provider calls run.
 
 Keyboard Shortcuts defaults to Ctrl+Space to toggle transcription.
 The old daemon toggle and its app-owned GNOME binding are removed automatically.

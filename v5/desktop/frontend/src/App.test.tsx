@@ -102,7 +102,6 @@ beforeEach(() => {
   vi.mocked(api.status).mockResolvedValue({
     state: "idle",
     error: "",
-    port: 3232,
     level: 0,
   });
   vi.mocked(api.logs).mockResolvedValue([]);
@@ -208,29 +207,29 @@ describe("profiles", () => {
   });
 });
 describe("autosave", () => {
-  it("saves port on blur and retains failed edits for explicit retry", async () => {
+  it("retains failed vocabulary edits for explicit retry without changing the CLI port", async () => {
     vi.mocked(api.save).mockRejectedValueOnce(
       new Error("settings changed elsewhere; reload before saving"),
     );
+    saved.port = 4242;
     await ready();
-    fireEvent.click(screen.getByText("Advanced"));
-    const port = screen.getByLabelText(
-      "Local control port",
-    ) as HTMLInputElement;
-    fireEvent.change(port, { target: { value: "4242" } });
-    expect(api.save).not.toHaveBeenCalled();
-    fireEvent.blur(port);
+    expect(screen.queryByText("Advanced")).toBeNull();
+    expect(screen.queryByLabelText("Local control port")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Vocabulary" }));
+    const words = await screen.findByLabelText("Words and phrases");
+    fireEvent.change(words, { target: { value: "Alpha\nBeta" } });
+    fireEvent.blur(words);
     await screen.findByRole("button", { name: "Retry save" });
-    expect(port.value).toBe("4242");
+    expect((words as HTMLTextAreaElement).value).toBe("Alpha\nBeta");
     saved.revision = "external";
     fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
     await waitFor(() =>
       expect(api.save).toHaveBeenLastCalledWith({
         revision: "external",
-        port: 4242,
+        vocabulary: [{ name: "general", terms: ["Alpha", "Beta"] }],
       }),
     );
-    expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
+    expect(saved.port).toBe(4242);
   });
   it("flushes vocabulary before navigation and native hide", async () => {
     await ready();
@@ -248,23 +247,6 @@ describe("autosave", () => {
       revision: "r1",
       vocabulary: [{ name: "general", terms: ["Alpha", "Beta"] }],
     });
-  });
-  it("preserves invalid port draft across navigation without saving it", async () => {
-    await ready();
-    fireEvent.click(screen.getByText("Advanced"));
-    fireEvent.change(screen.getByLabelText("Local control port"), {
-      target: { value: "50" },
-    });
-    fireEvent.blur(screen.getByLabelText("Local control port"));
-    expect(screen.getByText("Use a port from 1024 to 65535.")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Audio" }));
-    await screen.findByText("Test microphone");
-    fireEvent.click(screen.getByRole("button", { name: "General" }));
-    await screen.findByRole("button", { name: "Edit Personal" });
-    expect(
-      (screen.getByLabelText("Local control port") as HTMLInputElement).value,
-    ).toBe("50");
-    expect(api.save).not.toHaveBeenCalled();
   });
   it("does not hide when persistence fails", async () => {
     vi.mocked(api.save).mockRejectedValue(new Error("Disk is read-only."));
@@ -367,7 +349,6 @@ it("shows a new recovery notice after an earlier identical notice was dismissed"
   const status = {
     state: "idle",
     error: "",
-    port: 3232,
     level: 0,
     notice: message,
     notice_version: 1,
@@ -657,7 +638,6 @@ it("shows microphone timing only during a test and explains a blocked test", asy
   vi.mocked(api.status).mockResolvedValue({
     state: "recording",
     error: "",
-    port: 3232,
     level: 0,
   });
   await ready();
@@ -671,7 +651,6 @@ it("shows microphone timing only during a test and explains a blocked test", asy
   vi.mocked(api.status).mockResolvedValue({
     state: "testing",
     error: "",
-    port: 3232,
     level: 0,
   });
   await screen.findByText("Listening… Stops after 60 seconds.");

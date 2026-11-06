@@ -10,6 +10,7 @@ const timestamp = new Intl.DateTimeFormat(undefined, {
 const seconds = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 const count = new Intl.NumberFormat();
 const titles: Record<string, string> = {
+  "desktop.started": "App started",
   "startup.failed": "Startup failed",
   "config.recovered": "Settings recovered",
   config_recovery: "Settings recovered",

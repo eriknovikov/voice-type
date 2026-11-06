@@ -22,7 +22,6 @@ export interface Settings {
 }
 export interface SettingsUpdate {
   revision: string;
-  port?: number;
   microphone?: string;
   vocabulary?: VocabularyList[];
 }
@@ -36,7 +35,6 @@ export interface ProfileUpdate {
 export interface Status {
   state: string;
   error: string;
-  port: number;
   level: number;
   notice?: string;
   notice_version?: number;

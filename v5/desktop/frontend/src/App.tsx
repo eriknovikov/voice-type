@@ -59,7 +59,6 @@ export function App() {
   const [status, setStatus] = useState<Status>({
     state: "disconnected",
     error: "",
-    port: 3232,
     level: 0,
   });
   const [sources, setSources] = useState<AudioSource[]>([]);
@@ -71,9 +70,6 @@ export function App() {
   const [editor, setEditor] = useState<{
     profile: ProfileSummary | null;
   } | null>(null);
-  const [portDraft, setPortDraft] = useState("3232");
-  const [portDirty, setPortDirty] = useState(false);
-  const [portError, setPortError] = useState("");
   const [dismissedNotice, setDismissedNotice] = useState("");
   const prefsTail = useRef<Promise<unknown>>(Promise.resolve());
   const profileGuard = useRef<(() => Promise<boolean>) | null>(null);
@@ -173,9 +169,6 @@ export function App() {
     };
   }, [store]);
   useEffect(() => {
-    if (settings && !portDirty) setPortDraft(String(settings.port));
-  }, [settings?.port, portDirty]);
-  useEffect(() => {
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
     let lastNotice = "";
@@ -187,7 +180,6 @@ export function App() {
           setStatus((previous) =>
             previous.state === next.state &&
             previous.error === next.error &&
-            previous.port === next.port &&
             previous.notice === next.notice &&
             previous.notice_version === next.notice_version
               ? previous
@@ -254,22 +246,6 @@ export function App() {
       await prefsTail.current;
       setTab(next);
     });
-  const commitPort = () => {
-    if (!portDirty) return;
-    const value = Number(portDraft);
-    if (
-      !/^\d+$/.test(portDraft) ||
-      !Number.isInteger(value) ||
-      value < 1024 ||
-      value > 65535
-    ) {
-      setPortError("Use a port from 1024 to 65535.");
-      return;
-    }
-    setPortError("");
-    setPortDirty(false);
-    store.patch({ port: value });
-  };
   const updateVocabulary = (lists: VocabularyList[], debounce = false) =>
     store.patch({ vocabulary: lists }, debounce);
   const list = settings?.vocabulary.find((item) => item.name === selected);
@@ -472,46 +448,6 @@ export function App() {
                     )}
                   </section>
                 )}
-                <details className="advanced">
-                  <summary>Advanced</summary>
-                  <div className="settings-group">
-                    <div className="setting-row">
-                      <div className="setting-label">
-                        <label htmlFor="port">Local control port</label>
-                        <p id="port-hint">Restart Voice Type to apply.</p>
-                      </div>
-                      <div className="setting-control">
-                        <input
-                          id="port"
-                          name="local-control-port"
-                          type="number"
-                          min="1024"
-                          max="65535"
-                          value={portDraft}
-                          aria-invalid={!!portError}
-                          aria-describedby={
-                            portError ? "port-error" : "port-hint"
-                          }
-                          onChange={(event) => {
-                            setPortDraft(event.target.value);
-                            setPortDirty(true);
-                            setPortError("");
-                          }}
-                          onBlur={commitPort}
-                        />
-                        {portError && (
-                          <span
-                            id="port-error"
-                            className="field-error"
-                            role="alert"
-                          >
-                            {portError}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </details>
               </>
             )}
             {tab === "audio" && (
