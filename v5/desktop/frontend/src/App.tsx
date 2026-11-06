@@ -1,6 +1,10 @@
-import React, { useEffect, useState } from "react";
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
-  AudioLines,
   BookOpen,
   Check,
   FileText,
@@ -10,22 +14,30 @@ import {
   Settings2,
   Trash2,
   X,
+  Plus,
+  Pencil,
+  Circle,
+  CheckCircle2,
 } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Events, Window } from "@wailsio/runtime";
+import { Events } from "@wailsio/runtime";
 import {
   api,
-  type Settings,
   type Status,
   type DesktopInfo,
   type AudioSource,
   type LogRecord,
+  type Preferences,
+  type ProfileSummary,
+  type VocabularyList,
 } from "./api";
 import "./style.css";
 import { MicrophoneMeter } from "./MicrophoneMeter";
 import { Dropdown } from "./Dropdown";
-import { ShortcutPicker } from "./ShortcutPicker";
+import { ShortcutPicker, flushShortcutCapture } from "./ShortcutPicker";
 import { VocabularyEditor } from "./VocabularyEditor";
+import { ProfileEditor, providerName } from "./ProfileEditor";
+import { SettingsStore } from "./settingsStore";
 
 type Tab = "settings" | "audio" | "shortcuts" | "vocabulary" | "logs";
 const tabs = [
@@ -37,9 +49,16 @@ const tabs = [
 ] as const;
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+const eventValue = (data: unknown): unknown =>
+  Array.isArray(data) ? data[0] : data;
 export function App() {
+  const [store] = useState(() => new SettingsStore(api.settings, api.save));
+  const {
+    settings,
+    status: saveStatus,
+    error: saveError,
+  } = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [tab, setTab] = useState<Tab>("settings");
-  const [settings, setSettings] = useState<Settings | null>(null);
   const [info, setInfo] = useState<DesktopInfo | null>(null);
   const [status, setStatus] = useState<Status>({
     state: "disconnected",
@@ -48,99 +67,129 @@ export function App() {
     level: 0,
   });
   const [sources, setSources] = useState<AudioSource[]>([]);
-  const [keys, setKeys] = useState<Record<string, string>>({});
-  const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState("general");
   const [logs, setLogs] = useState<LogRecord[]>([]);
-  const [query, setQuery] = useState("");
   const [outcome, setOutcome] = useState("all");
+  const [editor, setEditor] = useState<{
+    profile: ProfileSummary | null;
+  } | null>(null);
+  const [portDraft, setPortDraft] = useState("3232");
+  const [portDirty, setPortDirty] = useState(false);
+  const [portError, setPortError] = useState("");
+  const [dismissedNotice, setDismissedNotice] = useState("");
+  const prefsTail = useRef<Promise<unknown>>(Promise.resolve());
   const [confirm, setConfirm] = useState<{
     title: string;
     description: string;
     run: () => Promise<void>;
   } | null>(null);
-  const run = async (fn: () => Promise<void>) => {
+  const run = async (operation: () => Promise<void>) => {
     setBusy(true);
     setError("");
-    setNotice("");
     try {
-      await fn();
+      await operation();
     } catch (e) {
       setError(errorText(e));
     } finally {
       setBusy(false);
     }
   };
-  const load = async () => {
-    const [s, i] = await Promise.all([api.settings(), api.info()]);
-    if (!s.vocabulary.some((v) => v.name === "general"))
-      s.vocabulary.unshift({ name: "general", terms: [] });
-    setSettings(s);
-    setSelected((current) =>
-      s.vocabulary.some((item) => item.name === current) ? current : "general",
-    );
-    setInfo(i);
-    setKeys({});
-    setDirty(false);
+  const savePreferences = (patch: Partial<Preferences>) => {
+    const result = prefsTail.current
+      .catch(() => {})
+      .then(async () => {
+        const current = await api.info();
+        await api.preferences({
+          ...current.preferences,
+          ...patch,
+          setup_complete: true,
+        });
+        setInfo(await api.info());
+      });
+    prefsTail.current = result;
+    return result;
   };
   useEffect(() => {
-    void run(async () => {
-      await load();
-    });
-    const off = Events.On("operation-error", (e) => setError(String(e.data)));
-    const offWorkspace = Events.On("workspace-changed", (e) =>
-      setSettings((current) =>
-        current ? { ...current, workspace: String(e.data) } : current,
-      ),
+    void store.load().catch((e) => setError(errorText(e)));
+    const offError = Events.On("operation-error", (event) =>
+      setError(String(eventValue(event.data))),
+    );
+    const offWorkspace = Events.On("workspace-changed", (event) =>
+      store.updateWorkspace(String(eventValue(event.data))),
     );
     const offCapture = Events.On("cancel-shortcut-capture", () =>
       window.dispatchEvent(new Event("voice-type-cancel-capture")),
     );
-    const offNavigation = Events.On("navigate", (e) => {
-      if (String(e.data) === "settings") setTab("settings");
+    const offNavigation = Events.On("navigate", (event) => {
+      if (String(eventValue(event.data)) === "settings") {
+        void store
+          .flush()
+          .then(async () => {
+            await flushShortcutCapture();
+            await prefsTail.current;
+            setTab("settings");
+          })
+          .catch((e) => setError(errorText(e)));
+      }
     });
+    const offFlush = Events.On("flush-settings", (event) => {
+      const data = eventValue(event.data) as { action?: string } | undefined;
+      if (data?.action !== "hide" && data?.action !== "quit") return;
+      const action = data.action;
+      // Native tray/close actions also commit blur-validated fields.
+      if (document.activeElement instanceof HTMLElement)
+        document.activeElement.blur();
+      void (async () => {
+        try {
+          await store.flush();
+          await flushShortcutCapture();
+          await prefsTail.current;
+          await api.completeWindowAction(action);
+        } catch (e) {
+          setError(errorText(e));
+        }
+      })();
+    });
+    void api.frontendReady().catch((e) => setError(errorText(e)));
     return () => {
-      off();
+      offError();
       offWorkspace();
       offCapture();
       offNavigation();
+      offFlush();
+      store.dispose();
     };
-  }, []);
+  }, [store]);
+  useEffect(() => {
+    if (settings && !portDirty) setPortDraft(String(settings.port));
+  }, [settings?.port, portDirty]);
   useEffect(() => {
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
+    let lastNotice = "";
     const poll = async () => {
       try {
-        const next = await api.status();
-        if (alive)
+        const [next, freshInfo] = await Promise.all([api.status(), api.info()]);
+        if (alive) {
           setStatus((previous) =>
             previous.state === next.state &&
             previous.error === next.error &&
-            previous.port === next.port
+            previous.port === next.port &&
+            previous.notice === next.notice
               ? previous
               : next,
           );
-        const freshInfo = await api.info();
-        if (alive)
-          setInfo((current) =>
-            current
-              ? current.shortcut_error === freshInfo.shortcut_error &&
-                current.last_shortcut_at === freshInfo.last_shortcut_at &&
-                current.tray_available === freshInfo.tray_available
-                ? current
-                : {
-                    ...current,
-                    shortcut_error: freshInfo.shortcut_error,
-                    last_shortcut_at: freshInfo.last_shortcut_at,
-                    tray_available: freshInfo.tray_available,
-                  }
-              : freshInfo,
-          );
+          setInfo(freshInfo);
+          if (next.notice && next.notice !== lastNotice) {
+            lastNotice = next.notice;
+            void store.refresh().catch((e) => setError(errorText(e)));
+          }
+        }
       } catch {
-        if (alive) setStatus((s) => ({ ...s, state: "disconnected" }));
+        if (alive)
+          setStatus((current) => ({ ...current, state: "disconnected" }));
       }
       if (alive) timer = setTimeout(poll, 500);
     };
@@ -149,10 +198,14 @@ export function App() {
       alive = false;
       clearTimeout(timer);
     };
-  }, []);
+  }, [store]);
+  const refreshSources = async () => {
+    setSources(await api.microphones());
+    // Missing-device fallback can update the config; merge it with pending edits.
+    await store.refresh();
+  };
   useEffect(() => {
-    if (tab === "audio")
-      void run(async () => setSources(await api.microphones()));
+    if (tab === "audio") void run(refreshSources);
     return () => {
       if (tab === "audio") void api.stopTest().catch(() => {});
     };
@@ -176,93 +229,73 @@ export function App() {
       clearTimeout(timer);
     };
   }, [tab]);
-  const patch = (value: Partial<Settings>) => {
-    setSettings((s) => (s ? { ...s, ...value } : s));
-    setDirty(true);
-  };
-  const save = async () => {
-    if (!settings) return;
-    const saved = await api.save({
-      revision: settings.revision,
-      provider: settings.provider,
-      port: settings.port,
-      microphone: settings.microphone,
-      vocabulary: settings.vocabulary,
-      api_keys: keys,
+  const navigate = (next: Tab) =>
+    void run(async () => {
+      await store.flush();
+      await flushShortcutCapture();
+      await prefsTail.current;
+      setTab(next);
     });
-    setSettings(saved);
-    setSelected((current) => current.trim());
-    setKeys({});
-    setDirty(false);
-    setNotice("Saved. Changes apply to the next dictation.");
+  const commitPort = () => {
+    if (!portDirty) return;
+    const value = Number(portDraft);
+    if (
+      !/^\d+$/.test(portDraft) ||
+      !Number.isInteger(value) ||
+      value < 1024 ||
+      value > 65535
+    ) {
+      setPortError("Use a port from 1024 to 65535.");
+      return;
+    }
+    setPortError("");
+    setPortDirty(false);
+    store.patch({ port: value });
   };
-  const navigate = (next: Tab) => {
-    setTab(next);
-    setNotice("");
-  };
-  const list = settings?.vocabulary.find((v) => v.name === selected);
-  const updateList = (name: string, terms: string[]) => {
-    if (!settings) return;
-    patch({
-      vocabulary: settings.vocabulary.map((v) =>
-        v.name === selected
-          ? { ...v, original_name: v.original_name ?? v.name, name, terms }
-          : v,
-      ),
-    });
-    setSelected(name);
+  const updateVocabulary = (lists: VocabularyList[], debounce = false) =>
+    store.patch({ vocabulary: lists }, debounce);
+  const list = settings?.vocabulary.find((item) => item.name === selected);
+  const renameVocabulary = (name: string): boolean => {
+    const value = name.trim();
+    if (
+      !settings ||
+      !value ||
+      settings.vocabulary.some(
+        (item) =>
+          item.name !== selected &&
+          item.name.toLowerCase() === value.toLowerCase(),
+      )
+    )
+      return false;
+    if (value !== selected) {
+      updateVocabulary(
+        settings.vocabulary.map((item) =>
+          item.name === selected
+            ? {
+                ...item,
+                original_name: item.original_name ?? item.name,
+                name: value,
+              }
+            : item,
+        ),
+      );
+      setSelected(value);
+    }
+    return true;
   };
   const displayed = logs.filter(
     (row) =>
-      (outcome === "all" ||
-        (outcome === "errors" ? row.outcome !== "ok" : row.outcome === "ok")) &&
-      JSON.stringify(row).toLowerCase().includes(query.toLowerCase()),
+      outcome === "all" ||
+      (outcome === "errors" ? row.outcome !== "ok" : row.outcome === "ok"),
   );
-  const exportLogs = () =>
-    void run(async () => {
-      await api.exportLogs(query, outcome);
-    });
-  const saveShortcut = async (value: string) => {
-    const current = await api.info();
-    await api.preferences({
-      ...current.preferences,
-      shortcut: value,
-      setup_complete: true,
-    });
-    setInfo((state) =>
-      state
-        ? {
-            ...state,
-            shortcut_error: "",
-            preferences: {
-              ...state.preferences,
-              shortcut: value,
-              setup_complete: true,
-            },
-          }
-        : state,
-    );
-  };
-  const credential = settings?.credentials[settings.provider];
-  const descriptions: Record<Tab, string> = {
-    settings: "Provider, API key, and desktop preferences.",
-    audio: "Choose your microphone and check the input level.",
-    shortcuts: "Set the keys to start and stop recording.",
-    vocabulary: "Add names and terms to improve transcription.",
-    logs: "Review dictation activity and errors. Transcribed text is not stored.",
-  };
-  const activateVocabulary = () =>
-    void run(async () => {
-      if (dirty) await save();
-      const name = selected.trim() === "general" ? "" : selected.trim();
-      await api.workspace(name);
-      setSettings((current) =>
-        current ? { ...current, workspace: name } : current,
-      );
-      setNotice("Vocabulary updated.");
-    });
+  const notice = [
+    ...new Set([settings?.notice, status.notice, info?.notice].filter(Boolean)),
+  ].join(" ");
+  const visibleError =
+    error || saveError || info?.preferences_error || status.error;
   return (
     <div className="app">
+      <div className="window-drag" aria-hidden="true" />
       <aside>
         <div className="brand">
           <img src="/icon.png" alt="" />
@@ -283,14 +316,22 @@ export function App() {
         </nav>
         <div className="sidebar-bottom">
           <small>v{info?.version ?? "—"}</small>
+          <span className={`save-status ${saveStatus}`} role="status">
+            {saveStatus === "saving"
+              ? "Saving…"
+              : saveStatus === "saved"
+                ? "Saved"
+                : saveStatus === "pending"
+                  ? "Unsaved"
+                  : saveStatus === "error"
+                    ? "Not saved"
+                    : ""}
+          </span>
         </div>
       </aside>
       <main aria-busy={busy}>
         <header>
-          <div>
-            <h1>{tabs.find((item) => item.id === tab)?.label}</h1>
-            <p>{descriptions[tab]}</p>
-          </div>
+          <h1>{tabs.find((item) => item.id === tab)?.label}</h1>
           <span className={`status ${status.state}`}>
             <span className={`dot ${status.state}`} />
             {status.state === "disconnected" ? "Offline" : status.state}
@@ -300,55 +341,49 @@ export function App() {
           className="window-close icon-button"
           aria-label="Close window"
           title="Hide to background"
-          onClick={() => void Window.Close()}
+          onClick={() =>
+            void api.requestHide().catch((e) => setError(errorText(e)))
+          }
         >
           <X size={17} />
         </button>
-        {error && (
+        {visibleError && (
           <div className="alert error" role="alert">
-            <span>{error}</span>
+            <span>{visibleError}</span>
+            {saveError ? (
+              <button onClick={() => void run(store.retry)}>Retry save</button>
+            ) : info?.preferences_error && !error ? (
+              <button onClick={() => void run(() => savePreferences({}))}>
+                Retry
+              </button>
+            ) : error ? (
+              <button
+                className="icon-button"
+                aria-label="Dismiss error"
+                onClick={() => setError("")}
+              >
+                <X size={15} />
+              </button>
+            ) : null}
+          </div>
+        )}
+        {notice && notice !== dismissedNotice && (
+          <div className="alert success" role="status">
+            <span>{notice}</span>
             <button
               className="icon-button"
-              aria-label="Dismiss error"
-              onClick={() => setError("")}
+              aria-label="Dismiss notice"
+              onClick={() => setDismissedNotice(notice)}
             >
               <X size={15} />
             </button>
           </div>
         )}
-        {notice && (
-          <div className="alert success" role="status">
-            <Check size={15} />
-            {notice}
-          </div>
-        )}
         {!settings ? (
           <div className="empty">
-            <AudioLines size={28} />
-            <h2>Connecting</h2>
-            <p>Loading settings.</p>
-            {error && status.state !== "disconnected" && (
-              <button
-                onClick={() =>
-                  void run(async () => {
-                    const revision = await api.recoveryRevision();
-                    setConfirm({
-                      title: "Reset unreadable configuration?",
-                      description:
-                        "A private backup will preserve your original file. You will need to enter your keys and vocabulary again.",
-                      run: async () => {
-                        await api.resetBrokenSettings(revision);
-                        await load();
-                        setNotice(
-                          "Configuration reset. A backup of the original file was saved.",
-                        );
-                      },
-                    });
-                  })
-                }
-              >
-                Back up and reset settings
-              </button>
+            <h2>{error ? "Settings unavailable" : "Loading settings…"}</h2>
+            {error && (
+              <button onClick={() => void run(store.load)}>Retry</button>
             )}
           </div>
         ) : (
@@ -356,89 +391,110 @@ export function App() {
             {tab === "settings" && (
               <>
                 <section className="settings-section">
-                  <div className="section-heading">
-                    <h2>Transcription</h2>
-                    <p>Use your OpenAI or OpenRouter account.</p>
+                  <div className="section-heading profile-section-heading">
+                    <h2>Transcription profiles</h2>
+                    <button
+                      className="text-button"
+                      onClick={() => setEditor({ profile: null })}
+                    >
+                      <Plus size={15} />
+                      Add profile
+                    </button>
                   </div>
-                  <div className="settings-group">
-                    <div className="setting-row">
-                      <div className="setting-label">
-                        <label htmlFor="provider">Provider</label>
-                        <p>Used for speech-to-text requests.</p>
-                      </div>
-                      <div className="setting-control">
-                        <Dropdown
-                          id="provider"
-                          label="Provider"
-                          value={settings.provider}
-                          disabled={busy}
-                          onChange={(value) => patch({ provider: value })}
-                          options={[
-                            { value: "openai", label: "OpenAI" },
-                            { value: "openrouter", label: "OpenRouter" },
-                          ]}
-                        />
-                      </div>
-                    </div>
-                    <div className="setting-row">
-                      <div className="setting-label">
-                        <label htmlFor="key">API key</label>
-                        <p>
-                          {credential?.environment
-                            ? "An environment variable overrides this key."
-                            : credential?.saved
-                              ? "A key is saved for this provider."
-                              : "Required to transcribe audio."}
-                        </p>
-                      </div>
-                      <div className="setting-control">
-                        <input
-                          id="key"
-                          type="password"
-                          autoComplete="off"
-                          spellCheck={false}
-                          disabled={busy}
-                          value={keys[settings.provider] ?? ""}
-                          placeholder={
-                            credential?.saved
-                              ? "Replace saved key"
-                              : "Paste your API key"
-                          }
-                          onChange={(event) => {
-                            setKeys({
-                              ...keys,
-                              [settings.provider]: event.target.value,
-                            });
-                            setDirty(true);
-                          }}
-                        />
-                        {credential?.saved && (
+                  <div className="settings-group profile-list">
+                    {settings.profiles.length ? (
+                      settings.profiles.map((profile) => (
+                        <div
+                          className={`profile-row ${settings.active_profile === profile.id ? "is-active" : ""}`}
+                          key={profile.id}
+                        >
                           <button
-                            className="text-button danger-text"
+                            className="profile-select"
+                            aria-pressed={
+                              settings.active_profile === profile.id
+                            }
+                            aria-label={`Use ${profile.name}`}
                             disabled={busy}
-                            onClick={() => {
-                              setKeys({ ...keys, [settings.provider]: "" });
-                              setDirty(true);
-                              setNotice("Key will be removed when you save.");
-                            }}
+                            onClick={() =>
+                              void run(() =>
+                                store.mutate((revision) =>
+                                  api.selectProfile(revision, profile.id),
+                                ),
+                              )
+                            }
                           >
-                            Remove saved key
+                            {settings.active_profile === profile.id ? (
+                              <CheckCircle2 size={18} />
+                            ) : (
+                              <Circle size={18} />
+                            )}
+                            <span>
+                              <strong>{profile.name}</strong>
+                              <small>
+                                {providerName(profile.provider)}
+                                <span className="profile-key">
+                                  {profile.masked_key}
+                                </span>
+                              </small>
+                            </span>
                           </button>
-                        )}
+                          <div className="actions">
+                            <button
+                              className="icon-button"
+                              aria-label={`Edit ${profile.name}`}
+                              title="Edit profile"
+                              onClick={() => setEditor({ profile })}
+                            >
+                              <Pencil size={15} />
+                            </button>
+                            <button
+                              className="icon-button danger-text"
+                              aria-label={`Delete ${profile.name}`}
+                              title="Delete profile"
+                              onClick={() =>
+                                setConfirm({
+                                  title: `Delete ${profile.name}?`,
+                                  description:
+                                    settings.active_profile === profile.id
+                                      ? "Choose another profile before your next dictation."
+                                      : "This profile and its API key will be removed.",
+                                  run: () =>
+                                    store.mutate((revision) =>
+                                      api.deleteProfile(revision, profile.id),
+                                    ),
+                                })
+                              }
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="profile-empty">
+                        <p>Add a profile to start dictating.</p>
+                        <button
+                          className="primary"
+                          onClick={() => setEditor({ profile: null })}
+                        >
+                          <Plus size={15} />
+                          Add profile
+                        </button>
                       </div>
-                    </div>
+                    )}
                   </div>
+                  {!!settings.profiles.length && !settings.active_profile && (
+                    <p className="quiet section-note">
+                      Select a profile to start dictating.
+                    </p>
+                  )}
                 </section>
                 {info && (
                   <section className="settings-section">
-                    <div className="section-heading">
-                      <h2>Desktop</h2>
-                    </div>
                     <div className="settings-group">
                       <div className="setting-row">
                         <div className="setting-label">
                           <label htmlFor="autostart">Start at login</label>
-                          <p>Run Voice Type in the background.</p>
                         </div>
                         <div className="setting-control align-end">
                           <input
@@ -450,25 +506,9 @@ export function App() {
                             disabled={busy}
                             onChange={(event) => {
                               const enabled = event.target.checked;
-                              void run(async () => {
-                                const saved = await api.info();
-                                await api.preferences({
-                                  ...saved.preferences,
-                                  autostart: enabled,
-                                  setup_complete: true,
-                                });
-                                setInfo((current) =>
-                                  current
-                                    ? {
-                                        ...current,
-                                        preferences: {
-                                          ...current.preferences,
-                                          autostart: enabled,
-                                        },
-                                      }
-                                    : current,
-                                );
-                              });
+                              void run(() =>
+                                savePreferences({ autostart: enabled }),
+                              );
                             }}
                           />
                         </div>
@@ -488,10 +528,7 @@ export function App() {
                     <div className="setting-row">
                       <div className="setting-label">
                         <label htmlFor="port">Local control port</label>
-                        <p>
-                          Save, then quit and reopen Voice Type to change the
-                          port.
-                        </p>
+                        <p>Restart Voice Type to apply.</p>
                       </div>
                       <div className="setting-control">
                         <input
@@ -499,12 +536,20 @@ export function App() {
                           type="number"
                           min="1024"
                           max="65535"
-                          value={settings.port}
-                          disabled={busy}
-                          onChange={(event) =>
-                            patch({ port: Number(event.target.value) })
-                          }
+                          value={portDraft}
+                          aria-invalid={!!portError}
+                          onChange={(event) => {
+                            setPortDraft(event.target.value);
+                            setPortDirty(true);
+                            setPortError("");
+                          }}
+                          onBlur={commitPort}
                         />
+                        {portError && (
+                          <span className="field-error" role="alert">
+                            {portError}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -517,7 +562,6 @@ export function App() {
                   <div className="setting-row">
                     <div className="setting-label">
                       <label htmlFor="microphone">Input device</label>
-                      <p>Choose a microphone or use the system default.</p>
                     </div>
                     <div className="setting-control">
                       <Dropdown
@@ -525,7 +569,7 @@ export function App() {
                         label="Input device"
                         value={settings.microphone}
                         disabled={busy || status.state === "testing"}
-                        onChange={(value) => patch({ microphone: value })}
+                        onChange={(value) => store.patch({ microphone: value })}
                         options={[
                           { value: "", label: "System default" },
                           ...(settings.microphone &&
@@ -548,11 +592,7 @@ export function App() {
                       <button
                         className="text-button"
                         disabled={busy}
-                        onClick={() =>
-                          void run(async () =>
-                            setSources(await api.microphones()),
-                          )
-                        }
+                        onClick={() => void run(refreshSources)}
                       >
                         <RefreshCw size={13} />
                         Refresh devices
@@ -562,7 +602,6 @@ export function App() {
                   <div className="setting-row">
                     <div className="setting-label">
                       <h3>Input level</h3>
-                      <p>The test stays on this device.</p>
                     </div>
                     <div className="setting-control">
                       <MicrophoneMeter active={status.state === "testing"} />
@@ -573,21 +612,14 @@ export function App() {
                           }
                           onClick={() =>
                             void run(async () => {
-                              if (status.state === "testing") {
+                              await store.flush();
+                              if (status.state === "testing")
                                 await api.stopTest();
-                                setStatus((current) => ({
-                                  ...current,
-                                  state: "idle",
-                                  level: 0,
-                                }));
-                              } else {
+                              else {
                                 await api.startTest(settings.microphone);
-                                setStatus((current) => ({
-                                  ...current,
-                                  state: "testing",
-                                  level: 0,
-                                }));
+                                await store.refresh();
                               }
+                              setStatus(await api.status());
                             })
                           }
                         >
@@ -609,12 +641,12 @@ export function App() {
                     name="Transcription toggle"
                     value={info.preferences.shortcut}
                     onError={setError}
-                    onChange={saveShortcut}
+                    onChange={(shortcut) => savePreferences({ shortcut })}
                   />
                 </div>
                 <p className="quiet section-note">
-                  Click a shortcut, press the keys, then click elsewhere to
-                  save. Escape disables it.
+                  Click a shortcut and press the keys. Click elsewhere to save;
+                  Escape disables it.
                 </p>
                 {info.shortcut_error && (
                   <div className="alert error" role="alert">
@@ -623,48 +655,66 @@ export function App() {
                 )}
               </section>
             )}
-            {tab === "vocabulary" && (
-              <VocabularyEditor
-                lists={settings.vocabulary}
-                selected={selected}
-                active={settings.workspace}
-                busy={busy}
-                onSelect={setSelected}
-                onCreate={(name) => {
-                  patch({
-                    vocabulary: [...settings.vocabulary, { name, terms: [] }],
-                  });
-                  setSelected(name);
-                }}
-                onRename={(name) => updateList(name, list?.terms ?? [])}
-                onTerms={(terms) => updateList(selected, terms)}
-                onActivate={activateVocabulary}
-                onDelete={() =>
-                  setConfirm({
-                    title: `Delete ${selected}?`,
-                    description:
-                      "This vocabulary and its terms will be removed when you save.",
-                    run: async () => {
-                      patch({
-                        vocabulary: settings.vocabulary.filter(
-                          (item) => item.name !== selected,
+            {
+              <div hidden={tab !== "vocabulary"}>
+                <VocabularyEditor
+                  lists={settings.vocabulary}
+                  selected={selected}
+                  active={settings.workspace}
+                  busy={busy}
+                  onSelect={(name) =>
+                    void run(async () => {
+                      await store.flush();
+                      setSelected(name);
+                    })
+                  }
+                  onCreate={(name) => {
+                    updateVocabulary([
+                      ...settings.vocabulary,
+                      { name, terms: [] },
+                    ]);
+                    setSelected(name);
+                  }}
+                  onRename={renameVocabulary}
+                  onTerms={(terms) => {
+                    if (list)
+                      updateVocabulary(
+                        settings.vocabulary.map((item) =>
+                          item.name === selected ? { ...item, terms } : item,
                         ),
-                      });
-                      setSelected("general");
-                    },
-                  })
-                }
-              />
-            )}
+                        true,
+                      );
+                  }}
+                  onActivate={() =>
+                    void run(async () => {
+                      await store.flush();
+                      const name = selected === "general" ? "" : selected;
+                      await api.workspace(name);
+                      store.updateWorkspace(name);
+                    })
+                  }
+                  onDelete={() =>
+                    setConfirm({
+                      title: `Delete ${selected}?`,
+                      description:
+                        "This vocabulary and its terms will be removed.",
+                      run: async () => {
+                        updateVocabulary(
+                          settings.vocabulary.filter(
+                            (item) => item.name !== selected,
+                          ),
+                        );
+                        setSelected("general");
+                        await store.flush();
+                      },
+                    })
+                  }
+                />
+              </div>
+            }
             {tab === "logs" && (
               <>
                 <div className="log-tools">
-                  <input
-                    aria-label="Search logs"
-                    placeholder="Search logs"
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                  />
                   <Dropdown
                     label="Filter logs"
                     value={outcome}
@@ -675,7 +725,10 @@ export function App() {
                       { value: "ok", label: "Successful" },
                     ]}
                   />
-                  <button disabled={!displayed.length} onClick={exportLogs}>
+                  <button
+                    disabled={!displayed.length}
+                    onClick={() => void run(() => api.exportLogs(outcome))}
+                  >
                     Export
                   </button>
                   <button
@@ -687,7 +740,7 @@ export function App() {
                       setConfirm({
                         title: "Clear logs?",
                         description:
-                          "Current and rotated logs will be removed from this device.",
+                          "Current and rotated logs will be removed.",
                         run: async () => {
                           await api.clearLogs();
                           setLogs([]);
@@ -700,59 +753,84 @@ export function App() {
                 </div>
                 <section className="log-list">
                   {displayed.length ? (
-                    displayed.map((row, index) => (
-                      <details key={`${row.timestamp}-${index}`}>
-                        <summary>
-                          <span
-                            className={`log-icon ${row.outcome === "ok" ? "ok" : "failed"}`}
-                          >
-                            {row.outcome === "ok" ? (
-                              <Check size={14} />
-                            ) : (
-                              <X size={14} />
+                    displayed.map((row, index) => {
+                      const dictation =
+                        row.event.startsWith("dictation.") ||
+                        row.event === "dictation";
+                      return (
+                        <details key={`${row.timestamp}-${index}`}>
+                          <summary>
+                            <span
+                              className={`log-icon ${row.outcome === "ok" ? "ok" : "failed"}`}
+                            >
+                              {row.outcome === "ok" ? (
+                                <Check size={14} />
+                              ) : (
+                                <X size={14} />
+                              )}
+                            </span>
+                            <span>
+                              <strong>
+                                {(dictation ? row.outcome : row.event).replace(
+                                  /[_.]/g,
+                                  " ",
+                                )}
+                              </strong>
+                              <small>
+                                {row.timestamp
+                                  ? new Date(row.timestamp).toLocaleString()
+                                  : "Time unavailable"}
+                                {row.provider
+                                  ? ` · ${providerName(row.provider)}`
+                                  : ""}
+                              </small>
+                            </span>
+                            {row.total_ms > 0 && (
+                              <span className="duration">
+                                {(row.total_ms / 1000).toFixed(1)}s
+                              </span>
                             )}
-                          </span>
-                          <span>
-                            <strong>{row.outcome.replaceAll("_", " ")}</strong>
-                            <small>
-                              {row.timestamp
-                                ? new Date(row.timestamp).toLocaleString()
-                                : "Time unavailable"}{" "}
-                              · {row.provider}
-                            </small>
-                          </span>
-                          <span className="duration">
-                            {(row.total_ms / 1000).toFixed(1)}s
-                          </span>
-                        </summary>
-                        <dl>
-                          <dt>Model</dt>
-                          <dd>{row.configured_model || "—"}</dd>
-                          <dt>Audio</dt>
-                          <dd>{(row.audio_ms / 1000).toFixed(1)} seconds</dd>
-                          <dt>Attempts</dt>
-                          <dd>{row.attempt_count}</dd>
-                          {row.error && (
-                            <>
-                              <dt>Error</dt>
-                              <dd>{row.error}</dd>
-                            </>
+                          </summary>
+                          <dl>
+                            {dictation && (
+                              <>
+                                <dt>Model</dt>
+                                <dd>{row.configured_model || "—"}</dd>
+                                <dt>Audio</dt>
+                                <dd>
+                                  {(row.audio_ms / 1000).toFixed(1)} seconds
+                                </dd>
+                                <dt>Attempts</dt>
+                                <dd>{row.attempt_count}</dd>
+                              </>
+                            )}
+                            <dt>Outcome</dt>
+                            <dd>{row.outcome.replaceAll("_", " ")}</dd>
+                            {row.message && (
+                              <>
+                                <dt>Details</dt>
+                                <dd>{row.message}</dd>
+                              </>
+                            )}
+                            {row.error && (
+                              <>
+                                <dt>Error</dt>
+                                <dd>{row.error}</dd>
+                              </>
+                            )}
+                          </dl>
+                          {row.attempts?.length > 0 && (
+                            <pre>{JSON.stringify(row.attempts, null, 2)}</pre>
                           )}
-                        </dl>
-                        <pre>{JSON.stringify(row.attempts, null, 2)}</pre>
-                      </details>
-                    ))
+                        </details>
+                      );
+                    })
                   ) : (
                     <div className="empty">
                       <FileText size={26} />
                       <h2>
                         {logs.length ? "No matching logs" : "No logs yet"}
                       </h2>
-                      <p>
-                        {logs.length
-                          ? "Try another search or filter."
-                          : "Dictation activity will appear here."}
-                      </p>
                     </div>
                   )}
                 </section>
@@ -760,24 +838,19 @@ export function App() {
             )}
           </div>
         )}
-        {dirty && (
-          <footer>
-            <span>Unsaved changes</span>
-            <div className="actions">
-              <button disabled={busy} onClick={() => void run(load)}>
-                Discard
-              </button>
-              <button
-                className="primary"
-                disabled={busy}
-                onClick={() => void run(save)}
-              >
-                {busy ? "Saving…" : "Save changes"}
-              </button>
-            </div>
-          </footer>
-        )}
       </main>
+      {editor && settings && (
+        <ProfileEditor
+          profile={editor.profile}
+          profiles={settings.profiles}
+          onSave={(update) =>
+            store.mutate((revision) =>
+              api.upsertProfile({ ...update, revision }),
+            )
+          }
+          onClose={() => setEditor(null)}
+        />
+      )}
       <Dialog.Root
         open={!!confirm}
         onOpenChange={(open) => {

@@ -223,11 +223,13 @@ nav button svg {
 main {
   margin-left: 196px;
   height: 100vh;
-  overflow-y: auto;
-  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 32px 32px 20px;
 }
 header {
+  flex-shrink: 0;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -284,7 +286,12 @@ header p {
   background: #797d84;
 }
 .page-content {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
   max-width: 900px;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .settings-section {
   margin-bottom: 28px;
@@ -623,6 +630,8 @@ header p {
   font-size: 11px;
 }
 .alert {
+  flex-shrink: 0;
+  width: 100%;
   max-width: 900px;
   display: flex;
   align-items: center;
@@ -669,10 +678,6 @@ header p {
   gap: 8px;
   align-items: center;
   margin-bottom: 16px;
-}
-.log-tools > input {
-  flex: 1;
-  min-width: 80px;
 }
 .log-tools .dropdown-trigger {
   width: 145px;
@@ -751,26 +756,6 @@ pre {
   white-space: pre-wrap;
   padding: 8px 16px;
   margin: 0;
-}
-footer {
-  position: sticky;
-  bottom: -20px;
-  max-width: 900px;
-  background: #202823;
-  border: 1px solid #3b5246;
-  border-radius: 7px;
-  padding: 12px 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: 24px;
-  z-index: 20;
-  box-shadow: 0 -8px 18px #161719b0;
-}
-footer > span {
-  font-size: 12px;
-  color: #c0dccd;
 }
 .dialog-overlay {
   position: fixed;
@@ -888,4 +873,141 @@ footer > span {
   * {
     transition: none !important;
   }
+}
+
+/* The header stays outside the scrolling page, so controls never move under
+   this continuous drag target across the upper edge and column gutters. */
+.window-drag {
+  position: fixed;
+  inset: 0 0 auto;
+  height: 76px;
+  z-index: 25;
+  --wails-draggable: drag;
+  user-select: none;
+}
+button,
+input,
+textarea,
+summary,
+[role="button"],
+[role="combobox"],
+.dialog {
+  --wails-draggable: no-drag;
+}
+header {
+  align-items: center;
+  min-height: 28px;
+  margin-bottom: 28px;
+}
+.dot.recording,
+.dot.testing {
+  background: var(--green);
+}
+.dot.transcribing {
+  background: #d4bb76;
+}
+.save-status {
+  font-size: 10px;
+  color: var(--muted);
+}
+.save-status.error,
+.field-error {
+  color: var(--danger);
+}
+.profile-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.profile-section-heading .text-button {
+  color: var(--accent);
+}
+.profile-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px 9px 8px;
+}
+.profile-row + .profile-row {
+  border-top: 1px solid var(--line);
+}
+.profile-row.is-active {
+  background: #a9dcc605;
+}
+.profile-select {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
+  text-align: left;
+  padding: 9px 10px;
+  border: 0;
+  background: transparent;
+  gap: 12px;
+}
+.profile-select:hover:not(:disabled) {
+  background: #ffffff05;
+}
+.profile-select > svg {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.profile-select[aria-pressed="true"] > svg {
+  color: var(--accent);
+}
+.profile-select > span {
+  min-width: 0;
+  overflow: hidden;
+}
+.profile-select strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 550;
+}
+.profile-select small {
+  display: flex;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 4px;
+}
+.profile-key {
+  font-family: ui-monospace, monospace;
+}
+.profile-empty {
+  padding: 24px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.profile-empty p {
+  font-size: 12px;
+}
+.profile-dialog {
+  width: min(440px, calc(100vw - 40px));
+}
+.profile-form-field {
+  margin-top: 20px;
+}
+.profile-form-field > .dropdown-trigger {
+  width: 100%;
+}
+.read-only-field {
+  color: var(--muted);
+}
+.key-editor {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.key-editor input {
+  flex: 1;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+.log-tools > .dropdown-trigger {
+  margin-right: auto;
 }

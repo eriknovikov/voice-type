@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,24 +20,30 @@ type Preferences struct {
 	SetupComplete bool   `json:"setup_complete"`
 }
 type DesktopInfo struct {
-	LastShortcutAt string      `json:"last_shortcut_at"`
-	Preferences    Preferences `json:"preferences"`
-	TrayAvailable  bool        `json:"tray_available"`
-	ShortcutError  string      `json:"shortcut_error"`
-	Version        string      `json:"version"`
+	LastShortcutAt   string      `json:"last_shortcut_at"`
+	Preferences      Preferences `json:"preferences"`
+	TrayAvailable    bool        `json:"tray_available"`
+	ShortcutError    string      `json:"shortcut_error"`
+	Version          string      `json:"version"`
+	PreferencesError string      `json:"preferences_error"`
+	Notice           string      `json:"notice"`
 }
 type Bridge struct {
-	app               *application.App
-	window            *application.WebviewWindow
-	service           *vt.Service
-	mu                sync.Mutex
-	capturingShortcut bool
-	prefs             Preferences
-	shortcutError     string
-	lastShortcutAt    string
-	version           string
-	meterMu           sync.Mutex
-	meterCancel       context.CancelFunc
+	app                 *application.App
+	window              *application.WebviewWindow
+	service             *vt.Service
+	mu                  sync.Mutex
+	capturingShortcut   bool
+	prefs               Preferences
+	shortcutError       string
+	lastShortcutAt      string
+	version             string
+	preferencesError    string
+	notice              string
+	frontendReady       bool
+	pendingWindowAction string
+	meterMu             sync.Mutex
+	meterCancel         context.CancelFunc
 }
 
 func (b *Bridge) Settings() (vt.Settings, error) { return vt.ReadSettings() }
@@ -53,8 +57,40 @@ func (b *Bridge) SelectWorkspace(name string) error {
 	b.app.Event.Emit("workspace-changed", name)
 	return nil
 }
+func (b *Bridge) UpsertProfile(update vt.ProfileUpdate) (vt.Settings, error) {
+	value, err := vt.UpsertProfile(update)
+	if err == nil {
+		b.service.RefreshSettings()
+	}
+	return value, err
+}
+func (b *Bridge) DeleteProfile(revision, id string) (vt.Settings, error) {
+	value, err := vt.DeleteProfile(revision, id)
+	if err == nil {
+		b.service.RefreshSettings()
+	}
+	return value, err
+}
+func (b *Bridge) SelectProfile(revision, id string) (vt.Settings, error) {
+	value, err := vt.SelectProfile(revision, id)
+	if err == nil {
+		b.service.RefreshSettings()
+	}
+	return value, err
+}
+func (b *Bridge) RevealProfileKey(id string) (string, error) { return vt.RevealProfileKey(id) }
+func (b *Bridge) CopyProfileKey(id string) error {
+	key, err := vt.RevealProfileKey(id)
+	if err != nil {
+		return err
+	}
+	if !b.app.Clipboard.SetText(key) {
+		return errors.New("could not copy the API key")
+	}
+	return nil
+}
 func (b *Bridge) Status() Status                         { return b.service.Status() }
-func (b *Bridge) Microphones() ([]vt.AudioSource, error) { return vt.ListAudioSources() }
+func (b *Bridge) Microphones() ([]vt.AudioSource, error) { return b.service.Microphones() }
 func (b *Bridge) StartMicrophoneTest(id string) error {
 	if err := b.service.StartMicrophoneTest(id); err != nil {
 		return err
@@ -70,95 +106,60 @@ func (b *Bridge) StopMicrophoneTest() error {
 func (b *Bridge) Toggle() error                        { return b.service.Toggle() }
 func (b *Bridge) Logs() ([]vt.DiagnosticRecord, error) { return b.service.Logs() }
 func (b *Bridge) ClearLogs() error                     { return b.service.ClearLogs() }
-func (b *Bridge) Quit() error {
-	status := b.service.Status()
-	if status.State != "idle" && status.State != "testing" {
-		return errors.New("finish the current dictation before quitting")
-	}
-	b.app.Quit()
-	return nil
-}
-func preferencesPath() string {
-	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
-		home, _ := os.UserHomeDir()
-		base = filepath.Join(home, ".local", "state")
-	}
-	return filepath.Join(base, "voice-type", "desktop.json")
-}
-func readPreferences() Preferences {
-	prefs := Preferences{Shortcut: "Ctrl+Space"}
-	data, err := os.ReadFile(preferencesPath())
-	if err == nil {
-		_ = json.Unmarshal(data, &prefs)
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(data, &fields) == nil {
-			if _, exists := fields["daemon_shortcut"]; !exists && prefs.Shortcut == "Ctrl+Alt+Space" {
-				prefs.Shortcut = "Ctrl+Space"
-			}
-		}
-	}
-	return prefs
-}
-func writePreferences(prefs Preferences) error {
-	path := preferencesPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(prefs, "", "  ")
-	if err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".desktop-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	if _, err = f.Write(data); err != nil {
-		f.Close()
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), path)
-}
-func (b *Bridge) SavePreferences(prefs Preferences) error {
+
+// Window actions wait for the frontend's serialized autosave queue. External
+// signals and /exit still shut down directly; a failed save keeps settings open.
+func (b *Bridge) RequestHide() { b.requestWindowAction("hide") }
+func (b *Bridge) RequestQuit() { b.requestWindowAction("quit") }
+func (b *Bridge) Quit() error  { b.RequestQuit(); return nil }
+func (b *Bridge) requestWindowAction(action string) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	old := b.prefs
-
-	changed := prefs.Shortcut != old.Shortcut || b.shortcutError != ""
-	if changed {
-		_ = b.releaseShortcuts()
-		if err := b.registerShortcuts(prefs); err != nil {
-			_ = b.releaseShortcuts()
-			_ = b.registerShortcuts(old)
-			b.shortcutError = err.Error()
-			return err
+	b.pendingWindowAction = action
+	ready := b.frontendReady
+	b.mu.Unlock()
+	if b.window != nil {
+		b.window.Show()
+		b.window.Focus()
+	}
+	if ready {
+		b.app.Event.Emit("flush-settings", map[string]string{"action": action})
+	}
+}
+func (b *Bridge) FrontendReady() {
+	b.mu.Lock()
+	b.frontendReady = true
+	action := b.pendingWindowAction
+	b.mu.Unlock()
+	if action != "" {
+		b.app.Event.Emit("flush-settings", map[string]string{"action": action})
+	}
+}
+func (b *Bridge) CompleteWindowAction(action string) error {
+	b.mu.Lock()
+	if action != b.pendingWindowAction || (action != "hide" && action != "quit") {
+		b.mu.Unlock()
+		return errors.New("window action is no longer pending")
+	}
+	b.pendingWindowAction = ""
+	b.mu.Unlock()
+	if action == "quit" {
+		status := b.service.Status()
+		if status.State != "idle" && status.State != "testing" {
+			return errors.New("finish the current dictation before quitting")
 		}
-		b.shortcutError = ""
-	}
-
-	var err error
-	if prefs.Autostart {
-		err = b.app.Autostart.EnableWithOptions(application.AutostartOptions{Arguments: []string{"--background"}})
+		b.app.Quit()
 	} else {
-		err = b.app.Autostart.Disable()
+		_ = b.StopMicrophoneTest()
+		_ = b.EndShortcutCapture()
+		b.app.Event.Emit("cancel-shortcut-capture")
+		b.window.Hide()
 	}
-	if err != nil {
-		return err
-	}
-	if err := writePreferences(prefs); err != nil {
-		return err
-	}
-	b.prefs = prefs
 	return nil
 }
 func (b *Bridge) Info() DesktopInfo {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return DesktopInfo{LastShortcutAt: b.lastShortcutAt, Preferences: b.prefs, TrayAvailable: trayAvailable(), ShortcutError: b.shortcutError, Version: b.version}
+	return DesktopInfo{LastShortcutAt: b.lastShortcutAt, Preferences: b.prefs, TrayAvailable: trayAvailable(), ShortcutError: b.shortcutError, Version: b.version, PreferencesError: b.preferencesError, Notice: b.notice}
 }
 func (b *Bridge) toggleFromTray() {
 	if err := b.Toggle(); err != nil {
@@ -167,26 +168,14 @@ func (b *Bridge) toggleFromTray() {
 }
 
 // ExportLogs uses a native save dialog; webview download handling varies by OS.
-func (b *Bridge) ExportLogs(query, outcome string) error {
+func (b *Bridge) ExportLogs(outcome string) error {
 	records, err := b.Logs()
 	if err != nil {
 		return err
 	}
-	var data bytes.Buffer
-	for _, record := range records {
-		raw, err := json.Marshal(record)
-		if err != nil {
-			return err
-		}
-		ok := record.Outcome == "ok"
-		if outcome == "errors" && ok || outcome == "ok" && !ok {
-			continue
-		}
-		if !strings.Contains(strings.ToLower(string(raw)), strings.ToLower(query)) {
-			continue
-		}
-		data.Write(raw)
-		data.WriteByte('\n')
+	data, err := encodeDiagnosticLogs(records, outcome)
+	if err != nil {
+		return err
 	}
 	path, err := b.app.Dialog.SaveFile().SetFilename("voice-type-logs.jsonl").AddFilter("Diagnostic logs", "*.jsonl").AttachToWindow(b.window).PromptForSingleSelection()
 	if err != nil || path == "" {
@@ -200,11 +189,31 @@ func (b *Bridge) ExportLogs(query, outcome string) error {
 		f.Close()
 		return err
 	}
-	if _, err = f.Write(data.Bytes()); err != nil {
+	if _, err = f.Write(data); err != nil {
 		f.Close()
 		return err
 	}
 	return f.Close()
+}
+
+func encodeDiagnosticLogs(records []vt.DiagnosticRecord, outcome string) ([]byte, error) {
+	if outcome != "all" && outcome != "errors" && outcome != "ok" {
+		return nil, errors.New("choose a valid log outcome")
+	}
+	var data bytes.Buffer
+	for _, record := range records {
+		ok := record.Outcome == "ok"
+		if outcome == "errors" && ok || outcome == "ok" && !ok {
+			continue
+		}
+		raw, err := json.Marshal(record)
+		if err != nil {
+			return nil, err
+		}
+		data.Write(raw)
+		data.WriteByte('\n')
+	}
+	return data.Bytes(), nil
 }
 
 func (b *Bridge) activateShortcut() {

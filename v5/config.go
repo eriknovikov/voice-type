@@ -95,16 +95,12 @@ func providerModel(provider string) string {
 
 func (s sttSettings) supportedModel() bool { return s.Model == providerModel(s.Provider) }
 
-func (c Config) keyEnv() string {
-	if c.Provider == providerOpenAI {
-		return "OPENAI_API_KEY"
-	}
-	return "OPENROUTER_API_KEY"
-}
-
 func (s sttSettings) validateCredentials() error {
-	if s.APIKey == "" {
-		return errors.New("select a profile with an API key in General")
+	switch s.Provider {
+	case providerOpenAI, providerOpenRouter:
+		if s.APIKey == "" {
+			return errors.New("select a profile with an API key in General")
+		}
 	}
 	return nil
 }

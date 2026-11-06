@@ -2,8 +2,11 @@ import { useEffect, useState, useRef, type KeyboardEvent } from "react";
 import { api } from "./api";
 // Keep releases and captures in order when switching between the two pickers.
 let captureTransition: Promise<unknown> = Promise.resolve();
+let captureResult: Promise<unknown> = Promise.resolve();
+export const flushShortcutCapture = () => captureResult.then(() => {});
 function changeCapture(action: () => Promise<void>): Promise<void> {
   const next = captureTransition.then(action, action);
+  captureResult = next;
   captureTransition = next.catch(() => {});
   return next;
 }

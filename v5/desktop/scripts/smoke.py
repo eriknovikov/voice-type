@@ -98,7 +98,28 @@ with tempfile.TemporaryDirectory(prefix="voice-type-smoke-") as directory:
             log.flush()
             log.seek(0)
             assert log.read().count("DAEMON: shutting down") == 2
-            print("Native smoke passed: Wails owns HTTP, no daemon/socket, shortcuts reach service, second launch reuses app, exit and SIGTERM clean up.")
+            # Background startup failures must enter the native error-dialog
+            # event loop instead of silently exiting before a window can exist.
+            with socket.socket() as occupied:
+                occupied.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                occupied.bind(("127.0.0.1", port))
+                occupied.listen()
+                process = subprocess.Popen([str(binary), "--background"], env=env, stdout=log, stderr=log)
+                diagnostics = root / ".voice-type-logs.jsonl"
+                for _ in range(100):
+                    if process.poll() is not None:
+                        raise RuntimeError("background startup failed before displaying its error dialog")
+                    records = [json.loads(row) for row in diagnostics.read_text().splitlines()] if diagnostics.exists() else []
+                    if any(row.get("event") == "startup.failed" for row in records):
+                        break
+                    time.sleep(.1)
+                else:
+                    raise RuntimeError("startup failure was not logged")
+                time.sleep(1)
+                assert process.poll() is None, "fatal dialog did not keep the native app alive"
+                process.terminate()
+                assert process.wait(timeout=10) in (0, 1)
+            print("Native smoke passed: Wails owns HTTP, no daemon/socket, shortcuts reach service, second launch reuses app, exit and SIGTERM clean up, background startup failure stays visible and logs diagnostics.")
         except Exception:
             log.flush()
             log.seek(0)
