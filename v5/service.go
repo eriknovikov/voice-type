@@ -1,19 +1,14 @@
 package voicetype
 
 import (
-	"context"
 	"errors"
-	"fmt"
-	"net"
-	"net/http"
-	"time"
+	"sync"
 )
 
-// Service owns dictation and the loopback shortcut listener in its host process.
-// Desktop settings stay in process; only the existing control routes use TCP.
+// Service owns dictation in its host process. It creates no control listener.
 type Service struct {
+	toggleMu sync.Mutex
 	d        *daemon
-	server   *http.Server
 	finished chan struct{}
 }
 
@@ -21,23 +16,21 @@ type ServiceStatus struct {
 	LastAttemptFailed bool    `json:"last_attempt_failed"`
 	State             string  `json:"state"`
 	Error             string  `json:"error"`
-	Port              int     `json:"port"`
 	Level             float64 `json:"level"`
 	Notice            string  `json:"notice"`
 	NoticeVersion     uint64  `json:"notice_version"`
 }
 
-// StartService reserves the port before allocating resources. A conflicting
-// standalone instance is an error, never a service the desktop silently adopts.
+// StartService acquires engine ownership before reading settings or opening logs.
+// Only the standalone CLI serves HTTP; desktop control stays inside Wails.
 func StartService(version string) (*Service, error) {
+	lock, err := acquireEngineLock()
+	if err != nil {
+		return nil, err
+	}
 	cfg, configErr := configReadStrict()
 	if configErr != nil {
 		cfg = configDefaults()
-	}
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cfg.Port))
-	if err != nil {
-		RecordDiagnostic(version, "startup.failed", "error", "The local control port is unavailable. Close another Voice Type instance and reopen the app.")
-		return nil, fmt.Errorf("cannot start Voice Type on port %d; close any other Voice Type instance: %w", cfg.Port, err)
 	}
 	// Device enumeration failure is not evidence that the saved device vanished.
 	// Only a successful enumeration may replace a saved preference.
@@ -75,27 +68,13 @@ func StartService(version string) (*Service, error) {
 		d.configError = err.Error()
 	}
 	s := &Service{d: d, finished: make(chan struct{})}
-	s.server = &http.Server{Handler: requireLoopbackHost(d.routes()), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second}
 	go func() {
 		defer close(s.finished)
-		serveDone := make(chan struct{})
-		go func() {
-			defer close(serveDone)
-			if err := s.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				logf("SERVICE", "listener failed: %v", err)
-				d.shutdown()
-			}
-		}()
 		<-d.done
 		d.stopMicrophoneTest()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := s.server.Shutdown(ctx); err != nil {
-			_ = s.server.Close()
-		}
-		<-serveDone
 		d.res.Close()
 		d.runLog.close("ok")
+		lock.Close()
 	}()
 	return s, nil
 }
@@ -114,7 +93,7 @@ func (s *Service) Status() ServiceStatus {
 	if d.testRecorder != nil {
 		level = d.testRecorder.Level()
 	}
-	return ServiceStatus{LastAttemptFailed: d.lastAttemptFailed, State: d.state.String(), Error: d.configError, Port: d.cfg.Port, Level: level, Notice: d.notice, NoticeVersion: d.noticeVersion}
+	return ServiceStatus{LastAttemptFailed: d.lastAttemptFailed, State: d.state.String(), Error: d.configError, Level: level, Notice: d.notice, NoticeVersion: d.noticeVersion}
 }
 func (s *Service) SaveSettings(update SettingsUpdate) (Settings, error) {
 	value, err := SaveSettings(update)
@@ -160,19 +139,61 @@ func (s *Service) Microphones() ([]AudioSource, error) {
 	}
 	return sources, nil
 }
+
+// Reserve work before spawning a goroutine. Additional commands are rejected,
+// never saved up to start another recording after transcription finishes.
+func (s *Service) prepareToggle() (func() error, error) {
+	s.d.mu.Lock()
+	defer s.d.mu.Unlock()
+	if s.d.shuttingDown {
+		return nil, errors.New("shutting down")
+	}
+	if s.d.state == stateChecking {
+		if s.d.sessionCancel != nil {
+			s.d.sessionCancel()
+		}
+		return nil, nil
+	}
+	if s.d.state == stateTranscribing {
+		return nil, errors.New("already transcribing")
+	}
+	if !s.toggleMu.TryLock() {
+		return nil, errors.New("a recording command is already in progress")
+	}
+	return func() error {
+		defer s.toggleMu.Unlock()
+		var code int
+		var message string
+		if s.d.currentState() == stateRecording {
+			code, message = s.d.stopSession()
+		} else {
+			code, message = s.d.startSession()
+		}
+		if code >= 400 {
+			return errors.New(message)
+		}
+		return nil
+	}, nil
+}
 func (s *Service) Toggle() error {
-	var code int
-	var message string
-	state := s.d.currentState()
-	if state == stateChecking || state == stateRecording {
-		code, message = s.d.stopSession()
+	operation, err := s.prepareToggle()
+	if err != nil || operation == nil {
+		return err
+	}
+	return operation()
+}
+
+// ToggleAsync reserves the command synchronously and completes off the caller's
+// event loop. Its buffered result never blocks shutdown or the command receiver.
+func (s *Service) ToggleAsync() <-chan error {
+	result := make(chan error, 1)
+	operation, err := s.prepareToggle()
+	if err != nil || operation == nil {
+		result <- err
 	} else {
-		code, message = s.d.startSession()
+		go func() { result <- operation() }()
 	}
-	if code >= 400 {
-		return errors.New(message)
-	}
-	return nil
+	return result
 }
 func (s *Service) StartMicrophoneTest(id string) error { return s.d.startMicrophoneTest(id) }
 func (s *Service) StopMicrophoneTest()                 { s.d.stopMicrophoneTest() }

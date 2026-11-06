@@ -80,6 +80,12 @@ func Run(version string) {
 }
 
 func runDaemon(version, modelOverride string) (exitCode int) {
+	lock, err := acquireEngineLock()
+	if err != nil {
+		logf("STARTUP", "%v", err)
+		return 1
+	}
+	defer lock.Close()
 	runLog := openRunLog(version)
 	defer func() {
 		outcome := "ok"
@@ -120,9 +126,13 @@ func runDaemon(version, modelOverride string) (exitCode int) {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
 	go func() {
-		<-sigCh
-		d.shutdown()
+		select {
+		case <-sigCh:
+			d.shutdown()
+		case <-d.done:
+		}
 	}()
 
 	if err := d.Run(); err != nil {

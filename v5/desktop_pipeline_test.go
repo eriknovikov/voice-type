@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -33,7 +32,7 @@ func TestDesktopPipeline(t *testing.T) {
 	testIBusCall(t, control, ibusPath, ibusService+".SetGlobalEngine", baseline)
 	client := newTestIBusClient(t, address, "desktop-pipeline-client", 0)
 	client.focus(t)
-	port := setupServiceTest(t)
+	setupServiceTest(t)
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
 	for _, provider := range []string{providerOpenAI, providerOpenRouter} {
@@ -111,22 +110,12 @@ func TestDesktopPipeline(t *testing.T) {
 			defer service.Close()
 			d := service.d
 			d.res.Recorder = &fixtureRecorder{}
-			toggle := func() int {
-				response, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/toggle", port), "application/json", nil)
-				if err != nil {
-					t.Fatal(err)
-				}
-				io.Copy(io.Discard, response.Body)
-				response.Body.Close()
-				return response.StatusCode
-			}
-			if code := toggle(); code != 200 {
-				t.Fatalf("start: %d", code)
+			if err := service.Toggle(); err != nil {
+				t.Fatal("start:", err)
 			}
 			d.stt.endpoint = server.URL
-			code := toggle()
-			if code != 200 {
-				t.Fatalf("stop returned %d", code)
+			if err := <-service.ToggleAsync(); err != nil {
+				t.Fatal("stop:", err)
 			}
 			client.wantCommit(t, "Desktop insertion verified.")
 			assertTestIBusRestored(t, control, baseline)
