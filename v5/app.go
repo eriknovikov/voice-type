@@ -99,7 +99,9 @@ func runDaemon(version, modelOverride string) (exitCode int) {
 	}
 	settings, err := cfg.resolveSTT(modelOverride, workspaceLoad())
 	if err != nil {
-		configErr = err
+		if configErr == nil {
+			configErr = err
+		}
 		settings = sttSettings{Provider: cfg.Provider, Model: providerModel(cfg.Provider)}
 	}
 	res := &resources{Recorder: &Recorder{}}
@@ -107,10 +109,14 @@ func runDaemon(version, modelOverride string) (exitCode int) {
 	d := newDaemon(cfg, res, settings, modelOverride)
 	if configErr != nil {
 		d.configError = configErr.Error()
+		runLog.diagnostic("configuration.failed", "error", "Configuration could not be loaded. Open settings to repair it.")
 	} else if err := settings.validateCredentials(); err != nil {
 		d.configError = err.Error()
 	}
 	d.runLog = runLog
+	if notice := ConfigNotice(); notice != "" {
+		runLog.diagnostic("configuration.recovered", "ok", notice)
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)

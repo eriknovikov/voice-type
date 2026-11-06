@@ -46,6 +46,7 @@ type daemon struct {
 	cfg               Config
 	modelOverride     string
 	configError       string
+	notice            string
 	lastAttemptFailed bool
 	// workspace is the active vocabulary workspace, re-read from the state file
 	// with the config so desktop changes land on the next dictation.
@@ -148,6 +149,10 @@ func (d *daemon) startSession() (int, string) {
 	}
 	err := d.res.Recorder.Start()
 	d.mu.Lock()
+	if rec, ok := d.res.Recorder.(*Recorder); ok && rec.sourceFellBack() {
+		d.notice = microphoneFallbackNotice
+		d.runLog.diagnostic("microphone.changed", "ok", microphoneFallbackNotice)
+	}
 	if err != nil {
 		d.lastAttemptFailed = true
 		d.runLog.complete(d.cfg.Provider, providerModel(d.cfg.Provider), "", "capture_error", 0, 0, nil, err)
@@ -250,6 +255,13 @@ func (d *daemon) stopSessionFor(sessionID uint64) (code int, message string) {
 		}
 		d.sessionCtx = nil
 		d.sessionCancel = nil
+		if !d.shuttingDown {
+			if err := d.reloadConfig(); err != nil {
+				d.configError = err.Error()
+			} else {
+				d.configError = ""
+			}
+		}
 		d.mu.Unlock()
 		d.sessionWG.Done()
 	}()
@@ -381,7 +393,7 @@ func (d *daemon) handleSTTError(err error, wav []byte) (int, string) {
 		switch {
 		case se.Fatal():
 			logf("STT", "authentication rejected (%d): %s%s", se.Status, se.Error(), retained)
-			logf("STT", "check %s or the api_key field in %s", (Config{Provider: se.Provider}).keyEnv(), configFilePath())
+			logf("STT", "check the API key in the selected profile in General")
 		case se.Quota:
 			logf("STT", "%s quota or credit exhausted: %s%s", se.Provider, se.Error(), retained)
 		case se.Status == http.StatusRequestEntityTooLarge:

@@ -40,12 +40,28 @@ type runLogRecord struct {
 	FinalModel      string          `json:"final_model,omitempty"`
 	Outcome         string          `json:"outcome"`
 	Error           string          `json:"error,omitempty"`
+	Message         string          `json:"message,omitempty"`
 	StatusCode      int             `json:"status_code,omitempty"`
 	TotalMS         int64           `json:"total_ms"`
 	AudioMS         int64           `json:"audio_ms"`
 	AttemptCount    int             `json:"attempt_count"`
 	FallbackUsed    bool            `json:"fallback_used"`
 	Attempts        []runLogAttempt `json:"attempts"`
+}
+
+// RecordDiagnostic records application diagnostics, including failures before
+// a Service exists. Callers must supply fixed, sanitized messages: never raw
+// configuration, provider responses or credentials.
+func RecordDiagnostic(version, event, outcome, message string) {
+	l := openRunLog(version)
+	defer l.close(outcome)
+	l.diagnostic(event, outcome, message)
+}
+
+func (l *runLog) diagnostic(event, outcome, message string) {
+	if l != nil {
+		l.write(runLogRecord{Event: event, Version: l.version, Outcome: outcome, Message: message})
+	}
 }
 
 func runLogFilePath() string {

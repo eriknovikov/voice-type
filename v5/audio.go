@@ -1,12 +1,14 @@
 package voicetype
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sync"
 	"time"
 
 	"github.com/jfreymuth/pulse"
+	"github.com/jfreymuth/pulse/proto"
 )
 
 // Recorder owns the PulseAudio connection. The client is created once at daemon
@@ -25,6 +27,7 @@ type Recorder struct {
 	bufMu         sync.Mutex
 	samples       []int16
 	sourceID      string
+	fellBack      bool
 	level         float64
 	meterOnly     bool
 	meterWindow   []int16
@@ -59,6 +62,7 @@ func (r *Recorder) Close() {
 		r.stream.Close()
 		r.stream = nil
 	}
+	r.fellBack = false
 	r.streamMu.Unlock()
 
 	if r.client != nil {
@@ -75,6 +79,7 @@ func (r *Recorder) Start() error {
 	if r.stream != nil {
 		return fmt.Errorf("already recording")
 	}
+	r.fellBack = false
 
 	r.bufMu.Lock()
 	r.samples = r.samples[:0]
@@ -94,9 +99,20 @@ func (r *Recorder) Start() error {
 		}
 		r.client = client
 	}
-	source, err := r.client.DefaultSource()
+	var source *pulse.Source
+	var err error
 	if r.sourceID != "" {
 		source, err = r.client.SourceByID(r.sourceID)
+		if errors.Is(err, proto.ErrNoSuchEntity) {
+			if _, saveErr := persistMissingMicrophone(r.sourceID); saveErr != nil {
+				return fmt.Errorf("save system default microphone: %w", saveErr)
+			}
+			r.sourceID = ""
+			r.fellBack = true
+			source, err = r.client.DefaultSource()
+		}
+	} else {
+		source, err = r.client.DefaultSource()
 	}
 	if err != nil {
 		return fmt.Errorf("resolve default source: %w", err)
@@ -170,6 +186,48 @@ func (r *Recorder) SetSource(id string) {
 	r.streamMu.Lock()
 	defer r.streamMu.Unlock()
 	r.sourceID = id
+}
+
+func (r *Recorder) sourceFellBack() bool {
+	r.streamMu.Lock()
+	defer r.streamMu.Unlock()
+	return r.fellBack
+}
+
+const microphoneFallbackNotice = "The selected microphone is unavailable. Switched to System default."
+
+// A successful enumeration is necessary before deciding a device disappeared.
+func reconcileMicrophone(id string, sources []AudioSource) (bool, error) {
+	if id == "" {
+		return false, nil
+	}
+	for _, source := range sources {
+		if source.ID == id {
+			return false, nil
+		}
+	}
+	return persistMissingMicrophone(id)
+}
+
+func persistMissingMicrophone(id string) (bool, error) {
+	for range 3 {
+		settings, err := ReadSettings()
+		if err != nil {
+			return false, err
+		}
+		if settings.Microphone != id || id == "" {
+			return false, nil
+		}
+		fallback := ""
+		if _, err = SaveSettings(SettingsUpdate{Revision: settings.Revision, Microphone: &fallback}); err == nil {
+			return true, nil
+		}
+		latest, readErr := ReadSettings()
+		if readErr != nil || latest.Revision == settings.Revision {
+			return false, err
+		}
+	}
+	return false, errors.New("microphone settings changed repeatedly; refresh devices and try again")
 }
 
 // Level is a non-consuming 100 ms RMS reading. Audio arrives independently of

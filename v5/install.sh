@@ -270,21 +270,6 @@ ask_provider() {
     done
 }
 
-provider_key_env() {
-    case "$PROVIDER" in
-        openai) printf '%s' 'OPENAI_API_KEY' ;;
-        *) printf '%s' 'OPENROUTER_API_KEY' ;;
-    esac
-}
-
-provider_has_env_key() {
-    case "$PROVIDER" in
-        openai) _env_key="${OPENAI_API_KEY:-}" ;;
-        *) _env_key="${OPENROUTER_API_KEY:-}" ;;
-    esac
-    printf '%s' "$_env_key" | grep -q '[^[:space:]]'
-}
-
 # Called when creating or replacing a config. An existing file is never edited to
 # add a key.
 #
@@ -294,22 +279,20 @@ provider_has_env_key() {
 # and the INT/TERM trap is mandatory, because a Ctrl-C between disabling echo and
 # restoring it would hand the user back a shell that types invisibly.
 ask_api_key() {
-    # A key in the environment wins over the file, so there is nothing to ask.
-    if provider_has_env_key; then return 0; fi
     has_tty || return 0
 
     # Echo goes off *before* the prompt is printed. Anything arriving between the
     # two -- unexpected input, a fast typist, an automated answer -- would otherwise be
     # echoed by the line discipline in that window.
     if ! _stty_saved=$(stty -g < /dev/tty 2> /dev/null); then
-        log_warn "Cannot hide key entry. Set $(provider_key_env) or edit api_key later."
+        log_warn "Cannot hide key entry. Add a profile in Voice Type settings later."
         return 0
     fi
     trap 'stty "$_stty_saved" < /dev/tty 2> /dev/null; exit 130' INT TERM
     if ! stty -echo < /dev/tty 2> /dev/null; then
         stty "$_stty_saved" < /dev/tty 2> /dev/null || true
         trap 'exit 130' INT TERM
-        log_warn "Cannot hide key entry. Set $(provider_key_env) or edit api_key later."
+        log_warn "Cannot hide key entry. Add a profile in Voice Type settings later."
         return 0
     fi
 
@@ -349,23 +332,32 @@ write_config() {
     (
         umask 077
         _json_key=$(printf '%s' "$API_KEY" | sed 's/\\/\\\\/g; s/"/\\"/g')
-        printf '{\n    "provider": "%s", // openai or openrouter\n' "$PROVIDER" > "$CONFIG_TMP"
-        printf '    "api_key": "%s", // or set %s, which wins\n' "$_json_key" "$(provider_key_env)" >> "$CONFIG_TMP"
+        printf '{\n' > "$CONFIG_TMP"
+        if [ -n "$API_KEY" ]; then
+            case "$PROVIDER" in
+                openai) _profile_name="OpenAI 1" ;;
+                *) _profile_name="OpenRouter 1" ;;
+            esac
+            printf '    "profiles": [{"id":"initial-%s","name":"%s","provider":"%s","config":{"api_key":"%s"}}],\n' \
+                "$PROVIDER" "$_profile_name" "$PROVIDER" "$_json_key" >> "$CONFIG_TMP"
+            printf '    "active_profile": "initial-%s",\n' "$PROVIDER" >> "$CONFIG_TMP"
+        else
+            printf '    "profiles": [],\n    "active_profile": "",\n' >> "$CONFIG_TMP"
+        fi
         cat >> "$CONFIG_TMP" << 'EOF'
     "port": 3232,           // int 1024-65535
 
     // GPT Transcribe is the only supported model. Use --model ID when starting
     // the daemon for an unsupported override (vocabulary is then disabled).
 
-    // Names and jargon the model would otherwise misspell, one list per
-    // workspace. "general" rides along with every dictation; pick one of the
-    // rest in the Voice Type desktop app. Keep them short.
+    // General terms are included with every dictation. Manage vocabulary
+    // and profiles in Voice Type settings.
     "vocabulary": {
         "general": []
     },
 
-    // Changes take effect on the next dictation. The desktop app can edit
-    // this file and keeps a private backup before its first save.
+    // Changes take effect on the next dictation. Voice Type keeps private
+    // last-valid backups separately from this file.
 }
 EOF
     )
@@ -376,24 +368,6 @@ EOF
     log_info "$_config_action $(link_path "$CONFIG_FILE")"
 }
 
-# Read from the file rather than from what this run happened to type: on a
-# reinstall the key is already in the config and warning about it is a lie.
-config_has_key() {
-    [ -f "$CONFIG_FILE" ] || return 1
-    sed 's|//.*||g' "$CONFIG_FILE" 2> /dev/null \
-        | grep -Eq "\"(api_key|$PROVIDER)\"[[:space:]]*:[[:space:]]*\"[^\"]*[^\"[:space:]][^\"]*\""
-}
-
-# Used only for the advisory summary. A kept legacy config selects OpenRouter.
-config_provider() {
-    _file_provider=$(sed 's|//.*||g' "$CONFIG_FILE" 2> /dev/null \
-        | sed -n 's/.*"provider"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-    case "$_file_provider" in
-        openai) printf '%s' 'openai' ;;
-        *) printf '%s' 'openrouter' ;;
-    esac
-}
-
 print_summary() {
     if [ "$CONFIG_CREATED" = "1" ]; then
         log_info "Keyboard shortcuts, to set in your desktop environment:"
@@ -401,10 +375,10 @@ print_summary() {
         log_info "  Start/stop daemon:  sh -c \"curl -s http://localhost:$PORT/exit || voice-type\""
     fi
 
-    # Both of these leave voice-type unable to work, so they stay.
-    PROVIDER=$(config_provider)
-    if ! provider_has_env_key && ! config_has_key; then
-        log_warn "No $PROVIDER API key yet. Set $(provider_key_env), or add \"api_key\" to $(link_path "$CONFIG_FILE")"
+    if [ "$CONFIG_CREATED" = "1" ] && [ -z "$API_KEY" ]; then
+        log_warn "No profile selected yet. Add one in Voice Type settings before recording."
+    else
+        log_info "Manage profiles and API keys in Voice Type settings."
     fi
 }
 

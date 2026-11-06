@@ -199,6 +199,10 @@ func (d *daemon) startMicrophoneTest(id string) error {
 		rec.Close()
 		return err
 	}
+	if rec.sourceFellBack() {
+		d.notice = microphoneFallbackNotice
+		d.runLog.diagnostic("microphone.changed", "ok", microphoneFallbackNotice)
+	}
 	d.testRecorder = rec
 	d.state = stateTesting
 	d.testTimer = time.AfterFunc(60*time.Second, d.stopMicrophoneTest)

@@ -17,6 +17,7 @@ func setupServiceTest(t *testing.T) int {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
@@ -72,7 +73,9 @@ func TestEmbeddedServiceLifecycleAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.SaveSettings(SettingsUpdate{Revision: settings.Revision, Provider: "openai", Port: port, Vocabulary: settings.Vocabulary, APIKeys: map[string]string{"openai": "test-key"}})
+	key := "test-key"
+	_, err = UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: "OpenAI 1", Provider: "openai", APIKey: &key})
+	service.RefreshSettings()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +122,11 @@ func TestEmbeddedServiceLifecycleAndIsolation(t *testing.T) {
 
 func TestEmbeddedServiceShutdownDiscardsRecording(t *testing.T) {
 	setupServiceTest(t)
-	t.Setenv("OPENAI_API_KEY", "test-key")
+	settings, _ := ReadSettings()
+	key := "test-key"
+	if _, err := UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: "OpenAI 1", Provider: "openai", APIKey: &key}); err != nil {
+		t.Fatal(err)
+	}
 	service, err := StartService("test")
 	if err != nil {
 		t.Fatal(err)
@@ -186,8 +193,9 @@ func TestEmbeddedServiceStartupConflictPreservesFiles(t *testing.T) {
 	if _, err := StartService("test"); err == nil || !strings.Contains(err.Error(), "close any other Voice Type instance") {
 		t.Fatalf("conflict error: %v", err)
 	}
-	if _, err := os.Stat(runLogFilePath()); !os.IsNotExist(err) {
-		t.Fatal("failed start created logs")
+	raw, err := os.ReadFile(runLogFilePath())
+	if err != nil || !strings.Contains(string(raw), "startup.failed") {
+		t.Fatal("failed startup was not recorded")
 	}
 }
 

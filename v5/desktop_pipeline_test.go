@@ -42,7 +42,17 @@ func TestDesktopPipeline(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = SaveSettings(SettingsUpdate{Revision: settings.Revision, Provider: provider, Port: port, Vocabulary: []VocabularyList{{Name: "general", Terms: []string{"Wails"}}, {Name: "project", Terms: []string{"PipeWire"}}}, APIKeys: map[string]string{provider: "test-credential"}})
+			key := "test-credential"
+			settings, err = UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: provider + " 1", Provider: provider, APIKey: &key})
+			if err != nil {
+				t.Fatal(err)
+			}
+			settings, err = SelectProfile(settings.Revision, settings.Profiles[len(settings.Profiles)-1].ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			vocab := []VocabularyList{{Name: "general", Terms: []string{"Wails"}}, {Name: "project", Terms: []string{"PipeWire"}}}
+			_, err = SaveSettings(SettingsUpdate{Revision: settings.Revision, Vocabulary: &vocab})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -172,18 +182,10 @@ func TestLiveProviders(t *testing.T) {
 	if err != nil {
 		t.Fatal("cannot read local provider configuration")
 	}
-	originalProvider := cfg.Provider
-	for _, provider := range []string{providerOpenAI, providerOpenRouter} {
-		t.Run(provider, func(t *testing.T) {
-			selected := cfg
-			selected.Provider = provider
-			if provider != originalProvider {
-				selected.APIKey = ""
-			}
-			key := configAPIKey(selected)
-			if key == "" {
-				t.Skip("no credential available for this provider")
-			}
+	for _, profile := range cfg.Profiles {
+		t.Run(profile.Name, func(t *testing.T) {
+			provider := profile.Provider
+			key := profile.APIKey()
 			client := newSTTClient(sttSettings{Provider: provider, APIKey: key, Model: providerModel(provider)})
 			result, err := client.TranscribeContext(context.Background(), wav)
 			if err != nil {
