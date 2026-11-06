@@ -68,6 +68,9 @@ func TestGNOMEShortcutsPreserveOtherSettings(t *testing.T) {
 			t.Fatal("changed or dropped another shortcut")
 		}
 	}
+	if got := s.fields[shortcutBase+"transcription/"]["command"]; got != strconv.Quote("/app/voice-type")+" --toggle" {
+		t.Fatalf("shortcut command: %q", got)
+	}
 	if s.listWrites != 1 {
 		t.Fatalf("startup/capture rewrote the shared list: %d writes", s.listWrites)
 	}

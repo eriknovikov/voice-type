@@ -160,12 +160,13 @@ func (s *Service) prepareToggle() (func() error, error) {
 	if !s.toggleMu.TryLock() {
 		return nil, errors.New("a recording command is already in progress")
 	}
+	state, sessionID := s.d.state, s.d.sessionID
 	return func() error {
 		defer s.toggleMu.Unlock()
 		var code int
 		var message string
-		if s.d.currentState() == stateRecording {
-			code, message = s.d.stopSession()
+		if state == stateRecording {
+			code, message = s.d.stopSessionMatching(sessionID, false)
 		} else {
 			code, message = s.d.startSession()
 		}

@@ -312,3 +312,33 @@ func TestEmbeddedToggleAsyncStateRules(t *testing.T) {
 		t.Fatal("replayed a rejected command")
 	}
 }
+
+func TestDelayedStopNeverStartsANewSession(t *testing.T) {
+	setupServiceTest(t)
+	settings, _ := ReadSettings()
+	key := "fixture-key"
+	if _, err := UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: "Test", Provider: "openai", APIKey: &key}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := StartService("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	service.d.res.Recorder = &failureRecorder{} // Empty audio: no provider request or insertion.
+	if err := service.Toggle(); err != nil {
+		t.Fatal(err)
+	}
+	stop, err := service.prepareToggle()
+	if err != nil || stop == nil {
+		t.Fatal(err)
+	}
+	// A duration cap completes the same recording before this stop is scheduled.
+	service.d.stopSessionFor(service.d.sessionID)
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if service.Status().State != "idle" {
+		t.Fatal("delayed stop unexpectedly started recording")
+	}
+}

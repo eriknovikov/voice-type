@@ -1,5 +1,6 @@
-"""Exercise the real desktop process without user settings or provider calls."""
-import http.client
+"""Exercise the packaged desktop without user settings or paid provider calls."""
+import errno
+import fcntl
 import json
 import os
 import pathlib
@@ -18,123 +19,141 @@ with tempfile.TemporaryDirectory(prefix="voice-type-smoke-") as directory:
     env.update(HOME=str(root), XDG_STATE_HOME=str(root / "state"),
                XDG_CONFIG_HOME=str(root / "config"), XDG_DATA_HOME=str(root / "data"),
                XDG_RUNTIME_DIR=str(root / "runtime"), OPENAI_API_KEY="", OPENROUTER_API_KEY="",
-               GSETTINGS_BACKEND="keyfile", XDG_CURRENT_DESKTOP="smoke-test", XDG_SESSION_TYPE="wayland", GTK_A11Y="none", NO_AT_BRIDGE="1")
+               GSETTINGS_BACKEND="keyfile", XDG_CURRENT_DESKTOP="smoke-test",
+               XDG_SESSION_TYPE="wayland", GTK_A11Y="none", NO_AT_BRIDGE="1")
     (root / "runtime").mkdir(mode=0o700)
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
-    (root / ".voice-type-config.jsonc").write_text(json.dumps({"provider": "openai", "port": port}))
     binary = pathlib.Path(__file__).resolve().parents[1] / "build/voice-type-app"
-    # Isolate single-instance and tray D-Bus state as well as the filesystem.
-    bus = subprocess.Popen(["dbus-daemon", "--session", "--nofork", "--print-address=1"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+    bus = subprocess.Popen(["dbus-daemon", "--session", "--nofork", "--print-address=1"],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
     env["DBUS_SESSION_BUS_ADDRESS"] = bus.stdout.readline().strip()
+    lock_path = root / "runtime/voice-type/engine.lock"
+    diagnostics = root / ".voice-type-logs.jsonl"
 
-    def request(method, path):
-        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-        connection.request(method, path)
-        response = connection.getresponse()
-        data = json.loads(response.read())
-        connection.close()
-        return response.status, data
+    def invoke(*args):
+        result = subprocess.run([str(binary), *args], env=env, capture_output=True, timeout=15)
+        assert result.returncode == 0, result.stderr.decode()[-1000:]
 
-    with (root / "app.log").open("w+") as log:
-        process = subprocess.Popen([str(binary)], env=env, stdout=log, stderr=log)
-        try:
-            for _ in range(100):
-                if process.poll() is not None:
-                    raise RuntimeError("desktop exited during startup")
-                try:
-                    code, health = request("GET", "/health")
-                    break
-                except OSError:
-                    time.sleep(.1)
-            else:
-                raise RuntimeError("listener never started")
-            assert code == 200 and health["state"] == "idle"
-            assert not (root / "runtime/voice-type/desktop.sock").exists()
-            # Verify Linux attributes the listening socket to the Wails process.
-            listening = []
-            for line in pathlib.Path("/proc/net/tcp").read_text().splitlines()[1:]:
+    def records():
+        if not diagnostics.exists():
+            return []
+        # An append may be in progress while inspecting diagnostics.
+        return [json.loads(row) for row in diagnostics.read_bytes().split(b"\n")[:-1]]
+
+    def owns_engine():
+        if not lock_path.exists():
+            return False
+        with lock_path.open("r+") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return False
+            except BlockingIOError:
+                return True
+
+    def wait_for(check, message):
+        for _ in range(150):
+            if process.poll() is not None:
+                raise RuntimeError("desktop exited during " + message)
+            if check():
+                return
+            time.sleep(.1)
+        raise RuntimeError(message)
+
+    def no_listeners():
+        descriptors = set()
+        for fd in pathlib.Path(f"/proc/{process.pid}/fd").iterdir():
+            try:
+                descriptors.add(os.readlink(fd))
+            except FileNotFoundError:
+                pass
+        for table in ("tcp", "tcp6"):
+            for line in pathlib.Path("/proc/net/" + table).read_text().splitlines()[1:]:
                 columns = line.split()
-                if columns[1] == f"0100007F:{port:04X}" and columns[3] == "0A":
-                    listening.append(columns[9])
-            descriptors = []
-            for descriptor in pathlib.Path(f"/proc/{process.pid}/fd").iterdir():
-                try:
-                    descriptors.append(os.readlink(descriptor))
-                except FileNotFoundError:
-                    pass
-            assert any(f"socket:[{inode}]" in descriptors for inode in listening), "Wails does not own listener"
-            children = pathlib.Path(f"/proc/{process.pid}/task/{process.pid}/children").read_text().split()
-            assert not any(pathlib.Path(f"/proc/{pid}/comm").read_text().strip() == "voice-type" for pid in children)
-            code, _ = request("POST", "/toggle")
-            assert code == 503, "missing credentials must block recording"
-            second = subprocess.run([str(binary)], env=env, capture_output=True, timeout=10)
-            assert second.returncode == 0, second.stderr.decode()
-            assert process.poll() is None
-            # A shortcut helper reaches the same listener and reports missing setup.
-            helper = subprocess.run([str(binary), "--shortcut-action", "transcription"], env=env, capture_output=True, timeout=10)
-            assert helper.returncode != 0 and b"HTTP 503" in helper.stderr
-            request("POST", "/exit")
-            assert process.wait(timeout=10) == 0
-            with socket.socket() as listener:
-                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                listener.bind(("127.0.0.1", port))
-            # Native OS shutdown follows the same cleanup path as Quit.
-            process = subprocess.Popen([str(binary)], env=env, stdout=log, stderr=log)
-            for _ in range(100):
-                if process.poll() is not None:
-                    raise RuntimeError("desktop exited on relaunch")
-                try:
-                    request("GET", "/health")
-                    break
-                except OSError:
-                    time.sleep(.1)
-            else:
-                raise RuntimeError("relaunch listener never started")
-            # Allow Wails to finish installing its OS signal handler.
-            time.sleep(1)
+                assert columns[3] != "0A" or f"socket:[{columns[9]}]" not in descriptors, "desktop opened TCP listener"
+        assert not (root / "runtime/voice-type/desktop.sock").exists()
+
+    process = None
+    occupied = socket.socket()
+    try:
+        occupied.bind(("127.0.0.1", 3232))
+        occupied.listen()
+    except OSError as error:
+        if error.errno != errno.EADDRINUSE:
+            raise
+        occupied.close()
+        occupied = None  # An already-running process occupies the default port.
+    port = 3232
+    with (root / "app.log").open("w+") as log:
+        try:
+            invoke("--quit")
+            assert not lock_path.exists() and not diagnostics.exists()
+            assert not (root / "state/voice-type").exists(), "cold quit wrote preferences"
+            invalid = subprocess.run([str(binary), "--toggle", "--quit"], env=env, capture_output=True, timeout=10)
+            assert invalid.returncode == 2 and not lock_path.exists()
+            config = root / ".voice-type-config.jsonc"
+            config.write_text(json.dumps({"port": port}))
+            # Cold toggle with incomplete setup opens settings without recording.
+            process = subprocess.Popen([str(binary), "--toggle"], env=env, stdout=log, stderr=log)
+            wait_for(owns_engine, "engine ownership")
+            wait_for(lambda: any(row["event"] == "desktop.started" for row in records()), "application startup")
+            for args in (("--background",), (), ("--show-settings",)):
+                invoke(*args)
+                assert owns_engine() and process.poll() is None
+            assert not any(row["event"] == "dictation.completed" for row in records()), "cold toggle bypassed setup"
+            no_listeners()
+            # Each one-way command reaches the primary and fails safely on setup.
+            for args in (("--toggle",), ("--shortcut-action", "transcription")):
+                previous = sum(row["event"] == "dictation.completed" for row in records())
+                invoke(*args)
+                wait_for(lambda: sum(row["event"] == "dictation.completed" for row in records()) > previous,
+                         "forwarded toggle")
+            assert all(row["outcome"] == "configuration_error" for row in records() if row["event"] == "dictation.completed")
+            # Secondary launches must not read config/preferences or open logs.
+            before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file() and path.suffix in (".json", ".jsonc")}
+            invoke("--background")
+            assert all(path.read_bytes() == data for path, data in before.items())
+            invoke("--quit")
+            assert process.wait(timeout=15) == 0
+            assert not owns_engine()
+            # SIGTERM uses the same resource cleanup path; restart gets the lock.
+            config.write_text("{broken")
+            prior_attempts = sum(row["event"] == "dictation.completed" for row in records())
+            process = subprocess.Popen([str(binary), "--toggle"], env=env, stdout=log, stderr=log)
+            wait_for(owns_engine, "relaunch")
+            wait_for(lambda: any(row["event"] == "configuration.recovered" for row in records()), "configuration recovery")
+            invoke("--background")
+            assert sum(row["event"] == "dictation.completed" for row in records()) == prior_attempts
+            time.sleep(1)  # Wails must install its OS signal handler.
             process.terminate()
-            assert process.wait(timeout=10) == 0
-            log.flush()
-            log.seek(0)
-            assert log.read().count("DAEMON: shutting down") == 2
-            # Background startup failures must enter the native error-dialog
-            # event loop instead of silently exiting before a window can exist.
-            with socket.socket() as occupied:
-                occupied.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                occupied.bind(("127.0.0.1", port))
-                occupied.listen()
+            assert process.wait(timeout=15) == 0 and not owns_engine()
+            # Fatal lock conflict enters the native error dialog, without logs/config edits.
+            with lock_path.open("r+") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                snapshot = diagnostics.read_bytes()
                 process = subprocess.Popen([str(binary), "--background"], env=env, stdout=log, stderr=log)
-                diagnostics = root / ".voice-type-logs.jsonl"
-                for _ in range(100):
-                    if process.poll() is not None:
-                        raise RuntimeError("background startup failed before displaying its error dialog")
-                    records = [json.loads(row) for row in diagnostics.read_text().splitlines()] if diagnostics.exists() else []
-                    if any(row.get("event") == "startup.failed" for row in records):
-                        break
-                    time.sleep(.1)
-                else:
-                    raise RuntimeError("startup failure was not logged")
+                wait_for(lambda: "Voice Type startup failed:" in (root / "app.log").read_text(), "visible startup failure")
                 time.sleep(1)
-                assert process.poll() is None, "fatal dialog did not keep the native app alive"
+                assert process.poll() is None, "fatal dialog exited silently"
+                assert diagnostics.read_bytes() == snapshot, "conflicting engine touched logs"
                 process.terminate()
-                assert process.wait(timeout=10) in (0, 1)
-            print("Native smoke passed: Wails owns HTTP, no daemon/socket, shortcuts reach service, second launch reuses app, exit and SIGTERM clean up, background startup failure stays visible and logs diagnostics.")
+                assert process.wait(timeout=15) in (0, 1)
+            print("Native smoke passed: no TCP/socket, occupied port ignored, cold quit/setup safe, single-instance commands and legacy alias work, Quit/SIGTERM release engine, startup conflict stays visible.")
         except Exception:
             log.flush()
             log.seek(0)
             print(log.read()[-6000:])
             raise
         finally:
-            if process.poll() is None:
+            if process and process.poll() is None:
                 process.terminate()
                 try:
                     process.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
+            if occupied:
+                occupied.close()
             bus.terminate()
             bus.wait(timeout=5)
             if shutil.which("fusermount3"):
-                subprocess.run(["fusermount3", "-uz", str(root / "runtime/doc")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                for mount in ("doc", "gvfs"):
+                    subprocess.run(["fusermount3", "-uz", str(root / "runtime" / mount)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

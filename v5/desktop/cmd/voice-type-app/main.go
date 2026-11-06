@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	desktop "github.com/eriknovikov/voice-type/desktop"
 	"log"
 	"os"
@@ -9,19 +10,23 @@ import (
 var version = "dev"
 
 func main() {
-	if len(os.Args) == 2 && os.Args[1] == "--remove-shortcuts" {
+	command, err := desktop.ParseCommand(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, desktop.CommandUsage)
+		os.Exit(2)
+	}
+	if command == desktop.CommandHelp {
+		fmt.Println(desktop.CommandUsage)
+		return
+	}
+	if command == desktop.CommandRemoveShortcuts {
 		if err := desktop.RemoveGNOMEShortcuts(); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
-	if len(os.Args) == 3 && os.Args[1] == "--shortcut-action" {
-		if err := desktop.RunShortcutAction(os.Args[2]); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
-	if err := desktop.Run(version); err != nil {
+	if err := desktop.Run(version, command); err != nil {
 		log.Fatal(err)
 	}
 }

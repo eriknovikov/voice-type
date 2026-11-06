@@ -13,7 +13,8 @@ import (
 	"time"
 )
 
-// ManagementSocketPath is shared by the daemon and its desktop companion.
+// ManagementSocketPath is the standalone daemon's private management socket.
+// The desktop engine uses the same runtime directory only for its engine lock.
 func ManagementSocketPath() string {
 	base := os.Getenv("XDG_RUNTIME_DIR")
 	if base == "" {

@@ -202,8 +202,7 @@ func (d *daemon) startSession() (int, string) {
 
 // reloadConfig re-reads the config file and the active workspace so a hand edit
 // or a desktop edit applies to this dictation without a restart. Callers hold
-// d.mu. The bound port is the one exception: the listener is already up on the
-// old one.
+// d.mu. Only a standalone daemon with an HTTP listener pins its bound port.
 func (d *daemon) reloadConfig() error {
 	workspace := workspaceLoad()
 	cfg, err := configReadStrict()
@@ -218,12 +217,14 @@ func (d *daemon) reloadConfig() error {
 	if err := settings.validateCredentials(); err != nil {
 		return err
 	}
-	if cfg.Port != d.cfg.Port {
-		configWarn("port-restart", "port change requires restarting the daemon")
-	} else {
-		configWarn("port-restart", "")
+	if d.srv != nil {
+		if cfg.Port != d.cfg.Port {
+			configWarn("port-restart", "port change requires restarting the daemon")
+		} else {
+			configWarn("port-restart", "")
+		}
+		cfg.Port = d.cfg.Port
 	}
-	cfg.Port = d.cfg.Port
 	d.cfg = cfg
 	d.workspace = workspace
 	d.stt = newSTTClient(settings)
@@ -247,7 +248,11 @@ func (d *daemon) stopSession() (int, string) {
 
 // stopSessionFor ignores an expired duration timer from an older session. A
 // zero session ID is an explicit user stop and applies to the current session.
-func (d *daemon) stopSessionFor(sessionID uint64) (code int, message string) {
+func (d *daemon) stopSessionFor(sessionID uint64) (int, string) {
+	return d.stopSessionMatching(sessionID, sessionID != 0)
+}
+
+func (d *daemon) stopSessionMatching(sessionID uint64, durationCap bool) (code int, message string) {
 	d.mu.Lock()
 	if d.state != stateRecording || (sessionID != 0 && sessionID != d.sessionID) {
 		state := d.state
@@ -260,7 +265,7 @@ func (d *daemon) stopSessionFor(sessionID uint64) (code int, message string) {
 	d.state = stateTranscribing
 	ctx := d.sessionCtx
 	stt := d.stt
-	if sessionID != 0 {
+	if durationCap {
 		logf("AUDIO", "duration cap of %ds reached -- stopping", maxDurationSeconds)
 	}
 	if d.capTimer != nil {

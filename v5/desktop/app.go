@@ -8,7 +8,7 @@ import (
 	"image/draw"
 	"image/png"
 	"io/fs"
-	"os"
+	"log"
 	"strings"
 	"time"
 
@@ -56,26 +56,36 @@ func trayIcon(state string) []byte {
 	_ = png.Encode(&out, canvas)
 	return out.Bytes()
 }
-func Run(version string) error {
+func Run(version string, command Command) error {
 	frontend, err := fs.Sub(assets, "frontend/dist")
 	if err != nil {
 		return err
 	}
-	prefs, notice, preferencesErr := loadPreferences()
-	b := &Bridge{prefs: prefs, version: version, notice: notice}
-	if preferencesErr != nil {
-		b.preferencesError = preferencesErr.Error()
+	b := &Bridge{version: version}
+	router := &commandRouter{}
+	// Never wait for GTK while holding the router lock: shutdown also runs on
+	// GTK's thread. Queued callbacks recheck shutdown before touching the bridge.
+	router.dispatch = func(command Command) {
+		application.InvokeAsync(func() {
+			if router.active() {
+				b.dispatchCommand(command)
+			}
+		})
 	}
+	defer router.close()
 	done := make(chan struct{})
 	app := application.New(application.Options{
 		Name: "Voice Type", Icon: appIcon, Description: "System-wide voice dictation",
 		Linux:    application.LinuxOptions{ApplicationID: "io.github.eriknovikov.voice-type"},
 		Services: []application.Service{application.NewService(b)},
 		Assets:   application.AssetOptions{Handler: application.BundledAssetFileServer(frontend)},
-		SingleInstance: &application.SingleInstanceOptions{UniqueID: "io.github.eriknovikov.voice-type", OnSecondInstanceLaunch: func(_ application.SecondInstanceData) {
-			if b.window != nil {
-				b.window.Show()
-				b.window.Focus()
+		SingleInstance: &application.SingleInstanceOptions{UniqueID: "io.github.eriknovikov.voice-type", OnSecondInstanceLaunch: func(data application.SecondInstanceData) {
+			if len(data.Args) == 0 {
+				return
+			}
+			command, err := ParseCommand(data.Args[1:])
+			if err == nil && command != CommandRemoveShortcuts && command != CommandHelp {
+				router.submit(command)
 			}
 		}},
 		ErrorHandler: func(err error) {
@@ -86,6 +96,7 @@ func Run(version string) error {
 			}
 		},
 		OnShutdown: func() {
+			router.close()
 			close(done)
 			b.cancelLevelStream()
 			if b.service != nil {
@@ -94,10 +105,21 @@ func Run(version string) error {
 		},
 	})
 	b.app = app
-	// application.New has already handed secondary launches to the first instance.
+	// Secondary launches exit inside application.New, before any preferences,
+	// credentials, shortcuts or engine resources are touched here.
+	if command == CommandQuit {
+		return nil
+	}
+	prefs, notice, preferencesErr := loadPreferences()
+	b.prefs, b.notice = prefs, notice
+	if preferencesErr != nil {
+		b.preferencesError = preferencesErr.Error()
+	}
 	b.service, err = vt.StartService(version)
 	if err != nil {
+		router.close()
 		startupErr := err
+		log.Printf("Voice Type startup failed: %v", startupErr)
 		app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
 			go func() {
 				dialog := app.Dialog.Error().SetTitle("Voice Type could not start").SetMessage(startupErr.Error())
@@ -118,17 +140,23 @@ func Run(version string) error {
 		b.service.RecordDiagnostic("preferences.invalid", "error", "Could not read desktop preferences; check file permissions")
 	}
 	b.initializePreferences()
-	hidden := false
-	for _, arg := range os.Args[1:] {
-		if arg == "--background" && b.prefs.SetupComplete && b.Status().Error == "" && b.preferencesError == "" && b.notice == "" && vt.ConfigNotice() == "" && b.Status().Notice == "" {
-			hidden = true
-		}
+	startupReady := b.prefs.SetupComplete && b.Status().Error == "" && b.preferencesError == "" && b.notice == "" && vt.ConfigNotice() == "" && b.Status().Notice == ""
+	hidden := (command == CommandBackground || command == CommandToggle) && startupReady
+	// Recovery/setup feedback takes precedence over an automatic first recording.
+	initial := command
+	if command == CommandToggle && !startupReady {
+		initial = CommandShow
 	}
+	router.submit(initial)
+	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+		router.start(startupReady)
+		b.service.RecordDiagnostic("desktop.started", "ok", "Voice Type started.")
+	})
 	window := app.Window.NewWithOptions(application.WebviewWindowOptions{Title: "Voice Type", Frameless: true, Width: 1040, Height: 740, MinWidth: 760, MinHeight: 560, URL: "/", Hidden: hidden})
 	b.window = window
 	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
 		e.Cancel()
-		b.RequestHide()
+		go b.RequestHide()
 	})
 	tray := app.SystemTray.New()
 	tray.SetIcon(trayIcon("idle"))
@@ -142,9 +170,9 @@ func Run(version string) error {
 			statusLabel, action = "Recording", "Stop recording"
 		}
 		menu.Add(statusLabel).SetEnabled(false)
-		menu.Add(action).OnClick(func(_ *application.Context) { go b.toggleFromTray() })
+		menu.Add(action).OnClick(func(_ *application.Context) { b.toggleRecording() })
 		menu.Add("Open settings").OnClick(func(_ *application.Context) { show() })
-		menu.Add("Quit").OnClick(func(_ *application.Context) { b.RequestQuit() })
+		menu.Add("Quit").OnClick(func(_ *application.Context) { go b.RequestQuit() })
 		tray.SetMenu(menu)
 		tray.SetIcon(trayIcon(state))
 		tooltip := "Voice Type · " + statusLabel
