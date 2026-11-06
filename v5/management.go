@@ -200,7 +200,7 @@ func (d *daemon) startMicrophoneTest(id string) error {
 		return err
 	}
 	if rec.sourceFellBack() {
-		d.notice = microphoneFallbackNotice
+		d.showNotice(microphoneFallbackNotice)
 		d.runLog.diagnostic("microphone.changed", "ok", microphoneFallbackNotice)
 	}
 	d.testRecorder = rec

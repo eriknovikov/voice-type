@@ -352,3 +352,22 @@ it("waits for shortcut release and its preference write before native Quit", asy
     expect.objectContaining({ shortcut: "F9" }),
   );
 });
+
+it("shows a new recovery notice after an earlier identical notice was dismissed", async () => {
+  const message = "Settings were restored from the last valid backup.";
+  const status = {
+    state: "idle",
+    error: "",
+    port: 3232,
+    level: 0,
+    notice: message,
+    notice_version: 1,
+  };
+  vi.mocked(api.status).mockResolvedValue(status);
+  await ready();
+  await screen.findByText(message);
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+  expect(screen.queryByText(message)).toBeNull();
+  vi.mocked(api.status).mockResolvedValue({ ...status, notice_version: 2 });
+  await screen.findByText(message);
+});

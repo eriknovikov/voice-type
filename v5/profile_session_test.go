@@ -3,6 +3,7 @@ package voicetype
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 )
 
@@ -173,5 +174,53 @@ func TestAudioServerFailurePreservesMicrophone(t *testing.T) {
 	saved, err = ReadSettings()
 	if err != nil || saved.Microphone != id {
 		t.Fatal("capture failure reset source preference", err)
+	}
+}
+
+func TestRunningServiceReportsEachConfigurationRecovery(t *testing.T) {
+	setupServiceTest(t)
+	service, err := StartService("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	previous := service.Status().NoticeVersion
+	for _, damage := range []string{"{", "deleted", "{\"port\":0}"} {
+		if damage == "deleted" {
+			err = os.Remove(configFilePath())
+		} else {
+			err = os.WriteFile(configFilePath(), []byte(damage), 0600)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = ReadSettings(); err != nil {
+			t.Fatal(err)
+		}
+		status := service.Status()
+		if status.Notice == "" || status.NoticeVersion <= previous {
+			t.Fatal("runtime recovery notice missing", status)
+		}
+		previous = status.NoticeVersion
+		// Polling must not duplicate the notice or its diagnostic entry.
+		if service.Status().NoticeVersion != previous {
+			t.Fatal("notice repeated on status polling")
+		}
+	}
+	records, err := service.Logs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered := 0
+	for _, record := range records {
+		if record.Event == "configuration.recovered" {
+			recovered++
+			if record.Message == "" {
+				t.Fatal("recovery diagnostic missing details")
+			}
+		}
+	}
+	if recovered != 3 {
+		t.Fatalf("expected three recovery diagnostics, got %d", recovered)
 	}
 }

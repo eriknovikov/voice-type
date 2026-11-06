@@ -24,6 +24,7 @@ type ServiceStatus struct {
 	Port              int     `json:"port"`
 	Level             float64 `json:"level"`
 	Notice            string  `json:"notice"`
+	NoticeVersion     uint64  `json:"notice_version"`
 }
 
 // StartService reserves the port before allocating resources. A conflicting
@@ -61,7 +62,7 @@ func StartService(version string) (*Service, error) {
 	d := newDaemon(cfg, &resources{Recorder: &Recorder{}}, settings, "")
 	d.runLog = openRunLog(version)
 	if microphoneChanged {
-		d.notice = microphoneFallbackNotice
+		d.showNotice(microphoneFallbackNotice)
 		d.runLog.diagnostic("microphone.changed", "ok", microphoneFallbackNotice)
 	}
 	if notice := ConfigNotice(); notice != "" {
@@ -108,11 +109,12 @@ func (s *Service) Status() ServiceStatus {
 	d := s.d
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.checkConfigRecovery()
 	level := float64(0)
 	if d.testRecorder != nil {
 		level = d.testRecorder.Level()
 	}
-	return ServiceStatus{LastAttemptFailed: d.lastAttemptFailed, State: d.state.String(), Error: d.configError, Port: d.cfg.Port, Level: level, Notice: d.notice}
+	return ServiceStatus{LastAttemptFailed: d.lastAttemptFailed, State: d.state.String(), Error: d.configError, Port: d.cfg.Port, Level: level, Notice: d.notice, NoticeVersion: d.noticeVersion}
 }
 func (s *Service) SaveSettings(update SettingsUpdate) (Settings, error) {
 	value, err := SaveSettings(update)
@@ -151,7 +153,7 @@ func (s *Service) Microphones() ([]AudioSource, error) {
 		return nil, err
 	} else if changed {
 		s.d.mu.Lock()
-		s.d.notice = microphoneFallbackNotice
+		s.d.showNotice(microphoneFallbackNotice)
 		s.d.mu.Unlock()
 		s.d.runLog.diagnostic("microphone.changed", "ok", microphoneFallbackNotice)
 		s.RefreshSettings()
