@@ -5,10 +5,10 @@ import (
 	"embed"
 	"image"
 	"image/color"
-	"image/draw"
 	"image/png"
 	"io/fs"
 	"log"
+	"math"
 	"strings"
 	"time"
 
@@ -34,7 +34,7 @@ func trayAvailable() bool {
 	return err == nil && owner
 }
 func trayIcon(state string) []byte {
-	canvas := image.NewRGBA(image.Rect(0, 0, 32, 32))
+	canvas := image.NewNRGBA(image.Rect(0, 0, 32, 32))
 	c := color.RGBA{145, 150, 158, 255}
 	if state == "disconnected" || state == "setup needed" {
 		c = color.RGBA{145, 150, 158, 255}
@@ -47,10 +47,20 @@ func trayIcon(state string) []byte {
 	} else if state == "transcribing" {
 		c = color.RGBA{237, 188, 105, 255}
 	}
-	// Align bars and gaps to whole pixels at the panel's 16px icon size.
-	for i, h := range []int{7, 16, 24, 16, 7} {
-		x := 2 + i*6
-		draw.Draw(canvas, image.Rect(x, (32-h)/2, x+4, (32+h)/2), &image.Uniform{C: c}, image.Point{}, draw.Src)
+	// Use the launcher-like five-bar mark with rounded capsule ends.
+	for i, h := range []float64{7, 16, 24, 16, 7} {
+		centerX := float64(4 + i*6)
+		for y := 0; y < 32; y++ {
+			dy := math.Max(math.Abs(float64(y)+0.5-16)-(h/2-2), 0)
+			for x := 0; x < 32; x++ {
+				dx := math.Abs(float64(x) + 0.5 - centerX)
+				distance := math.Hypot(dx, dy) - 2
+				coverage := math.Max(0, math.Min(1, 0.5-distance))
+				if coverage > 0 {
+					canvas.SetNRGBA(x, y, color.NRGBA{c.R, c.G, c.B, uint8(coverage * float64(c.A))})
+				}
+			}
+		}
 	}
 	var out bytes.Buffer
 	_ = png.Encode(&out, canvas)

@@ -1188,12 +1188,6 @@ summary::-webkit-details-marker {
     scrollbar-color: #59636d transparent;
   }
 }
-@supports (content-visibility: auto) {
-  .log-entry:not([open]) {
-    content-visibility: auto;
-    contain-intrinsic-size: auto 72px;
-  }
-}
 @media (max-width: 899px) {
   .setting-row:not(.switch-row) {
     grid-template-columns: minmax(0, 1fr);
