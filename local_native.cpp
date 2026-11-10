@@ -11,6 +11,10 @@
 #include <string>
 #include <vector>
 
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
+
 struct vt_asr_model {
     transcribe_model *model;
     std::string model_id;
@@ -61,6 +65,15 @@ char *copy_string(const char *text) {
 bool should_abort(void *user_data) {
     auto *aborted = static_cast<std::atomic<bool> *>(user_data);
     return aborted != nullptr && aborted->load(std::memory_order_relaxed);
+}
+
+// Return freed session arenas to the operating system after inference ends.
+// This runs on the existing session-teardown path, outside engine locks and
+// never during capture. Other allocators keep their default behavior.
+void reclaim_allocator_memory() {
+#if defined(__GLIBC__)
+    malloc_trim(0);
+#endif
 }
 
 std::vector<std::string> parse_vocabulary(const char *vocabulary) {
@@ -250,6 +263,7 @@ void vt_asr_session_close(vt_asr_session *session) {
     }
     transcribe_session_free(session->session);
     delete session;
+    reclaim_allocator_memory();
 }
 
 void vt_asr_session_abort(vt_asr_session *session) {
@@ -330,8 +344,12 @@ int vt_asr_stream_begin(vt_asr_session *session, const char *vocabulary,
 }
 
 int vt_asr_stream_feed(vt_asr_session *session, const float *samples,
-                       int sample_count, char *error, size_t error_size) {
+                       int sample_count, int *result_changed, char *error,
+                       size_t error_size) {
     clear_error(error, error_size);
+    if (result_changed != nullptr) {
+        *result_changed = 0;
+    }
     if (session == nullptr || samples == nullptr || sample_count <= 0) {
         set_error(error, error_size, "streaming audio input is empty or invalid");
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -342,6 +360,8 @@ int vt_asr_stream_feed(vt_asr_session *session, const float *samples,
         const transcribe_status status = transcribe_stream_feed(session->session, samples, sample_count, &update);
         if (status != TRANSCRIBE_OK) {
             set_status_error(error, error_size, "process streaming audio", status);
+        } else if (result_changed != nullptr) {
+            *result_changed = update.result_changed ? 1 : 0;
         }
         return status;
     } catch (const std::bad_alloc &) {
@@ -353,9 +373,12 @@ int vt_asr_stream_feed(vt_asr_session *session, const float *samples,
     }
 }
 
-int vt_asr_stream_finalize(vt_asr_session *session, char *error,
-                           size_t error_size) {
+int vt_asr_stream_finalize(vt_asr_session *session, int *result_changed,
+                           char *error, size_t error_size) {
     clear_error(error, error_size);
+    if (result_changed != nullptr) {
+        *result_changed = 0;
+    }
     if (session == nullptr) {
         set_error(error, error_size, "transcription session is not open");
         return TRANSCRIBE_ERR_INVALID_ARG;
@@ -366,6 +389,8 @@ int vt_asr_stream_finalize(vt_asr_session *session, char *error,
         const transcribe_status status = transcribe_stream_finalize(session->session, &update);
         if (status != TRANSCRIBE_OK) {
             set_status_error(error, error_size, "finish streaming transcription", status);
+        } else if (result_changed != nullptr) {
+            *result_changed = update.result_changed ? 1 : 0;
         }
         return status;
     } catch (const std::bad_alloc &) {

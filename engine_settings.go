@@ -2,6 +2,7 @@ package voicetype
 
 import (
 	"errors"
+	"io"
 	"time"
 )
 
@@ -84,16 +85,27 @@ func (d *engine) SaveSettings(update SettingsUpdate) (Settings, error) {
 }
 
 // RefreshSettings applies idle changes only. An in-flight session keeps its
-// original client until completion, including after profile deletion.
+// original client until completion, including after profile deletion. Models
+// that the new configuration no longer selects are evicted once the engine is
+// idle, which frees the largest block of native memory when switching to cloud.
 func (d *engine) RefreshSettings() {
+	selected := ""
+	evict := false
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if d.state == stateIdle && !d.shuttingDown {
 		if err := d.reloadConfig(); err != nil {
 			d.configError = err.Error()
 		} else {
 			d.configError = ""
 		}
+		evict = true
+		if d.stt != nil && d.stt.local != nil {
+			selected = d.stt.settings.Model
+		}
+	}
+	d.mu.Unlock()
+	if evict {
+		d.localModels.evictUnused(selected)
 	}
 }
 
@@ -208,4 +220,13 @@ func (d *engine) RecordDiagnostic(event, outcome, message string) {
 // DiagnosticRecord is the redacted, bounded diagnostic format shown by the UI.
 type DiagnosticRecord = runLogRecord
 
-func (d *engine) Logs() ([]DiagnosticRecord, error) { return d.runLog.records() }
+// Logs returns one bounded page with a revision token. Filtering is applied
+// before pagination.
+func (d *engine) Logs(outcome string, offset int) (LogPage, error) {
+	return d.runLog.page(outcome, offset)
+}
+
+// WriteLogs streams all retained records matching outcome to w.
+func (d *engine) WriteLogs(outcome string, w io.Writer) error {
+	return d.runLog.writeFiltered(outcome, w)
+}

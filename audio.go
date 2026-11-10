@@ -67,7 +67,12 @@ func (r *Recorder) Close() {
 	}
 	r.fellBack = false
 	r.streamMu.Unlock()
-	r.SetChunkSink(nil)
+	r.bufMu.Lock()
+	r.samples = nil
+	r.chunkSink = nil
+	r.sessionBuffer, r.bufferFailure = nil, nil
+	r.meterWindow = nil
+	r.bufMu.Unlock()
 
 	if r.client != nil {
 		r.client.Close()
@@ -162,9 +167,11 @@ func (r *Recorder) Stop() ([]int16, error) {
 		out = r.sessionBuffer.freeze()
 		r.sessionBuffer, r.bufferFailure = nil, nil
 	} else {
-		out = append([]int16(nil), r.samples...)
+		// Transfer ownership instead of copying the full recording. Starting the
+		// next recording allocates a fresh slice, so this result cannot change.
+		out = r.samples
 	}
-	r.samples = r.samples[:0]
+	r.samples = nil
 	if streamErr != nil {
 		streamErr = fmt.Errorf("record stream: %w", streamErr)
 	}
@@ -199,8 +206,10 @@ func (r *Recorder) SetSource(id string) {
 }
 
 // SetChunkSink receives copied audio chunks outside the recorder's sample
-// buffer lock. The sink must return promptly; the full recording is retained
-// independently even when a streaming consumer cannot keep up.
+// buffer lock. The sink takes ownership of the slice it receives; the recorder
+// never reads or reuses that copy. The sink must return promptly; the full
+// recording is retained independently even when a streaming consumer cannot
+// keep up.
 // Cloud capture and upload share one session-owned buffer. A local stream
 // continues to use SetChunkSink and the recorder's existing full recording.
 func (r *Recorder) SetSessionBuffer(buffer *sessionAudioBuffer, failure func(error)) {

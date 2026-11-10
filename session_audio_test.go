@@ -174,11 +174,11 @@ func TestCloudFailureStopsActiveCaptureWithoutInsertion(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	records, err := service.Logs()
+	records, err := service.Logs("all", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 || records[0].Outcome == "cancelled" || !strings.Contains(records[0].Error, "configuration") {
+	if len(records.Records) != 1 || records.Records[0].Outcome == "cancelled" || !strings.Contains(records.Records[0].Error, "configuration") {
 		t.Fatalf("provider failure was not explicit: %+v", records)
 	}
 }

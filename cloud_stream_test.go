@@ -385,14 +385,14 @@ func TestCloudStreamEngineInsertsFinalOnceAndRecordsTiming(t *testing.T) {
 	if got := inserter.inserted(); got != "final transcriptfinal transcriptfinal transcript" {
 		t.Fatalf("insertion was missing or duplicated: %q", got)
 	}
-	records, err := service.Logs()
+	records, err := service.Logs("all", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 3 {
-		t.Fatalf("completed dictations=%d", len(records))
+	if len(records.Records) != 3 {
+		t.Fatalf("completed dictations=%d", len(records.Records))
 	}
-	for _, record := range records {
+	for _, record := range records.Records {
 		if record.Outcome != "ok" || record.Timing == nil || record.Timing.StopToTranscriptMS == nil || record.Timing.StopToSubmissionMS == nil || record.Timing.InsertionCleanupCompleted == "" {
 			t.Fatalf("completion timing missing: %+v", record)
 		}
@@ -641,14 +641,14 @@ func TestCloudCaptureStartsImmediatelyAndStopBeforeAckFinishes(t *testing.T) {
 	if inserter.inserted() != "next recording worksnext recording works" {
 		t.Fatal("recordings missing or duplicated")
 	}
-	records, err := service.Logs()
+	records, err := service.Logs("all", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 2 {
+	if len(records.Records) != 2 {
 		t.Fatal("unexpected recording count")
 	}
-	timing := records[1].Timing
+	timing := records.Records[1].Timing
 	if timing == nil || timing.CaptureStartupMS == nil || timing.StartupBacklogDrained == "" || timing.CaptureStarted >= timing.ConnectionReady {
 		t.Fatalf("capture/connection timing not separated: %+v", timing)
 	}

@@ -136,80 +136,197 @@ func vocabularyEcho(text, prompt string) bool {
 	return prompt != "" && normalizeTranscript(text) == normalizeTranscript(prompt)
 }
 
-// OpenRouter reads provider options only from its base64 JSON encoding.
-func sttBuildJSON(settings sttSettings, wav []byte) ([]byte, error) {
-	payload := map[string]any{
-		"model": settings.Model,
-		"input_audio": map[string]string{
-			"data":   base64.StdEncoding.EncodeToString(wav),
-			"format": "wav",
-		},
+// appendBuffer is the destination for the streaming base64 encoder.
+type appendBuffer struct{ data []byte }
+
+func (b *appendBuffer) Write(p []byte) (int, error) {
+	b.data = append(b.data, p...)
+	return len(p), nil
+}
+
+// sttBuildJSONParts builds the OpenRouter request from one or more adjacent
+// byte slices. OpenRouter reads provider options only from its base64 JSON
+// encoding, so the payload is assembled directly into one pre-sized buffer:
+// small metadata is marshalled normally, then the audio is base64-encoded into
+// the final payload. Streaming the encoder lets a WAV header and the raw PCM
+// backing a sample slice be encoded without first joining or copying them.
+func sttBuildJSONParts(settings sttSettings, audio ...[]byte) ([]byte, error) {
+	metadata := map[string]any{
+		"model":       settings.Model,
+		"language":    "en",
+		"temperature": 0,
 	}
-	payload["language"] = "en"
-	payload["temperature"] = 0
 	if prompt := settings.vocabularyPrompt(); prompt != "" {
-		payload["provider"] = map[string]any{
+		metadata["provider"] = map[string]any{
 			"options": map[string]any{"openai": map[string]any{"prompt": prompt}},
 		}
 	}
-	return json.Marshal(payload)
+	head, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, err
+	}
+	const audioKey = `,"input_audio":{"data":"`
+	const audioTail = `","format":"wav"}`
+	encodedLen := 0
+	for _, part := range audio {
+		encodedLen += base64.StdEncoding.EncodedLen(len(part))
+	}
+	out := &appendBuffer{data: make([]byte, 0, len(head)+len(audioKey)+encodedLen+len(audioTail)+1)}
+	out.data = append(out.data, head[:len(head)-1]...) // drop the metadata object's closing brace
+	out.data = append(out.data, audioKey...)
+	encoder := base64.NewEncoder(base64.StdEncoding, out)
+	for _, part := range audio {
+		if _, err := encoder.Write(part); err != nil {
+			return nil, err
+		}
+	}
+	if err := encoder.Close(); err != nil {
+		return nil, err
+	}
+	out.data = append(out.data, audioTail...)
+	out.data = append(out.data, '}')
+	return out.data, nil
 }
 
-func sttBuildMultipart(settings sttSettings, wav []byte) ([]byte, string, error) {
+// sttBuildMultipartParts builds the small multipart prefix and suffix around
+// the WAV so the upload can stream prefix -> WAV -> suffix without copying the
+// recording into another complete buffer.
+func sttBuildMultipartParts(settings sttSettings) (prefix, suffix []byte, contentType string, err error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	if err := writer.WriteField("model", settings.Model); err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
 	for _, code := range settings.Languages {
 		if err := writer.WriteField("languages[]", code); err != nil {
-			return nil, "", err
+			return nil, nil, "", err
 		}
 	}
 	for _, term := range settings.Vocabulary {
 		if err := writer.WriteField("keywords[]", term); err != nil {
-			return nil, "", err
+			return nil, nil, "", err
 		}
 	}
 
 	header := make(textproto.MIMEHeader)
 	header.Set("Content-Disposition", `form-data; name="file"; filename="dictation.wav"`)
 	header.Set("Content-Type", "audio/wav")
-	part, err := writer.CreatePart(header)
-	if err != nil {
-		return nil, "", err
+	if _, err := writer.CreatePart(header); err != nil {
+		return nil, nil, "", err
 	}
-	if _, err := part.Write(wav); err != nil {
-		return nil, "", err
-	}
+	// Close writes the final boundary and flushes buffered part headers. With
+	// no file bytes written, the result is exactly prefix+suffix.
 	if err := writer.Close(); err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
-	return body.Bytes(), writer.FormDataContentType(), nil
+	suffix = []byte("\r\n--" + writer.Boundary() + "--\r\n")
+	full := body.Bytes()
+	if len(full) < len(suffix) || !bytes.HasSuffix(full, suffix) {
+		return nil, nil, "", errors.New("multipart prefix did not end with the generated boundary")
+	}
+	prefix = full[:len(full)-len(suffix)]
+	return prefix, suffix, writer.FormDataContentType(), nil
 }
 
-func (c *sttClient) buildRequest(ctx context.Context, wav []byte) (*http.Request, error) {
+// sttPreparedRequest holds immutable payload data for one retry sequence.
+// Every attempt gets a fresh reader over the same bytes.
+type sttPreparedRequest struct {
+	contentType   string
+	contentLength int64
+	prefix        []byte
+	// lead carries a small fixed prefix before the audio, such as a WAV header.
+	lead      []byte
+	suffix    []byte
+	wav       []byte
+	payload   []byte
+	multipart bool
+}
+
+func (p *sttPreparedRequest) reader() io.Reader {
+	if p.multipart {
+		parts := []io.Reader{bytes.NewReader(p.prefix)}
+		if len(p.lead) > 0 {
+			parts = append(parts, bytes.NewReader(p.lead))
+		}
+		parts = append(parts, bytes.NewReader(p.wav), bytes.NewReader(p.suffix))
+		return io.MultiReader(parts...)
+	}
+	return bytes.NewReader(p.payload)
+}
+
+func (c *sttClient) prepareRequest(wav []byte) (*sttPreparedRequest, error) {
 	if c.settings.Provider == providerLocal {
 		return nil, errors.New("local transcription never creates cloud requests")
 	}
-	var payload []byte
-	var err error
-	contentType := "application/json"
 	if c.settings.Provider == providerOpenAI {
-		payload, contentType, err = sttBuildMultipart(c.settings, wav)
-	} else {
-		payload, err = sttBuildJSON(c.settings, wav)
+		prefix, suffix, contentType, err := sttBuildMultipartParts(c.settings)
+		if err != nil {
+			return nil, err
+		}
+		return &sttPreparedRequest{
+			contentType:   contentType,
+			contentLength: int64(len(prefix) + len(wav) + len(suffix)),
+			prefix:        prefix,
+			suffix:        suffix,
+			wav:           wav,
+			multipart:     true,
+		}, nil
 	}
+	payload, err := sttBuildJSONParts(c.settings, wav)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(payload))
+	return &sttPreparedRequest{contentType: "application/json", contentLength: int64(len(payload)), payload: payload}, nil
+}
+
+// prepareSamplesRequest builds the upload around captured PCM instead of a
+// materialized WAV. OpenAI receives the header and the little-endian sample
+// bytes as adjacent multipart parts; OpenRouter encodes both directly into its
+// JSON payload. No full-recording copy is made.
+func (c *sttClient) prepareSamplesRequest(samples []int16, pcm []byte) (*sttPreparedRequest, error) {
+	if c.settings.Provider == providerLocal {
+		return nil, errors.New("local transcription never creates cloud requests")
+	}
+	header := wavHeader(len(samples))
+	if c.settings.Provider == providerOpenAI {
+		prefix, suffix, contentType, err := sttBuildMultipartParts(c.settings)
+		if err != nil {
+			return nil, err
+		}
+		return &sttPreparedRequest{
+			contentType:   contentType,
+			contentLength: int64(len(prefix) + len(header) + len(pcm) + len(suffix)),
+			prefix:        prefix,
+			lead:          header[:],
+			suffix:        suffix,
+			wav:           pcm,
+			multipart:     true,
+		}, nil
+	}
+	payload, err := sttBuildJSONParts(c.settings, header[:], pcm)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", contentType)
+	return &sttPreparedRequest{contentType: "application/json", contentLength: int64(len(payload)), payload: payload}, nil
+}
+
+func (c *sttClient) requestFrom(ctx context.Context, prepared *sttPreparedRequest) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, prepared.reader())
+	if err != nil {
+		return nil, err
+	}
+	req.ContentLength = prepared.contentLength
+	req.Header.Set("Content-Type", prepared.contentType)
 	req.Header.Set("Authorization", "Bearer "+c.settings.APIKey)
 	return req, nil
+}
+
+func (c *sttClient) buildRequest(ctx context.Context, wav []byte) (*http.Request, error) {
+	prepared, err := c.prepareRequest(wav)
+	if err != nil {
+		return nil, err
+	}
+	return c.requestFrom(ctx, prepared)
 }
 
 // Retry transient failures rather than dropping an already-spoken dictation.
@@ -230,13 +347,39 @@ func (c *sttClient) transcribeContext(ctx context.Context, wav []byte, observe s
 	if c.local != nil {
 		return c.local.transcribeWAV(ctx, wav, observe)
 	}
+	prepared, err := c.prepareRequest(wav)
+	if err != nil {
+		return sttResult{}, &sttBuildError{fmt.Errorf("%s: build transcription request: %w", c.settings.Provider, err)}
+	}
+	return c.transcribePrepared(ctx, prepared, observe)
+}
+
+// transcribeSamplesContext uploads captured samples directly. On little-endian
+// hosts the WAV copy is avoided entirely; the header and PCM view are read
+// straight into the request body for every retry attempt.
+func (c *sttClient) transcribeSamplesContext(ctx context.Context, samples []int16, observe sttAttemptObserver) (sttResult, error) {
+	if c.local != nil {
+		return c.local.transcribeSamples(ctx, samples, observe, nil)
+	}
+	pcm, ok := pcm16Bytes(samples)
+	if !ok {
+		return c.transcribeContext(ctx, WavEncode(samples), observe)
+	}
+	prepared, err := c.prepareSamplesRequest(samples, pcm)
+	if err != nil {
+		return sttResult{}, &sttBuildError{fmt.Errorf("%s: build transcription request: %w", c.settings.Provider, err)}
+	}
+	return c.transcribePrepared(ctx, prepared, observe)
+}
+
+func (c *sttClient) transcribePrepared(ctx context.Context, prepared *sttPreparedRequest, observe sttAttemptObserver) (sttResult, error) {
 	var lastErr error
 	for attempt := 1; attempt <= sttMaxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return sttResult{}, err
 		}
 		started := time.Now()
-		res, err := c.transcribeOnce(ctx, wav)
+		res, err := c.transcribePreparedOnce(ctx, prepared)
 		if observe != nil {
 			observe(c.settings.Model, attempt, time.Since(started), res, err)
 		}
@@ -293,9 +436,13 @@ type sttTransportError struct{ err error }
 func (e *sttTransportError) Error() string { return e.err.Error() }
 func (e *sttTransportError) Unwrap() error { return e.err }
 
-// transcribeOnce performs a single upload attempt.
-func (c *sttClient) transcribeOnce(ctx context.Context, wav []byte) (sttResult, error) {
-	req, err := c.buildRequest(ctx, wav)
+// Bound batch responses so a hostile or broken provider cannot exhaust memory.
+const sttResponseLimit = 1 << 20
+
+// transcribePreparedOnce performs a single upload attempt with a fresh reader
+// over the immutable payload.
+func (c *sttClient) transcribePreparedOnce(ctx context.Context, prepared *sttPreparedRequest) (sttResult, error) {
+	req, err := c.requestFrom(ctx, prepared)
 	if err != nil {
 		return sttResult{}, &sttBuildError{fmt.Errorf("%s: build transcription request: %w", c.settings.Provider, err)}
 	}
@@ -306,9 +453,16 @@ func (c *sttClient) transcribeOnce(ctx context.Context, wav []byte) (sttResult, 
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, sttResponseLimit+1))
 	if err != nil {
 		return sttResult{}, &sttTransportError{fmt.Errorf("%s: read transcription response: %w", c.settings.Provider, err)}
+	}
+	if len(raw) > sttResponseLimit {
+		// Preserve status-based classification for an oversized error body.
+		if resp.StatusCode != http.StatusOK {
+			return sttResult{}, c.responseError(resp.StatusCode, sttResponse{})
+		}
+		return sttResult{}, fmt.Errorf("%s: transcription response exceeded %d bytes", c.settings.Provider, sttResponseLimit)
 	}
 
 	var parsed sttResponse

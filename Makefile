@@ -16,7 +16,8 @@ native-engine:
 build: frontend native-engine
 	pkg-config --exists gtk4 webkitgtk-6.0
 	mkdir -p build
-	go build -ldflags="$(LDFLAGS)" -o build/voice-type ./cmd/voice-type
+	go build -tags production -ldflags="$(LDFLAGS)" -o build/voice-type ./cmd/voice-type
+	@go version -m build/voice-type | grep -q -- '-tags=production' || { echo 'release build is missing the production tag' >&2; exit 1; }
 
 dev:
 	wails3 dev -config ./build/config.yml
@@ -26,6 +27,7 @@ check: frontend native-engine
 	npm --prefix frontend test
 	go vet ./...
 	go test -race ./...
+	python3 -c 'import ast, pathlib; [ast.parse(p.read_text()) for p in pathlib.Path("scripts").glob("*.py")]'
 	sh -n install.sh uninstall.sh scripts/build-transcribe.sh
 	shellcheck -s sh install.sh uninstall.sh scripts/build-transcribe.sh
 

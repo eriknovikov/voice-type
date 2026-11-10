@@ -1,7 +1,9 @@
 package voicetype
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -197,6 +199,39 @@ func TestWindowActionWaitsForFrontend(t *testing.T) {
 	}
 }
 
+func TestTrayAvailabilityIsCachedAndInvalidatedOnShow(t *testing.T) {
+	calls := 0
+	bridge := &Bridge{}
+	bridge.trayQuery = func() bool {
+		calls++
+		if !bridge.mu.TryLock() {
+			t.Error("tray query held the preference mutex")
+		} else {
+			bridge.mu.Unlock()
+		}
+		return true
+	}
+	if !bridge.trayStatus() || !bridge.trayStatus() {
+		t.Fatal("tray availability was not reported")
+	}
+	if calls != 1 {
+		t.Fatalf("tray availability queried %d times within the cache window", calls)
+	}
+	bridge.setWindowVisible(true)
+	if !bridge.trayStatus() {
+		t.Fatal("invalidated cache did not refresh")
+	}
+	if calls != 2 {
+		t.Fatalf("window show did not invalidate the tray cache: %d queries", calls)
+	}
+	bridge.trayMu.Lock()
+	bridge.trayCheckedAt = time.Now().Add(-31 * time.Second)
+	bridge.trayMu.Unlock()
+	if !bridge.trayStatus() || calls != 3 {
+		t.Fatalf("expired tray cache was not refreshed: %d queries", calls)
+	}
+}
+
 func TestFreshPreferencesRegisterBackgroundStartup(t *testing.T) {
 	isolatedPreferences(t)
 	prefs, notice, err := loadPreferences()
@@ -230,24 +265,34 @@ func TestCurrentShortcutIsNotRemigrated(t *testing.T) {
 }
 
 func TestDiagnosticExportFollowsOutcome(t *testing.T) {
-	records := []DiagnosticRecord{
+	isolatedPreferences(t)
+	log := newRunLog("test")
+	defer log.close("ok")
+	for _, record := range []runLogRecord{
 		{Event: "dictation", Outcome: "ok"},
 		{Event: "startup.failed", Outcome: "error", Message: "Another Voice Type engine is running."},
 		{Event: "config.recovered", Outcome: "ok", Message: "Settings restored."},
+	} {
+		log.write(record)
 	}
 	for _, test := range []struct {
 		filter string
 		count  int
 	}{{"all", 3}, {"errors", 1}, {"ok", 2}} {
-		data, err := encodeDiagnosticLogs(records, test.filter)
-		if err != nil {
+		var data bytes.Buffer
+		if err := log.writeFiltered(test.filter, &data); err != nil {
 			t.Fatal(err)
 		}
-		if got := strings.Count(string(data), "\n"); got != test.count {
+		if got := strings.Count(data.String(), "\n"); got != test.count {
 			t.Fatalf("%s: got %d records", test.filter, got)
 		}
+		// Exported records are one JSON object per line and contain no buffer
+		// terminator beyond the trailing newline.
+		if data.Len() > 0 && !bytes.HasSuffix(data.Bytes(), []byte("\n")) {
+			t.Fatalf("%s: export did not end with a newline", test.filter)
+		}
 	}
-	if _, err := encodeDiagnosticLogs(records, "query"); err == nil {
+	if err := log.writeFiltered("query", io.Discard); err == nil {
 		t.Fatal("accepted unknown outcome")
 	}
 }
@@ -276,12 +321,12 @@ func TestShortcutDoesNotWaitForPreferenceChanges(t *testing.T) {
 	}
 	deadline := time.Now().Add(time.Second)
 	for {
-		rows, err := service.Logs()
+		rows, err := service.Logs("all", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
 		found := false
-		for _, row := range rows {
+		for _, row := range rows.Records {
 			if row.Event == "dictation.completed" {
 				found = true
 			}

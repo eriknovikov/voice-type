@@ -30,9 +30,10 @@ int vt_asr_stream_begin(struct vt_asr_session *session,
                         const char *vocabulary, char *error,
                         size_t error_size);
 int vt_asr_stream_feed(struct vt_asr_session *session, const float *samples,
-                       int sample_count, char *error, size_t error_size);
-int vt_asr_stream_finalize(struct vt_asr_session *session, char *error,
-                           size_t error_size);
+                       int sample_count, int *result_changed, char *error,
+                       size_t error_size);
+int vt_asr_stream_finalize(struct vt_asr_session *session, int *result_changed,
+                           char *error, size_t error_size);
 int vt_asr_stream_text(struct vt_asr_session *session, char **full_text,
                        char **committed_text, char *error,
                        size_t error_size);

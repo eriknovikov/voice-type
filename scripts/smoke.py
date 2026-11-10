@@ -71,6 +71,49 @@ with tempfile.TemporaryDirectory(prefix="voice-type-smoke-") as directory:
                 assert columns[3] != "0A" or f"socket:[{columns[9]}]" not in descriptors, "desktop opened TCP listener"
         assert not (root / "runtime/voice-type/desktop.sock").exists()
 
+    def process_tree():
+        """Return the desktop process and its WebKit/helper descendants."""
+        pids = {process.pid}
+        changed = True
+        while changed:
+            changed = False
+            for status in pathlib.Path("/proc").glob("[0-9]*/status"):
+                try:
+                    pid = int(status.parent.name)
+                    ppid_line = next(line for line in status.read_text().splitlines() if line.startswith("PPid:"))
+                except (OSError, StopIteration, ValueError):
+                    continue
+                if ppid_line.split(":", 1)[1].strip().isdigit() and int(ppid_line.split(":", 1)[1]) in pids and pid not in pids:
+                    pids.add(pid)
+                    changed = True
+        return pids
+
+    def memory_report():
+        """Sum PSS, which avoids double-counting shared WebKit mappings."""
+        pids = process_tree()
+        pss = 0
+        for pid in pids:
+            try:
+                for line in pathlib.Path(f"/proc/{pid}/smaps_rollup").read_text().splitlines():
+                    if line.startswith("Pss:"):
+                        pss += int(line.split()[1])
+                        break
+            except (OSError, ValueError):
+                pass
+        try:
+            descriptors = len(list(pathlib.Path(f"/proc/{process.pid}/fd").iterdir()))
+        except OSError:
+            descriptors = -1
+        return pss, len(pids), descriptors
+
+    memory_samples = []
+
+    def record_memory(label):
+        pss, processes, descriptors = memory_report()
+        memory_samples.append((label, pss))
+        print(f"Memory sample {label}: PSS {pss} KiB across {processes} processes, {descriptors} fds.")
+        return pss
+
     process = None
     occupied = socket.socket()
     try:
@@ -100,6 +143,7 @@ with tempfile.TemporaryDirectory(prefix="voice-type-smoke-") as directory:
                 assert owns_engine() and process.poll() is None
             assert not any(row["event"] == "dictation.completed" for row in records()), "cold toggle bypassed setup"
             no_listeners()
+            record_memory("startup-idle")
             # Each one-way command reaches the primary and fails safely on setup.
             for args in (("--toggle",), ("--toggle",)):
                 previous = sum(row["event"] == "dictation.completed" for row in records())
@@ -107,6 +151,7 @@ with tempfile.TemporaryDirectory(prefix="voice-type-smoke-") as directory:
                 wait_for(lambda: sum(row["event"] == "dictation.completed" for row in records()) > previous,
                          "forwarded toggle")
             assert all(row["outcome"] == "configuration_error" for row in records() if row["event"] == "dictation.completed")
+            record_memory("after-forwarded-commands")
             # Secondary launches must not read config/preferences or open logs.
             before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file() and path.suffix in (".json", ".jsonc")}
             invoke("--background")
@@ -136,6 +181,9 @@ with tempfile.TemporaryDirectory(prefix="voice-type-smoke-") as directory:
                 assert diagnostics.read_bytes() == snapshot, "conflicting engine touched logs"
                 process.terminate()
                 assert process.wait(timeout=15) in (0, 1)
+            if memory_samples:
+                values = [value for _, value in memory_samples]
+                print(f"PSS summary: min {min(values)} KiB, peak {max(values)} KiB, final {values[-1]} KiB across {len(values)} samples.")
             print("Native smoke passed: no TCP/socket, occupied port ignored, cold quit/setup safe, single-instance commands work, Quit/SIGTERM release engine, startup conflict stays visible.")
         except Exception:
             log.flush()

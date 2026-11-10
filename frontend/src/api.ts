@@ -119,6 +119,16 @@ export interface LogRecord {
     stop_to_submission_ms?: number;
   };
 }
+export interface LogPage {
+  records: LogRecord[];
+  revision: string;
+  outcome: string;
+  offset: number;
+  limit: number;
+  total: number;
+  retained: number;
+  unchanged?: boolean;
+}
 const call = <T>(method: string, ...args: unknown[]): Promise<T> =>
   Call.ByName(
     `github.com/eriknovikov/voice-type.Bridge.${method}`,
@@ -157,10 +167,11 @@ export const api = {
   startTest: (id: string) => call<void>("StartMicrophoneTest", id),
   stopTest: () => call<void>("StopMicrophoneTest"),
   toggle: () => call<void>("Toggle"),
-  logs: () => call<LogRecord[]>("Logs"),
+  logs: (outcome: string, offset: number) =>
+    call<LogPage>("Logs", outcome, offset),
   exportLogs: (outcome: string) => call<void>("ExportLogs", outcome),
   clearLogs: () => call<void>("ClearLogs"),
-  frontendReady: () => call<void>("FrontendReady"),
+  frontendReady: () => call<boolean>("FrontendReady"),
   requestHide: () => call<void>("RequestHide"),
   quit: () => call<void>("RequestQuit"),
   completeWindowAction: (action: "hide" | "quit") =>

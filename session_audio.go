@@ -50,10 +50,24 @@ func (b *sessionAudioBuffer) acknowledge() int {
 	return b.startupSamples
 }
 func (b *sessionAudioBuffer) read(offset int) ([]int16, bool) {
+	samples, closed := b.readInto(nil, offset)
+	return samples, closed
+}
+
+// readInto copies the next bounded chunk into dst so an uploader can reuse one
+// sample buffer instead of allocating a copy per chunk.
+func (b *sessionAudioBuffer) readInto(dst []int16, offset int) ([]int16, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	end := min(offset+3200, len(b.samples)) // 200 ms, independent of callback size
-	return append([]int16(nil), b.samples[offset:end]...), b.closed
+	chunk := b.samples[offset:end]
+	if cap(dst) < len(chunk) {
+		dst = make([]int16, len(chunk))
+	} else {
+		dst = dst[:len(chunk)]
+	}
+	copy(dst, chunk)
+	return dst, b.closed
 }
 func (b *sessionAudioBuffer) advance(sent int) {
 	b.mu.Lock()

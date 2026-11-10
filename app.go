@@ -170,16 +170,32 @@ func Run(version string, command Command) error {
 		router.start(startupReady)
 		b.engine.RecordDiagnostic("desktop.started", "ok", "Voice Type started.")
 	})
-	window := app.Window.NewWithOptions(application.WebviewWindowOptions{Title: "Voice Type", Frameless: true, Width: 1040, Height: 740, MinWidth: 760, MinHeight: 560, URL: "/", Hidden: hidden})
-	b.window = window
-	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
-		e.Cancel()
-		go b.RequestHide()
-	})
+	// The settings window is created on first use for background and toggle
+	// launches. A hidden start then keeps WebKit and its helper processes out of
+	// memory until the user actually opens settings.
+	b.newWindow = func() *application.WebviewWindow {
+		window := app.Window.NewWithOptions(application.WebviewWindowOptions{Title: "Voice Type", Frameless: true, Width: 1040, Height: 740, MinWidth: 760, MinHeight: 560, URL: "/"})
+		window.OnWindowEvent(events.Common.WindowShow, func(*application.WindowEvent) { b.setWindowVisible(true) })
+		window.OnWindowEvent(events.Common.WindowHide, func(*application.WindowEvent) { b.setWindowVisible(false) })
+		window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+			e.Cancel()
+			go b.RequestHide()
+		})
+		return window
+	}
+	if !hidden {
+		b.setWindow(b.newWindow())
+	}
 	tray := app.SystemTray.New()
 	tray.SetIcon(trayIcon("idle"))
 	tray.SetTooltip("Voice Type")
-	show := func() { window.Show(); window.Focus() }
+	show := func() {
+		if window := b.ensureWindow(); window != nil {
+			window.Show()
+			window.Focus()
+			b.setWindowVisible(true)
+		}
+	}
 	tray.OnClick(show)
 	// Keep action IDs stable across state changes. A tray host can deliver a
 	// click from a layout it fetched just before a status update.
