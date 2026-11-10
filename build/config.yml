@@ -1,0 +1,52 @@
+# Wails v3 development configuration.
+#
+# Run the application with:
+#   make dev
+#
+# Wails starts Vite, rebuilds the Go backend when Go or native sources change,
+# and restarts the development binary. The production build remains `make build`.
+version: '3'
+
+dev_mode:
+  root_path: .
+  log_level: info
+  debounce: 500
+  ignore:
+    dir:
+      - .git
+      - node_modules
+      - frontend
+      - build
+    file:
+      - "*_test.go"
+    watched_extension:
+      - "*.go"
+      - "*.cpp"
+      - "*.h"
+      - "*.sh"
+    git_ignore: true
+  executes:
+    - name: frontend
+      type: background
+      cmd: |
+        set -eu
+        test -d frontend/node_modules || npm --prefix frontend ci
+        npm --prefix frontend run dev -- --port "${WAILS_VITE_PORT:-9245}" --strictPort
+    - name: backend
+      type: blocking
+      cmd: |
+        set -eu
+        make native-engine
+        mkdir -p frontend/dist
+        test -f frontend/dist/index.html || printf '%s\n' '<!doctype html><html><body></body></html>' > frontend/dist/index.html
+        pkg-config --exists gtk4 webkitgtk-6.0
+        go build -ldflags="-s -w -X main.version=$(cat VERSION)-dev" -o build/voice-type-dev ./cmd/voice-type
+      env:
+        CGO_ENABLED: "1"
+        PKG_CONFIG_PATH: "build/transcribe/pkgconfig"
+    - name: app
+      cmd: ./build/voice-type-dev
+      type: primary
+      exit_policy: shutdown
+      env:
+        VOICE_TYPE_DEV: "1"

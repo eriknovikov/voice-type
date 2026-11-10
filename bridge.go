@@ -284,6 +284,10 @@ func (b *Bridge) ResetBrokenSettings(revision string) (Settings, error) {
 }
 
 func (b *Bridge) registerShortcuts(prefs Preferences) error {
+	if developmentMode() {
+		// Development runs must not replace the installed app's shortcut.
+		return nil
+	}
 	if isGNOME() {
 		return applyGNOMEShortcuts(prefs, false)
 	}
@@ -325,6 +329,10 @@ func (b *Bridge) EndShortcutCapture() error {
 }
 
 func (b *Bridge) releaseShortcuts() error {
+	if developmentMode() {
+		// No shortcut was registered by a development run.
+		return nil
+	}
 	if isGNOME() {
 		return applyGNOMEShortcuts(b.prefs, true)
 	}

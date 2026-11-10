@@ -9,6 +9,7 @@ management socket, HTTP control listener, or standalone configuration CLI.
 is embedded. Native builds require CGO, GTK4 and WebKitGTK 6.0.
 
 - `make build`: frontend and native app in `build/voice-type`.
+- `make dev`: Wails watcher with Vite HMR and `build/voice-type-dev`.
 - `make check`: frontend tests/build, formatting, Go vet/race tests, shell checks.
 - `make native-check`: isolated native tray and application smoke checks.
 - `./install.sh --local`: build and install the application for the current user.

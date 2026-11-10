@@ -3,7 +3,7 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 export CGO_ENABLED = 1
 export PKG_CONFIG_PATH := $(CURDIR)/build/transcribe/pkgconfig:$(PKG_CONFIG_PATH)
 
-.PHONY: all build frontend native-engine check native-check install clean
+.PHONY: all build frontend native-engine check native-check install clean dev
 all: build
 
 frontend:
@@ -17,6 +17,9 @@ build: frontend native-engine
 	pkg-config --exists gtk4 webkitgtk-6.0
 	mkdir -p build
 	go build -ldflags="$(LDFLAGS)" -o build/voice-type ./cmd/voice-type
+
+dev:
+	wails3 dev -config ./build/config.yml
 
 check: frontend native-engine
 	@test -z "$$(gofmt -l *.go cmd/voice-type/*.go)" || { gofmt -l *.go cmd/voice-type/*.go; exit 1; }
@@ -34,4 +37,5 @@ install:
 	./install.sh --local
 
 clean:
-	rm -rf build frontend/dist
+	@if [ -d build ]; then find build -mindepth 1 -maxdepth 1 ! -name config.yml -exec rm -rf {} +; fi
+	rm -rf frontend/dist

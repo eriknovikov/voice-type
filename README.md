@@ -54,8 +54,22 @@ contains the React UI. `cmd/voice-type` is the only executable entry point.
 CGO is required. The build downloads the SHA-256-pinned
 `transcribe.cpp` source at revision
 `2778ae4bf5ca5f394d129a39467f4ad9552dc34f` and statically links its CPU
-engine. The build embeds the frontend, with no development server. The root
-`VERSION` is the sole application version source.
+engine. Production builds embed the frontend. The root `VERSION` is the sole
+application version source.
+
+For UI and backend development, run:
+
+```sh
+make dev
+```
+
+Wails starts Vite on port 9245, rebuilds the native backend when Go, C/C++, or
+shell sources change, and restarts `build/voice-type-dev`. The development app
+uses a separate identity and engine lock, and does not register desktop
+shortcuts or Start at login. It still uses your normal profiles, settings,
+credentials, and models, so avoid editing shared state while also using the
+installed app. The watcher configuration is `build/config.yml`; `wails3 dev`
+can also be run directly.
 
 ## Application commands
 
