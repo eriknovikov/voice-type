@@ -215,12 +215,12 @@ func TestRunningServiceReportsEachConfigurationRecovery(t *testing.T) {
 			t.Fatal("notice repeated on status polling")
 		}
 	}
-	records, err := service.Logs()
+	records, err := service.Logs("all", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	recovered := 0
-	for _, record := range records {
+	for _, record := range records.Records {
 		if record.Event == "configuration.recovered" {
 			recovered++
 			if record.Message == "" {

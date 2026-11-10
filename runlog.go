@@ -10,17 +10,38 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 )
 
 const runLogMaxBytes = 5 << 20
 
+// One UI page. Filtering happens before pagination, so a page always contains
+// at most this many matching records.
+const runLogPageSize = 200
+
 type runLog struct {
 	mu      sync.Mutex
 	file    *os.File
 	path    string
 	version string
+	// lastPageToken makes an unchanged poll skip parsing the history entirely.
+	lastPageToken string
+}
+
+// LogPage is a bounded slice of the retained history plus a revision token.
+// Unchanged is true when the same revision, filter and offset were requested
+// again; Records is then empty and the caller keeps its current page.
+type LogPage struct {
+	Records   []runLogRecord `json:"records"`
+	Revision  string         `json:"revision"`
+	Outcome   string         `json:"outcome"`
+	Offset    int            `json:"offset"`
+	Limit     int            `json:"limit"`
+	Total     int            `json:"total"`
+	Retained  int            `json:"retained"`
+	Unchanged bool           `json:"unchanged"`
 }
 
 type runLogAttempt struct {
@@ -211,6 +232,7 @@ func (l *runLog) write(record runLogRecord) {
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.lastPageToken = ""
 	if l.file == nil {
 		return
 	}
@@ -268,40 +290,188 @@ func requestOutcome(err error) string {
 }
 
 // records returns at most two bounded log segments, newest entries first.
+// It is retained for diagnostics and tests that need the complete history;
+// the UI uses page instead.
 func (l *runLog) records() ([]runLogRecord, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	out := []runLogRecord{}
+	if err := scanLogRecords(func(record runLogRecord) error {
+		out = append(out, record)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	reverseRecords(out)
+	return out, nil
+}
+
+func validateLogOutcome(outcome string) error {
+	if outcome != "all" && outcome != "errors" && outcome != "ok" {
+		return errors.New("choose a valid log outcome")
+	}
+	return nil
+}
+
+func logRecordMatches(record runLogRecord, outcome string) bool {
+	switch outcome {
+	case "errors":
+		return record.Outcome != "ok"
+	case "ok":
+		return record.Outcome == "ok"
+	default:
+		return true
+	}
+}
+
+// page returns one filtered page, newest first, without materializing the full
+// history. A repeated request with the same file revision, filter and offset
+// returns Unchanged instead of re-parsing or serializing records.
+func (l *runLog) page(outcome string, offset int) (LogPage, error) {
+	if outcome == "" {
+		outcome = "all"
+	}
+	if err := validateLogOutcome(outcome); err != nil {
+		return LogPage{}, err
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	revision := l.pageRevisionLocked()
+	token := revision + "|" + outcome + "|" + strconv.Itoa(offset)
+	if token == l.lastPageToken {
+		return LogPage{Records: []runLogRecord{}, Revision: token, Outcome: outcome, Offset: offset, Limit: runLogPageSize, Unchanged: true}, nil
+	}
+
+	// First pass counts retained and matching records. Files are read oldest
+	// first, so the requested newest-first window maps to a range at the end.
+	retained := 0
+	total := 0
+	if err := scanLogRecords(func(record runLogRecord) error {
+		retained++
+		if logRecordMatches(record, outcome) {
+			total++
+		}
+		return nil
+	}); err != nil {
+		return LogPage{}, err
+	}
+	start := total - offset - runLogPageSize
+	if start < 0 {
+		start = 0
+	}
+	end := total - offset
+	if end < start {
+		end = start
+	}
+	page := make([]runLogRecord, 0, end-start)
+	index := 0
+	if err := scanLogRecords(func(record runLogRecord) error {
+		if !logRecordMatches(record, outcome) {
+			return nil
+		}
+		if index >= start && index < end {
+			page = append(page, record)
+		}
+		index++
+		return nil
+	}); err != nil {
+		return LogPage{}, err
+	}
+	reverseRecords(page)
+	l.lastPageToken = token
+	return LogPage{Records: page, Revision: token, Outcome: outcome, Offset: offset, Limit: runLogPageSize, Total: total, Retained: retained}, nil
+}
+
+// writeFiltered streams every retained record matching outcome to w. It never
+// assembles a complete export buffer.
+func (l *runLog) writeFiltered(outcome string, w io.Writer) error {
+	if outcome == "" {
+		outcome = "all"
+	}
+	if err := validateLogOutcome(outcome); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	buf := bufio.NewWriter(w)
+	err := scanLogRecords(func(record runLogRecord) error {
+		if !logRecordMatches(record, outcome) {
+			return nil
+		}
+		raw, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		if _, err := buf.Write(raw); err != nil {
+			return err
+		}
+		return buf.WriteByte('\n')
+	})
+	if err != nil {
+		return err
+	}
+	return buf.Flush()
+}
+
+// pageRevisionLocked fingerprints both bounded log files. It must be called
+// with l.mu held so a concurrent rotation cannot pair a new revision with old
+// records.
+func (l *runLog) pageRevisionLocked() string {
+	revision := ""
+	for _, path := range []string{runLogFilePath() + ".1", runLogFilePath()} {
+		info, err := os.Stat(path)
+		if err != nil {
+			revision += "missing;"
+			continue
+		}
+		revision += strconv.FormatInt(info.Size(), 10) + ":" + strconv.FormatInt(info.ModTime().UnixNano(), 10) + ";"
+	}
+	return revision
+}
+
+func reverseRecords(records []runLogRecord) {
+	for i, j := 0, len(records)-1; i < j; i, j = i+1, j-1 {
+		records[i], records[j] = records[j], records[i]
+	}
+}
+
+// scanLogRecords reads both bounded segments oldest first and calls visit for
+// every successfully decoded record.
+func scanLogRecords(visit func(runLogRecord) error) error {
 	for _, path := range []string{runLogFilePath() + ".1", runLogFilePath()} {
 		f, err := os.Open(path)
 		if os.IsNotExist(err) {
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return err
 		}
 		scanner := bufio.NewScanner(io.LimitReader(f, runLogMaxBytes+1))
 		scanner.Buffer(make([]byte, 4096), 1<<20)
 		for scanner.Scan() {
 			var record runLogRecord
 			if json.Unmarshal(scanner.Bytes(), &record) == nil {
-				out = append(out, record)
+				if err := visit(record); err != nil {
+					f.Close()
+					return err
+				}
 			}
 		}
 		err = scanner.Err()
 		f.Close()
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
-	}
-	return out, nil
+	return nil
 }
 func (l *runLog) clear() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.lastPageToken = ""
 	if l.file != nil {
 		if err := l.file.Truncate(0); err != nil {
 			return err

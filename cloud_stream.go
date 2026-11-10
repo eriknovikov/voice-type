@@ -18,6 +18,8 @@ const cloudQueueSamples = 5 * wavSampleRate
 
 // Capture owns the complete recording. Streams receive copies without waiting
 // for inference, insertion, or the network on the microphone callback.
+// OfferSamples takes ownership of the slice it receives; the recorder
+// transfers the copy it made for its chunk sink.
 type transcriptionStream interface {
 	OfferSamples([]int16)
 	Finish() localStreamResult
@@ -200,15 +202,23 @@ func (s *cloudStreamSession) send(startupSamples int) {
 	defer close(s.writerDone)
 	var resampler pcmResampler
 	nonempty := false
+	// Reused for the whole stream. Buffers are only recycled after the
+	// synchronous WebSocket write returns.
+	readBuf := make([]int16, 0, 3200)
+	resampleBuf := make([]int16, 0, 4801)
+	var pcmBuf []byte
+	messageBuf := make([]byte, 0, len(realtimeAppendPrefix)+base64.StdEncoding.EncodedLen(2*4801)+len(realtimeAppendSuffix))
 	appendAudio := func(samples []int16) bool {
 		if len(samples) == 0 {
 			return true
 		}
-		pcm := make([]byte, 2*len(samples))
-		for i, v := range samples {
-			binary.LittleEndian.PutUint16(pcm[2*i:], uint16(v))
+		pcm, ok := pcm16Bytes(samples)
+		if !ok {
+			pcmBuf = pcm16ToBytes(pcmBuf[:0], samples)
+			pcm = pcmBuf
 		}
-		if writeRealtime(s.ctx, s.conn, map[string]any{"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(pcm)}) != nil {
+		messageBuf = appendRealtimeAudio(messageBuf[:0], pcm)
+		if s.conn.Write(s.ctx, websocket.MessageText, messageBuf) != nil {
 			s.fail("OpenAI WebSocket audio upload failed")
 			return false
 		}
@@ -229,10 +239,11 @@ func (s *cloudStreamSession) send(startupSamples int) {
 			s.mu.Unlock()
 			backlogDrained = true
 		}
-		samples, closed := s.audio.read(offset)
+		samples, closed := s.audio.readInto(readBuf, offset)
 		if len(samples) > 0 {
 			nonempty = true
-			if !appendAudio(resampler.Process(samples)) {
+			resampleBuf = resampler.ProcessInto(resampleBuf[:0], samples)
+			if !appendAudio(resampleBuf) {
 				return
 			}
 			offset += len(samples)
@@ -244,13 +255,14 @@ func (s *cloudStreamSession) send(startupSamples int) {
 				s.fail("no audio captured")
 				return
 			}
-			if !appendAudio(resampler.Flush()) {
+			resampleBuf = resampler.FlushInto(resampleBuf[:0])
+			if !appendAudio(resampleBuf) {
 				return
 			}
 			s.mu.Lock()
 			s.commitRequested = true
 			s.mu.Unlock()
-			if writeRealtime(s.ctx, s.conn, map[string]any{"type": "input_audio_buffer.commit"}) != nil {
+			if s.conn.Write(s.ctx, websocket.MessageText, []byte(realtimeCommitMessage)) != nil {
 				s.fail("OpenAI WebSocket commit failed")
 				return
 			}
@@ -265,6 +277,35 @@ func (s *cloudStreamSession) send(startupSamples int) {
 		case <-s.audio.wake:
 		}
 	}
+}
+
+const (
+	realtimeAppendPrefix  = `{"type":"input_audio_buffer.append","audio":"`
+	realtimeAppendSuffix  = `"}`
+	realtimeCommitMessage = `{"type":"input_audio_buffer.commit"}`
+)
+
+// pcm16ToBytes appends little-endian PCM16 into dst so the uploader can reuse
+// one byte buffer.
+func pcm16ToBytes(dst []byte, samples []int16) []byte {
+	need := 2 * len(samples)
+	if cap(dst) < need {
+		dst = make([]byte, need)
+	} else {
+		dst = dst[:need]
+	}
+	for i, sample := range samples {
+		binary.LittleEndian.PutUint16(dst[2*i:], uint16(sample))
+	}
+	return dst
+}
+
+// appendRealtimeAudio builds the fixed append message without JSON escaping or
+// an intermediate base64 string. The base64 alphabet needs no JSON escaping.
+func appendRealtimeAudio(dst, pcm []byte) []byte {
+	dst = append(dst, realtimeAppendPrefix...)
+	dst = base64.StdEncoding.AppendEncode(dst, pcm)
+	return append(dst, realtimeAppendSuffix...)
 }
 
 func (s *cloudStreamSession) receive() {
@@ -364,30 +405,41 @@ type pcmResampler struct {
 }
 
 func (r *pcmResampler) Process(samples []int16) []int16 {
-	out := make([]int16, 0, (len(samples)*3+1)/2)
+	return r.ProcessInto(nil, samples)
+}
+
+// ProcessInto appends resampled output to dst. Callers that stream reuse dst
+// across chunks to avoid per-chunk allocation.
+func (r *pcmResampler) ProcessInto(dst []int16, samples []int16) []int16 {
+	if cap(dst) < (len(samples)*3+1)/2 {
+		dst = make([]int16, 0, (len(samples)*3+1)/2)
+	}
 	for _, sample := range samples {
 		index := r.count
 		if index == 0 {
-			out = append(out, sample)
+			dst = append(dst, sample)
 			r.next = 1
 		} else {
 			for r.next*2 <= index*3 {
 				fraction := r.next*2 - (index-1)*3
 				value := (int64(r.previous)*(3-fraction) + int64(sample)*fraction) / 3
-				out = append(out, int16(value))
+				dst = append(dst, int16(value))
 				r.next++
 			}
 		}
 		r.previous = sample
 		r.count++
 	}
-	return out
+	return dst
 }
 func (r *pcmResampler) Flush() []int16 {
-	var out []int16
+	return r.FlushInto(nil)
+}
+
+func (r *pcmResampler) FlushInto(dst []int16) []int16 {
 	for r.next*2 < r.count*3 {
-		out = append(out, r.previous)
+		dst = append(dst, r.previous)
 		r.next++
 	}
-	return out
+	return dst
 }

@@ -77,11 +77,11 @@ func TestEngineLifecycleAndIsolation(t *testing.T) {
 	if service.Status().Error != "" {
 		t.Fatal("saved credentials did not refresh service")
 	}
-	logs, err := service.Logs()
+	logs, err := service.Logs("all", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(logs) == 0 {
+	if len(logs.Records) == 0 {
 		t.Fatal("missing diagnostics")
 	}
 	if err := service.ClearLogs(); err != nil {

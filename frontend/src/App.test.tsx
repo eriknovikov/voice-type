@@ -11,7 +11,7 @@ import {
   within,
 } from "@testing-library/react";
 import { App } from "./App";
-import { api, type Settings, type DesktopInfo } from "./api";
+import { api, type Settings, type DesktopInfo, type LogPage, type LogRecord } from "./api";
 const eventHandlers = vi.hoisted(
   () => new Map<string, (event: { data: unknown }) => void>(),
 );
@@ -118,7 +118,7 @@ beforeEach(() => {
     error: "",
     level: 0,
   });
-  vi.mocked(api.logs).mockResolvedValue([]);
+  vi.mocked(api.logs).mockResolvedValue(logPage());
   vi.mocked(api.microphones).mockResolvedValue([]);
   vi.mocked(api.localModels).mockResolvedValue([
     {
@@ -143,7 +143,6 @@ beforeEach(() => {
     api.workspace,
     api.beginShortcutCapture,
     api.endShortcutCapture,
-    api.frontendReady,
     api.requestHide,
     api.completeWindowAction,
     api.copyAPIKey,
@@ -156,6 +155,20 @@ beforeEach(() => {
     api.removeLocalModel,
   ])
     vi.mocked(method).mockResolvedValue();
+  vi.mocked(api.frontendReady).mockResolvedValue(true);
+});
+const logPage = (
+  records: LogRecord[] = [],
+  overrides: Partial<LogPage> = {},
+): LogPage => ({
+  records,
+  revision: "revision",
+  outcome: "all",
+  offset: 0,
+  limit: 200,
+  total: records.length,
+  retained: records.length,
+  ...overrides,
 });
 afterEach(cleanup);
 const ready = async () => {
@@ -393,29 +406,48 @@ describe("autosave", () => {
   });
 });
 it("loads logs only on opening, retains expansion and exports the outcome without search", async () => {
-  vi.mocked(api.logs).mockResolvedValue([
-    {
-      event: "config_recovery",
-      outcome: "ok",
-      error: "Configuration restored.",
-      timestamp: "2026-11-06T10:00:00Z",
-      provider: "",
-      configured_model: "",
-      total_ms: 0,
-      audio_ms: 0,
-      attempt_count: 0,
-      attempts: [],
-    },
-  ]);
+  vi.mocked(api.logs).mockResolvedValue(
+    logPage([
+      {
+        event: "config_recovery",
+        outcome: "ok",
+        error: "Configuration restored.",
+        timestamp: "2026-11-06T10:00:00Z",
+        provider: "",
+        configured_model: "",
+        total_ms: 0,
+        audio_ms: 0,
+        attempt_count: 0,
+        attempts: [],
+      },
+    ]),
+  );
   await ready();
   expect(api.logs).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Logs" }));
   const summary = await screen.findByText("Settings recovered");
   expect(summary.closest("details")).toBeTruthy();
+  expect(api.logs).toHaveBeenCalledWith("all", 0);
   expect(screen.queryByLabelText("Search logs")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Export" }));
   await waitFor(() => expect(api.exportLogs).toHaveBeenCalledWith("all"));
 });
+it("pauses status polling while the native window is hidden and refreshes when shown", async () => {
+  await ready();
+  await waitFor(() => expect(api.status).toHaveBeenCalled());
+  act(() =>
+    eventHandlers.get("window-visibility")?.({ data: false }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const paused = vi.mocked(api.status).mock.calls.length;
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  expect(api.status).toHaveBeenCalledTimes(paused);
+  act(() => eventHandlers.get("window-visibility")?.({ data: true }));
+  await waitFor(() =>
+    expect(vi.mocked(api.status).mock.calls.length).toBeGreaterThan(paused),
+  );
+});
+
 it("keeps inline keyboard capture and immediate login preference saving", async () => {
   await ready();
   fireEvent.click(screen.getByRole("switch", { name: "Start at login" }));
@@ -733,8 +765,45 @@ it("keeps a failed deletion open and allows an explicit retry", async () => {
   expect(api.deleteProfile).toHaveBeenCalledTimes(2);
 });
 
+it("requests bounded log pages and replaces the mounted page", async () => {
+  const ok: LogRecord = {
+    event: "dictation.completed",
+    outcome: "ok",
+    timestamp: "2026-11-06T10:00:00Z",
+    provider: "openai",
+    configured_model: "whisper-1",
+    total_ms: 1000,
+    audio_ms: 900,
+    attempt_count: 1,
+    attempts: [],
+  };
+  const failed: LogRecord = {
+    ...ok,
+    event: "startup.failed",
+    outcome: "error",
+    timestamp: "2026-11-06T09:00:00Z",
+  };
+  vi.mocked(api.logs).mockImplementation(async (_outcome, offset) =>
+    offset === 0
+      ? logPage([ok], { revision: "first", total: 400, retained: 400 })
+      : logPage([failed], {
+          revision: "second",
+          offset,
+          total: 400,
+          retained: 400,
+        }),
+  );
+  await ready();
+  fireEvent.click(screen.getByRole("button", { name: "Logs" }));
+  await screen.findByText("Dictation completed");
+  fireEvent.click(screen.getByRole("button", { name: "Older" }));
+  await screen.findByText("Startup failed");
+  expect(api.logs).toHaveBeenCalledWith("all", 200);
+  expect(screen.queryByText("Dictation completed")).toBeNull();
+});
+
 it("keeps expanded logs open when polling prepends another event", async () => {
-  const old = {
+  const old: LogRecord = {
     event: "dictation.completed",
     outcome: "ok",
     timestamp: "2026-11-06T10:00:00Z",
@@ -745,7 +814,7 @@ it("keeps expanded logs open when polling prepends another event", async () => {
     attempt_count: 1,
     attempts: [{ outcome: "ok" }],
   };
-  vi.mocked(api.logs).mockResolvedValue([old]);
+  vi.mocked(api.logs).mockResolvedValue(logPage([old], { revision: "a" }));
   await ready();
   fireEvent.click(screen.getByRole("button", { name: "Logs" }));
   const title = await screen.findByText("Dictation completed");
@@ -755,22 +824,28 @@ it("keeps expanded logs open when polling prepends another event", async () => {
   expect(
     within(details).getByText("Technical details").closest("details")!.open,
   ).toBe(false);
-  vi.mocked(api.logs).mockResolvedValue([
-    {
-      ...old,
-      event: "startup.failed",
-      outcome: "error",
-      timestamp: "2026-11-06T11:00:00Z",
-    },
-    old,
-  ]);
+  const failure: LogRecord = {
+    ...old,
+    event: "startup.failed",
+    outcome: "error",
+    timestamp: "2026-11-06T11:00:00Z",
+  };
+  vi.mocked(api.logs).mockResolvedValue(
+    logPage([failure, old], { revision: "b", total: 2 }),
+  );
   await screen.findByText("Startup failed", {}, { timeout: 3000 });
   expect(screen.getByText("Dictation completed").closest("details")).toBe(
     details,
   );
   expect(details.open).toBe(true);
+  vi.mocked(api.logs).mockResolvedValue(
+    logPage([failure], { revision: "c", outcome: "errors" }),
+  );
   fireEvent.click(screen.getByRole("radio", { name: "Errors" }));
-  expect(screen.queryByText("Dictation completed")).toBeNull();
+  await waitFor(() => expect(api.logs).toHaveBeenCalledWith("errors", 0));
+  await waitFor(() =>
+    expect(screen.queryByText("Dictation completed")).toBeNull(),
+  );
   fireEvent.click(screen.getByRole("button", { name: "Export" }));
   await waitFor(() => expect(api.exportLogs).toHaveBeenCalledWith("errors"));
 });

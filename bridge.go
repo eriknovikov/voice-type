@@ -1,9 +1,7 @@
 package voicetype
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -32,6 +30,8 @@ type Bridge struct {
 	app                 *application.App
 	copyText            func(string) bool
 	window              *application.WebviewWindow
+	windowMu            sync.Mutex
+	newWindow           func() *application.WebviewWindow
 	engine              *engine
 	mu                  sync.Mutex
 	capturingShortcut   atomic.Bool
@@ -43,6 +43,11 @@ type Bridge struct {
 	notice              string
 	frontendReady       bool
 	pendingWindowAction string
+	visible             atomic.Bool
+	trayMu              sync.Mutex
+	trayCheckedAt       time.Time
+	trayValue           bool
+	trayQuery           func() bool
 	meterMu             sync.Mutex
 	meterCancel         context.CancelFunc
 }
@@ -131,9 +136,11 @@ func (b *Bridge) StopMicrophoneTest() error {
 	b.engine.StopMicrophoneTest()
 	return nil
 }
-func (b *Bridge) Toggle() error                     { return b.engine.Toggle() }
-func (b *Bridge) Logs() ([]DiagnosticRecord, error) { return b.engine.Logs() }
-func (b *Bridge) ClearLogs() error                  { return b.engine.ClearLogs() }
+func (b *Bridge) Toggle() error { return b.engine.Toggle() }
+func (b *Bridge) Logs(outcome string, offset int) (LogPage, error) {
+	return b.engine.Logs(outcome, offset)
+}
+func (b *Bridge) ClearLogs() error { return b.engine.ClearLogs() }
 
 // Window actions wait for the frontend's serialized autosave queue. External
 // signals still shut down directly; a failed save keeps settings open.
@@ -145,22 +152,93 @@ func (b *Bridge) requestWindowAction(action string) {
 	b.pendingWindowAction = action
 	ready := b.frontendReady
 	b.mu.Unlock()
-	if b.window != nil {
-		b.window.Show()
-		b.window.Focus()
+	window := b.currentWindow()
+	if window != nil {
+		window.Show()
+		window.Focus()
+		b.setWindowVisible(true)
 	}
 	if ready {
 		b.app.Event.Emit("flush-settings", map[string]string{"action": action})
+		return
+	}
+	if window == nil && b.app != nil {
+		// Background and toggle launches never create a webview. With no
+		// frontend to flush, hide is a no-op and quit can proceed after the
+		// same idle check the frontend handshake applies.
+		if action == "quit" {
+			b.finishQuitWithoutFrontend()
+			return
+		}
+		b.mu.Lock()
+		if b.pendingWindowAction == action {
+			b.pendingWindowAction = ""
+		}
+		b.mu.Unlock()
 	}
 }
-func (b *Bridge) FrontendReady() {
+
+// finishQuitWithoutFrontend completes a quit when the settings window was never
+// created. It refuses to quit mid-dictation, matching CompleteWindowAction.
+func (b *Bridge) finishQuitWithoutFrontend() {
+	b.mu.Lock()
+	if b.pendingWindowAction != "quit" {
+		b.mu.Unlock()
+		return
+	}
+	b.pendingWindowAction = ""
+	b.mu.Unlock()
+	if b.engine != nil {
+		status := b.engine.Status()
+		if status.State != "idle" && status.State != "testing" {
+			logf("APP", "quit ignored while %s", status.State)
+			return
+		}
+	}
+	if b.app != nil {
+		b.app.Quit()
+	}
+}
+
+// setWindow publishes the settings window. It is created only when settings
+// first open, so a background start does not launch WebKit at all.
+func (b *Bridge) setWindow(window *application.WebviewWindow) {
+	b.windowMu.Lock()
+	b.window = window
+	b.windowMu.Unlock()
+}
+
+func (b *Bridge) currentWindow() *application.WebviewWindow {
+	b.windowMu.Lock()
+	defer b.windowMu.Unlock()
+	return b.window
+}
+
+// ensureWindow creates the settings window on first use. All callers are about
+// to show it, so the window is created visible.
+func (b *Bridge) ensureWindow() *application.WebviewWindow {
+	b.windowMu.Lock()
+	defer b.windowMu.Unlock()
+	if b.window == nil && b.newWindow != nil {
+		b.window = b.newWindow()
+	}
+	return b.window
+}
+
+func (b *Bridge) FrontendReady() bool {
 	b.mu.Lock()
 	b.frontendReady = true
 	action := b.pendingWindowAction
 	b.mu.Unlock()
+	visible := false
+	if window := b.currentWindow(); window != nil {
+		visible = window.IsVisible()
+	}
+	b.setWindowVisible(visible)
 	if action != "" {
 		b.app.Event.Emit("flush-settings", map[string]string{"action": action})
 	}
+	return visible
 }
 func (b *Bridge) CompleteWindowAction(action string) error {
 	b.mu.Lock()
@@ -180,16 +258,62 @@ func (b *Bridge) CompleteWindowAction(action string) error {
 		_ = b.StopMicrophoneTest()
 		_ = b.EndShortcutCapture()
 		b.app.Event.Emit("cancel-shortcut-capture")
-		b.window.Hide()
+		if window := b.currentWindow(); window != nil {
+			window.Hide()
+		}
+		b.setWindowVisible(false)
 	}
 	return nil
 }
+
+// setWindowVisible records the one authoritative visibility flag and tells the
+// frontend to pause or resume background polling. A hidden window also
+// invalidates the tray cache so the next visible refresh sees host changes.
+func (b *Bridge) setWindowVisible(visible bool) {
+	previous := b.visible.Swap(visible)
+	if visible {
+		b.invalidateTrayCache()
+	}
+	if previous != visible && b.app != nil {
+		b.app.Event.Emit("window-visibility", visible)
+	}
+}
+
+func (b *Bridge) invalidateTrayCache() {
+	b.trayMu.Lock()
+	b.trayCheckedAt = time.Time{}
+	b.trayMu.Unlock()
+}
+
+// trayStatus caches the session-bus query for 30 seconds. Callers check a
+// timestamp instead of running a timer or worker, and no engine or preference
+// lock is held while D-Bus is queried.
+func (b *Bridge) trayStatus() bool {
+	b.trayMu.Lock()
+	checked := b.trayCheckedAt
+	value := b.trayValue
+	b.trayMu.Unlock()
+	if !checked.IsZero() && time.Since(checked) < 30*time.Second {
+		return value
+	}
+	query := b.trayQuery
+	if query == nil {
+		query = trayAvailable
+	}
+	value = query()
+	b.trayMu.Lock()
+	b.trayCheckedAt = time.Now()
+	b.trayValue = value
+	b.trayMu.Unlock()
+	return value
+}
+
 func (b *Bridge) Info() DesktopInfo {
 	b.mu.Lock()
 	info := DesktopInfo{Preferences: b.prefs, ShortcutError: b.shortcutError, Version: b.version, PreferencesError: b.preferencesError, Notice: b.notice}
 	b.mu.Unlock()
 	// A slow desktop bus must not hold up preference saves or shortcut handling.
-	info.TrayAvailable = trayAvailable()
+	info.TrayAvailable = b.trayStatus()
 	if last := b.lastShortcutAt.Load(); last != 0 {
 		info.LastShortcutAt = time.Unix(0, last).Format(time.RFC3339)
 	}
@@ -208,8 +332,11 @@ func (b *Bridge) toggleRecording() {
 func (b *Bridge) dispatchCommand(command Command) {
 	switch command {
 	case CommandShow:
-		b.window.Show()
-		b.window.Focus()
+		if window := b.ensureWindow(); window != nil {
+			window.Show()
+			window.Focus()
+			b.setWindowVisible(true)
+		}
 	case CommandToggle:
 		b.activateShortcut()
 	case CommandQuit:
@@ -218,19 +345,27 @@ func (b *Bridge) dispatchCommand(command Command) {
 }
 
 // ExportLogs uses a native save dialog; webview download handling varies by OS.
+// Retained records are streamed straight to the chosen file.
 func (b *Bridge) ExportLogs(outcome string) error {
-	records, err := b.Logs()
-	if err != nil {
+	if err := validateLogOutcome(outcome); err != nil {
 		return err
 	}
-	data, err := encodeDiagnosticLogs(records, outcome)
-	if err != nil {
-		return err
-	}
-	path, err := b.app.Dialog.SaveFile().SetFilename("voice-type-logs.jsonl").AddFilter("Diagnostic logs", "*.jsonl").AttachToWindow(b.window).PromptForSingleSelection()
+	path, err := func() (string, error) {
+		dialog := b.app.Dialog.SaveFile().SetFilename("voice-type-logs.jsonl").AddFilter("Diagnostic logs", "*.jsonl")
+		if window := b.currentWindow(); window != nil {
+			dialog = dialog.AttachToWindow(window)
+		}
+		return dialog.PromptForSingleSelection()
+	}()
 	if err != nil || path == "" {
 		return err
 	}
+	return b.writeExportFile(path, outcome)
+}
+
+// writeExportFile is separated from the native save dialog so permissions and
+// complete streaming export can be tested.
+func (b *Bridge) writeExportFile(path, outcome string) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
@@ -239,31 +374,11 @@ func (b *Bridge) ExportLogs(outcome string) error {
 		f.Close()
 		return err
 	}
-	if _, err = f.Write(data); err != nil {
+	if err = b.engine.WriteLogs(outcome, f); err != nil {
 		f.Close()
 		return err
 	}
 	return f.Close()
-}
-
-func encodeDiagnosticLogs(records []DiagnosticRecord, outcome string) ([]byte, error) {
-	if outcome != "all" && outcome != "errors" && outcome != "ok" {
-		return nil, errors.New("choose a valid log outcome")
-	}
-	var data bytes.Buffer
-	for _, record := range records {
-		ok := record.Outcome == "ok"
-		if outcome == "errors" && ok || outcome == "ok" && !ok {
-			continue
-		}
-		raw, err := json.Marshal(record)
-		if err != nil {
-			return nil, err
-		}
-		data.Write(raw)
-		data.WriteByte('\n')
-	}
-	return data.Bytes(), nil
 }
 
 func (b *Bridge) activateShortcut() {

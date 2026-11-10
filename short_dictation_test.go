@@ -234,11 +234,11 @@ func TestEmptyCloudCompletionReportsCapturedSignal(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "completed transcription but returned no text") {
 		t.Fatalf("misreported empty final response: %v", err)
 	}
-	records, err := service.Logs()
+	records, err := service.Logs("all", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 || records[0].Outcome != "empty_transcript" || !strings.Contains(records[0].Error, "RMS") || !strings.Contains(records[0].Error, "peak") {
+	if len(records.Records) != 1 || records.Records[0].Outcome != "empty_transcript" || !strings.Contains(records.Records[0].Error, "RMS") || !strings.Contains(records.Records[0].Error, "peak") {
 		t.Fatal("empty-result signal diagnostics missing")
 	}
 }

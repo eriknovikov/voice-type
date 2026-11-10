@@ -394,14 +394,25 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 		}
 		d.sessionCtx = nil
 		d.sessionCancel = nil
+		evictModel := false
+		selectedModel := ""
 		if !d.shuttingDown {
 			if err := d.reloadConfig(); err != nil {
 				d.configError = err.Error()
 			} else {
 				d.configError = ""
+				evictModel = true
+				if d.stt != nil && d.stt.local != nil {
+					selectedModel = d.stt.settings.Model
+				}
 			}
 		}
 		d.mu.Unlock()
+		if evictModel {
+			// A hand-edited configuration may have switched away from a local
+			// model while this session was running. Release it now that idle.
+			d.localModels.evictUnused(selectedModel)
+		}
 		d.sessionWG.Done()
 	}()
 
@@ -429,9 +440,8 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 	}
 	if recordErr != nil {
 		if stt.local != nil {
-			wav := WavEncode(samples)
 			retained := ""
-			if path, retainErr := retainWAV(wav); retainErr == nil {
+			if path, retainErr := retainWAV(WavEncode(samples)); retainErr == nil {
 				retained = " -- audio retained at " + path
 			}
 			d.runLog.complete(stt.settings.Provider, stt.settings.Model, "", "capture_error", 0, wavDurationSeconds(samples), nil, recordErr)
@@ -450,7 +460,16 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 	}
 	logf("AUDIO", "captured %.2fs (%d samples)", duration, len(samples))
 
-	wav := WavEncode(samples)
+	// Encode only when a batch upload or a recovery operation needs WAV bytes.
+	// Successful local and cloud-streaming dictations never allocate a WAV.
+	// The cache lives for this operation in case more than one path needs it.
+	var wavCache []byte
+	wavBytes := func() []byte {
+		if wavCache == nil {
+			wavCache = WavEncode(samples)
+		}
+		return wavCache
+	}
 	if err := ctx.Err(); err != nil {
 		logf("STT", "cancelled before upload")
 		return nil
@@ -501,7 +520,7 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 				}
 				if stt.settings.StreamingMode == streamingModeProcess {
 					retained := ""
-					if path, retainErr := retainWAV(wav); retainErr == nil {
+					if path, retainErr := retainWAV(wavBytes()); retainErr == nil {
 						retained = " Audio retained at " + path + "."
 					} else {
 						retained = " Audio could not be retained: " + retainErr.Error()
@@ -534,7 +553,7 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 		result, err = sttResult{Text: streamResult.Text, ModelID: requestedModel}, streamResult.Err
 		observe(requestedModel, 1, time.Since(t0), result, err)
 	} else {
-		result, err = stt.transcribeContext(ctx, wav, observe)
+		result, err = stt.transcribeSamplesContext(ctx, samples, observe)
 	}
 	if err == nil && timings.TranscriptReceived.IsZero() {
 		timings.TranscriptReceived = time.Now()
@@ -564,11 +583,11 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 			return err
 		}
 		if stt.local != nil && localRecoveryText != "" {
-			retained := retainLocalResult(wav, localRecoveryText)
+			retained := retainLocalResult(wavBytes(), localRecoveryText)
 			logf("LOCAL", "transcription failed; %s", retained)
 			return fmt.Errorf("%w (%s)", err, retained)
 		}
-		return d.handleSTTError(err, wav, stt.local != nil)
+		return d.handleSTTError(err, wavBytes(), stt.local != nil)
 	}
 	logf("STT", "%s/%s: %.2fs audio -> %d chars in %v (%s)",
 		stt.settings.Provider, result.ModelID, duration, len(result.Text), requestDuration.Round(time.Millisecond), result.billingSummary())
@@ -577,7 +596,7 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 		logf("STT", "empty transcript -- nothing to insert")
 		outcome = "empty_transcript"
 		if stt.local != nil {
-			return d.handleSTTError(errors.New("local model returned no text; nothing was inserted"), wav, true)
+			return d.handleSTTError(errors.New("local model returned no text; nothing was inserted"), wavBytes(), true)
 		}
 		if localStream != nil {
 			rms, peak := recordingSignal(samples)
@@ -589,7 +608,7 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 	prompt := stt.settings.vocabularyPrompt()
 	if vocabularyEcho(result.Text, prompt) {
 		retained := ""
-		if path, retainErr := retainWAV(wav); retainErr == nil {
+		if path, retainErr := retainWAV(wavBytes()); retainErr == nil {
 			retained = "audio retained at " + path
 		} else {
 			retained = fmt.Sprintf("could not retain audio: %v", retainErr)
@@ -619,7 +638,7 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 		logf("OUTPUT", "IBus insertion failed: %v", err)
 		outcome = "insertion_error"
 		if stt.local != nil {
-			retained := retainLocalResult(wav, result.Text)
+			retained := retainLocalResult(wavBytes(), result.Text)
 			return fmt.Errorf("IBus insertion failed: %w; %s", err, retained)
 		}
 		return fmt.Errorf("IBus insertion failed: %w", err)

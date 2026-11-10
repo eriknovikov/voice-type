@@ -39,6 +39,12 @@ type nativeStream struct {
 	session   *nativeSession
 	stopWatch func()
 	closeOnce sync.Once
+	// floatScratch converts each chunk in place; the native call consumes it
+	// synchronously before the next feed.
+	floatScratch []float32
+	full         string
+	committed    string
+	haveText     bool
 }
 
 func loadNativeModel(path, id string) (*nativeModel, error) {
@@ -218,20 +224,22 @@ func (s *nativeStream) feed(ctx context.Context, samples []int16) (string, strin
 	if len(samples) == 0 {
 		return "", "", errors.New("streaming audio chunk is empty")
 	}
-	floatSamples := pcm16ToFloat32(samples)
+	s.floatScratch = pcm16ToFloat32Into(s.floatScratch[:0], samples)
 	errorBuffer := make([]C.char, nativeErrorBufferSize)
+	var changed C.int
 	status := C.vt_asr_stream_feed(
 		s.session.ptr,
-		(*C.float)(unsafe.Pointer(&floatSamples[0])),
-		C.int(len(floatSamples)),
+		(*C.float)(unsafe.Pointer(&s.floatScratch[0])),
+		C.int(len(s.floatScratch)),
+		&changed,
 		&errorBuffer[0],
 		C.size_t(len(errorBuffer)),
 	)
-	runtime.KeepAlive(floatSamples)
+	runtime.KeepAlive(s.floatScratch)
 	if status != 0 {
 		return "", "", nativeError("process local streaming audio", status, &errorBuffer[0])
 	}
-	return s.text()
+	return s.snapshot(changed != 0)
 }
 
 func (s *nativeStream) finalize(ctx context.Context) (string, string, error) {
@@ -239,11 +247,26 @@ func (s *nativeStream) finalize(ctx context.Context) (string, string, error) {
 		return "", "", err
 	}
 	errorBuffer := make([]C.char, nativeErrorBufferSize)
-	status := C.vt_asr_stream_finalize(s.session.ptr, &errorBuffer[0], C.size_t(len(errorBuffer)))
+	var changed C.int
+	status := C.vt_asr_stream_finalize(s.session.ptr, &changed, &errorBuffer[0], C.size_t(len(errorBuffer)))
 	if status != 0 {
 		return "", "", nativeError("finish local streaming transcription", status, &errorBuffer[0])
 	}
-	return s.text()
+	return s.snapshot(changed != 0)
+}
+
+// snapshot copies transcript text from C only when the engine reports a change.
+// An unchanged feed reuses the previous Go strings.
+func (s *nativeStream) snapshot(changed bool) (string, string, error) {
+	if !changed && s.haveText {
+		return s.full, s.committed, nil
+	}
+	full, committed, err := s.text()
+	if err != nil {
+		return "", "", err
+	}
+	s.full, s.committed, s.haveText = full, committed, true
+	return full, committed, nil
 }
 
 func (s *nativeStream) text() (string, string, error) {
@@ -278,11 +301,21 @@ func nativeVocabulary(terms []string) *C.char {
 }
 
 func pcm16ToFloat32(samples []int16) []float32 {
-	converted := make([]float32, len(samples))
-	for i, sample := range samples {
-		converted[i] = float32(sample) / 32768
+	return pcm16ToFloat32Into(nil, samples)
+}
+
+// pcm16ToFloat32Into appends the converted samples to dst, reusing its storage
+// so a long stream does not allocate a fresh conversion buffer per chunk.
+func pcm16ToFloat32Into(dst []float32, samples []int16) []float32 {
+	if need := len(samples); cap(dst) < need {
+		dst = make([]float32, need)
+	} else {
+		dst = dst[:need]
 	}
-	return converted
+	for i, sample := range samples {
+		dst[i] = float32(sample) / 32768
+	}
+	return dst
 }
 
 func nativeError(action string, status C.int, message *C.char) error {

@@ -1131,6 +1131,14 @@ kbd {
 .log-tools button {
   font-size: 12px;
 }
+.log-pager {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
 .log-list {
   border: 1px solid var(--line);
   border-radius: 8px;

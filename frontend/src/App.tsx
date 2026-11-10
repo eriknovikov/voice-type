@@ -22,7 +22,7 @@ import {
   type DesktopInfo,
   type AudioSource,
   type LocalModel,
-  type LogRecord,
+  type LogPage,
   type Preferences,
   type ProfileSummary,
   type VocabularyList,
@@ -61,6 +61,17 @@ const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 const eventValue = (data: unknown): unknown =>
   Array.isArray(data) ? data[0] : data;
+const sameInfo = (a: DesktopInfo | null, b: DesktopInfo) =>
+  a !== null &&
+  a.last_shortcut_at === b.last_shortcut_at &&
+  a.tray_available === b.tray_available &&
+  a.version === b.version &&
+  a.shortcut_error === b.shortcut_error &&
+  a.preferences_error === b.preferences_error &&
+  a.notice === b.notice &&
+  a.preferences.shortcut === b.preferences.shortcut &&
+  a.preferences.autostart === b.preferences.autostart &&
+  a.preferences.setup_complete === b.preferences.setup_complete;
 export function App() {
   const [store] = useState(() => new SettingsStore(api.settings, api.save));
   const {
@@ -80,7 +91,10 @@ export function App() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState("general");
-  const [logs, setLogs] = useState<LogRecord[]>([]);
+  const [visible, setVisible] = useState(false);
+  const [logPage, setLogPage] = useState<LogPage | null>(null);
+  const [logOffset, setLogOffset] = useState(0);
+  const [logReload, setLogReload] = useState(0);
   const [outcome, setOutcome] = useState("all");
   const [editor, setEditor] = useState<{
     profile: ProfileSummary | null;
@@ -173,17 +187,29 @@ export function App() {
         }
       })();
     });
-    void api.frontendReady().catch((e) => setError(errorText(e)));
+    const offVisibility = Events.On("window-visibility", (event) =>
+      setVisible(Boolean(eventValue(event.data))),
+    );
+    void api
+      .frontendReady()
+      .then(setVisible)
+      .catch((e) => {
+        // Without a native answer, keep the UI observable rather than frozen.
+        setVisible(true);
+        setError(errorText(e));
+      });
     return () => {
       offError();
       offWorkspace();
       offCapture();
       offNavigation();
       offFlush();
+      offVisibility();
       store.dispose();
     };
   }, [store]);
   useEffect(() => {
+    if (!visible) return;
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
     let lastNotice = "";
@@ -200,7 +226,9 @@ export function App() {
               ? previous
               : next,
           );
-          setInfo(freshInfo);
+          setInfo((previous) =>
+            sameInfo(previous, freshInfo) ? previous : freshInfo,
+          );
           if (
             next.notice &&
             (next.notice !== lastNotice ||
@@ -223,7 +251,7 @@ export function App() {
       alive = false;
       clearTimeout(timer);
     };
-  }, [store]);
+  }, [store, visible]);
   const refreshSources = async () => {
     setSources(await api.microphones());
     // Missing-device fallback can update the config; merge it with pending edits.
@@ -236,13 +264,17 @@ export function App() {
     };
   }, [tab]);
   useEffect(() => {
-    if (tab !== "logs") return;
+    if (tab !== "logs") {
+      setLogPage(null);
+      return;
+    }
+    if (!visible) return;
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
-        const rows = await api.logs();
-        if (alive) setLogs(rows ?? []);
+        const page = await api.logs(outcome, logOffset);
+        if (alive && !page.unchanged) setLogPage(page);
       } catch (e) {
         if (alive) setError(errorText(e));
       }
@@ -253,9 +285,9 @@ export function App() {
       alive = false;
       clearTimeout(timer);
     };
-  }, [tab]);
+  }, [tab, visible, outcome, logOffset, logReload]);
   useEffect(() => {
-    if (tab !== "local-models") return;
+    if (tab !== "local-models" || !visible) return;
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -277,7 +309,7 @@ export function App() {
       alive = false;
       clearTimeout(timer);
     };
-  }, [tab]);
+  }, [tab, visible]);
   const navigate = (next: Tab) =>
     void run(async () => {
       await store.flush();
@@ -672,9 +704,14 @@ export function App() {
             }
             {tab === "logs" && (
               <LogViewer
-                logs={logs}
+                page={logPage}
                 outcome={outcome}
-                onOutcome={setOutcome}
+                onOutcome={(value) => {
+                  setOutcome(value);
+                  setLogOffset(0);
+                  setLogPage(null);
+                }}
+                onOffset={(offset) => setLogOffset(Math.max(0, offset))}
                 busy={busy}
                 onExport={() => void run(() => api.exportLogs(outcome))}
                 onClear={() =>
@@ -684,7 +721,9 @@ export function App() {
                     label: "Clear logs",
                     run: async () => {
                       await api.clearLogs();
-                      setLogs([]);
+                      setLogOffset(0);
+                      setLogPage(null);
+                      setLogReload((value) => value + 1);
                     },
                   })
                 }

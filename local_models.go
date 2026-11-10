@@ -663,6 +663,33 @@ func (m *LocalModelManager) release(id string) {
 	m.uses.Done()
 }
 
+// evictUnused closes loaded native models that the active configuration no
+// longer selects. The selected model stays warm; an evicted idle model is
+// loaded again on demand. Call only while no dictation uses another model.
+// Eviction returns the allocator arenas promptly, so it is worth doing as soon
+// as a profile switches away from local inference.
+func (m *LocalModelManager) evictUnused(selected string) int {
+	m.opMu.Lock()
+	m.mu.Lock()
+	m.nativeMu.Lock()
+	evicted := make([]*nativeModel, 0, len(m.native))
+	for id, native := range m.native {
+		if id == selected || m.active[id] > 0 {
+			continue
+		}
+		evicted = append(evicted, native)
+		delete(m.native, id)
+	}
+	m.nativeMu.Unlock()
+	m.mu.Unlock()
+	m.opMu.Unlock()
+
+	for _, native := range evicted {
+		native.close()
+	}
+	return len(evicted)
+}
+
 type localModelUse struct {
 	manager *LocalModelManager
 	id      string

@@ -1,5 +1,5 @@
 import { Check, ChevronRight, FileText, X } from "lucide-react";
-import type { LogRecord } from "./api";
+import type { LogPage, LogRecord } from "./api";
 import { providerName } from "./ProfileEditor";
 import { SegmentedControl } from "./ui";
 
@@ -27,25 +27,27 @@ function eventTitle(row: LogRecord) {
   );
 }
 export function LogViewer({
-  logs,
+  page,
   outcome,
   onOutcome,
+  onOffset,
   onExport,
   onClear,
   busy,
 }: {
-  logs: LogRecord[];
+  page: LogPage | null;
   outcome: string;
   onOutcome: (value: string) => void;
+  onOffset: (offset: number) => void;
   onExport: () => void;
   onClear: () => void;
   busy: boolean;
 }) {
-  const displayed = logs.filter(
-    (row) =>
-      outcome === "all" ||
-      (outcome === "errors" ? row.outcome !== "ok" : row.outcome === "ok"),
-  );
+  const displayed = page?.records ?? [];
+  const total = page?.total ?? 0;
+  const retained = page?.retained ?? 0;
+  const offset = page?.offset ?? 0;
+  const limit = page?.limit ?? 200;
   const occurrences = new Map<string, number>();
   return (
     <>
@@ -61,14 +63,33 @@ export function LogViewer({
           ]}
         />
         <div className="actions">
-          <button disabled={busy || !displayed.length} onClick={onExport}>
+          <button disabled={busy || !total} onClick={onExport}>
             Export
           </button>
-          <button disabled={busy || !logs.length} onClick={onClear}>
+          <button disabled={busy || !retained} onClick={onClear}>
             Clear
           </button>
         </div>
       </div>
+      {total > 0 && (
+        <div className="log-pager">
+          <button
+            disabled={busy || offset <= 0}
+            onClick={() => onOffset(offset - limit)}
+          >
+            Newer
+          </button>
+          <span role="status">
+            {offset + 1}–{offset + displayed.length} of {total}
+          </span>
+          <button
+            disabled={busy || offset + limit >= total}
+            onClick={() => onOffset(offset + limit)}
+          >
+            Older
+          </button>
+        </div>
+      )}
       <section className="log-list" aria-label="Log entries">
         {displayed.length ? (
           displayed.map((row) => {
@@ -167,7 +188,13 @@ export function LogViewer({
         ) : (
           <div className="empty">
             <FileText size={24} aria-hidden="true" />
-            <h2>{logs.length ? "No matching logs" : "No logs yet"}</h2>
+            <h2>
+              {total
+                ? "No records on this page"
+                : retained
+                  ? "No matching logs"
+                  : "No logs yet"}
+            </h2>
           </div>
         )}
       </section>

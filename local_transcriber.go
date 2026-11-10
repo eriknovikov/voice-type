@@ -131,8 +131,8 @@ func decodeWAVPCM16(wav []byte) ([]int16, error) {
 	}
 	count := len(audio) / 2
 	samples := make([]int16, count)
-	if err := binary.Read(bytes.NewReader(audio), binary.LittleEndian, samples); err != nil {
-		return nil, err
+	for i := range samples {
+		samples[i] = int16(binary.LittleEndian.Uint16(audio[2*i:]))
 	}
 	return samples, nil
 }
@@ -209,8 +209,11 @@ func newLocalStreamSessionWithContext(streamCtx context.Context, cancel context.
 	return session
 }
 
-// OfferSamples never waits on inference. A full queue disables streaming and
-// leaves the recorder's complete sample buffer intact for safe recovery.
+// OfferSamples never waits on inference. It takes ownership of samples; the
+// recorder hands over the copied chunk it made for its sink, so the queue does
+// not duplicate the recording a second time. Callers that still own a slice
+// must pass a copy. A full queue disables streaming and leaves the recorder's
+// complete sample buffer intact for safe recovery.
 func (s *localStreamSession) OfferSamples(samples []int16) {
 	if s == nil || len(samples) == 0 {
 		return
@@ -225,9 +228,8 @@ func (s *localStreamSession) OfferSamples(samples []int16) {
 		s.cancel()
 		return
 	}
-	chunk := append([]int16(nil), samples...)
 	select {
-	case s.chunks <- chunk:
+	case s.chunks <- samples:
 		s.queuedSamples += len(samples)
 	default:
 		s.overflow.Store(true)
