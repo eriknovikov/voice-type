@@ -52,8 +52,15 @@ func acquireEngineLock() (*os.File, error) {
 }
 
 func engineRuntimeDir() string {
+	name := "voice-type"
+	if developmentMode() {
+		name += "-dev"
+	}
 	if base := os.Getenv("XDG_RUNTIME_DIR"); base != "" {
-		return filepath.Join(base, "voice-type")
+		return filepath.Join(base, name)
+	}
+	if developmentMode() {
+		return filepath.Join(filepath.Dir(workspaceFilePath()), name)
 	}
 	return filepath.Dir(workspaceFilePath())
 }

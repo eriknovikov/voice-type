@@ -67,6 +67,7 @@ func trayIcon(state string) []byte {
 	return out.Bytes()
 }
 func Run(version string, command Command) error {
+	appID, appName := applicationIdentity()
 	frontend, err := fs.Sub(assets, "frontend/dist")
 	if err != nil {
 		return err
@@ -85,11 +86,11 @@ func Run(version string, command Command) error {
 	defer router.close()
 	done := make(chan struct{})
 	app := application.New(application.Options{
-		Name: "Voice Type", Icon: appIcon, Description: "System-wide voice dictation",
-		Linux:    application.LinuxOptions{ApplicationID: "io.github.eriknovikov.voice-type"},
+		Name: appName, Icon: appIcon, Description: "System-wide voice dictation",
+		Linux:    application.LinuxOptions{ApplicationID: appID},
 		Services: []application.Service{application.NewService(b)},
 		Assets:   application.AssetOptions{Handler: application.BundledAssetFileServer(frontend)},
-		SingleInstance: &application.SingleInstanceOptions{UniqueID: "io.github.eriknovikov.voice-type", OnSecondInstanceLaunch: func(data application.SecondInstanceData) {
+		SingleInstance: &application.SingleInstanceOptions{UniqueID: appID, OnSecondInstanceLaunch: func(data application.SecondInstanceData) {
 			if len(data.Args) == 0 {
 				return
 			}
@@ -122,6 +123,13 @@ func Run(version string, command Command) error {
 	}
 	prefs, notice, preferencesErr := loadPreferences()
 	b.prefs, b.notice = prefs, notice
+	if developmentMode() {
+		devNotice := "Development build: desktop shortcuts and Start at login are disabled."
+		if b.notice != "" {
+			b.notice += " "
+		}
+		b.notice += devNotice
+	}
 	if preferencesErr != nil {
 		b.preferencesError = preferencesErr.Error()
 	}

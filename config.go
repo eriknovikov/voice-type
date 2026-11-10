@@ -514,4 +514,3 @@ func configReadStrict() (Config, error) {
 	}
 	return configValidate(raw)
 }
-

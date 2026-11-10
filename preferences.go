@@ -99,6 +99,10 @@ func writePreferences(prefs Preferences) error {
 }
 
 func (b *Bridge) applyAutostart(enabled bool) error {
+	if developmentMode() {
+		// Do not create a second login entry for the development binary.
+		return nil
+	}
 	if enabled {
 		return b.app.Autostart.EnableWithOptions(application.AutostartOptions{Arguments: []string{"--background"}})
 	}
