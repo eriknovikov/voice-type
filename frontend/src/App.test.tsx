@@ -32,6 +32,13 @@ vi.mock("./api", () => ({
     save: vi.fn(),
     logs: vi.fn(),
     microphones: vi.fn(),
+    localModels: vi.fn(),
+    installLocalModel: vi.fn(),
+    resumeLocalModel: vi.fn(),
+    retryLocalModel: vi.fn(),
+    pauseLocalModel: vi.fn(),
+    cancelLocalModel: vi.fn(),
+    removeLocalModel: vi.fn(),
     stopTest: vi.fn(),
     startTest: vi.fn(),
     workspace: vi.fn(),
@@ -105,6 +112,25 @@ beforeEach(() => {
   });
   vi.mocked(api.logs).mockResolvedValue([]);
   vi.mocked(api.microphones).mockResolvedValue([]);
+  vi.mocked(api.localModels).mockResolvedValue([
+    {
+      id: "parakeet-unified-en",
+      name: "Parakeet Unified English",
+      filename: "parakeet-unified-en-0.6b-Q8_0.gguf",
+      bytes: 731357568,
+      downloaded_bytes: 0,
+      progress: 0,
+      languages: "English",
+      supports_streaming: true,
+      vocabulary_support: "Biasing",
+      license: "NVIDIA Open Model License",
+      license_url: "https://example.test/license",
+      model_card_url: "https://example.test/model",
+      engine_revision: "2778ae4bf5ca5f394d129a39467f4ad9552dc34f",
+      state: "not_installed",
+      error: "",
+    },
+  ]);
   for (const method of [
     api.stopTest,
     api.startTest,
@@ -116,6 +142,12 @@ beforeEach(() => {
     api.completeWindowAction,
     api.copyProfileKey,
     api.exportLogs,
+    api.installLocalModel,
+    api.resumeLocalModel,
+    api.retryLocalModel,
+    api.pauseLocalModel,
+    api.cancelLocalModel,
+    api.removeLocalModel,
   ])
     vi.mocked(method).mockResolvedValue();
 });
@@ -182,6 +214,26 @@ describe("profiles", () => {
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
+  it("creates a local profile with the streaming default and no cloud key", async () => {
+    vi.mocked(api.upsertProfile).mockResolvedValue(saved);
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.click(screen.getByLabelText("On-device"));
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
+      "On-device 1",
+    );
+    expect(screen.getByLabelText("Local model")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    await waitFor(() =>
+      expect(api.upsertProfile).toHaveBeenCalledWith({
+        revision: "r1",
+        name: "On-device 1",
+        provider: "local",
+        model_id: "parakeet-unified-en",
+        streaming_mode: "process",
+      }),
+    );
+  });
   it("confirms deleting an active profile and leaves no implicit selection", async () => {
     vi.mocked(api.deleteProfile).mockResolvedValue({
       ...saved,
@@ -204,6 +256,17 @@ describe("profiles", () => {
     await screen.findByText("Select a profile to start dictating.");
     expect(api.deleteProfile).toHaveBeenCalledWith("r1", "personal");
   });
+});
+
+it("shows managed local models and starts a download", async () => {
+  await ready();
+  fireEvent.click(screen.getByRole("button", { name: "Local Models" }));
+  await screen.findByRole("heading", { name: "Parakeet Unified English" });
+  expect(screen.getByText("Not installed")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Download" }));
+  await waitFor(() =>
+    expect(api.installLocalModel).toHaveBeenCalledWith("parakeet-unified-en"),
+  );
 });
 describe("autosave", () => {
   it("retains failed vocabulary edits for explicit retry without changing the selected microphone", async () => {

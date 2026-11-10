@@ -11,6 +11,7 @@ RUNTIME_DIR=${RUNTIME_DIR:-"${XDG_STATE_HOME:-$HOME/.local/state}/voice-type"}
 APP_ID=io.github.eriknovikov.voice-type
 DESKTOP_FILE="$DATA_DIR/applications/$APP_ID.desktop"
 ICON_FILE="$DATA_DIR/icons/hicolor/512x512/apps/$APP_ID.png"
+DOC_DIR="$DATA_DIR/doc/voice-type"
 TEMP_DIR=
 STAGED_BIN=
 cleanup() {
@@ -63,14 +64,14 @@ if [ "$MODE" != uninstall ]; then
         printf '%s  %s\n' "$EXPECTED" "$ARCHIVE" > "$TEMP_DIR/selected-checksum"
         (cd "$TEMP_DIR" && sha256sum -c selected-checksum)
         tar -tzf "$TEMP_DIR/$ARCHIVE" | sort > "$TEMP_DIR/entries"
-        printf '%s\n' LICENSE icon.png voice-type | sort > "$TEMP_DIR/expected-entries"
+        printf '%s\n' LICENSE THIRD-PARTY-LICENSES.md icon.png voice-type | sort > "$TEMP_DIR/expected-entries"
         cmp -s "$TEMP_DIR/entries" "$TEMP_DIR/expected-entries" || fail 'Unexpected application archive layout.'
         mkdir "$TEMP_DIR/payload"
         tar -xzf "$TEMP_DIR/$ARCHIVE" --no-same-owner -C "$TEMP_DIR/payload"
         PAYLOAD=$TEMP_DIR/payload
         SOURCE_ICON=$PAYLOAD/icon.png
     fi
-    for asset in "$PAYLOAD/voice-type" "$SOURCE_ICON"; do
+    for asset in "$PAYLOAD/voice-type" "$SOURCE_ICON" "$PAYLOAD/LICENSE" "$PAYLOAD/THIRD-PARTY-LICENSES.md"; do
         [ -f "$asset" ] && [ ! -L "$asset" ] || fail 'Missing application binary or icon.'
     done
     APP_VERSION=$("$PAYLOAD/voice-type" --version) || fail 'Cannot run application. Install GTK4 and WebKitGTK 6.0 runtime libraries.'
@@ -101,12 +102,18 @@ for proc in /proc/[0-9]*/exe; do
  done
 
 if [ "$MODE" = uninstall ]; then
+    [ ! -L "$DATA_DIR/doc" ] && [ ! -L "$DOC_DIR" ] || fail 'Unsafe Voice Type documentation directory.'
     "$CONTROL_BIN" --remove-shortcuts
-    rm -f "$BIN_DIR/voice-type" "$BIN_DIR/voice-type-app" "$DESKTOP_FILE" "$ICON_FILE" "$CONFIG_DIR/autostart/voice-type.desktop"
+    rm -f "$BIN_DIR/voice-type" "$BIN_DIR/voice-type-app" "$DESKTOP_FILE" "$ICON_FILE" "$CONFIG_DIR/autostart/voice-type.desktop" "$DOC_DIR/LICENSE" "$DOC_DIR/THIRD-PARTY-LICENSES.md"
     rm -f "$DATA_DIR/icons/hicolor/scalable/apps/voice-type.svg" "$DATA_DIR/icons/hicolor/512x512/apps/voice-type.png"
     printf '%s\n' 'Voice Type removed. Configuration, vocabulary, backups, logs and retained audio were kept.'
 else
-    mkdir -p "$BIN_DIR" "$(dirname "$DESKTOP_FILE")" "$(dirname "$ICON_FILE")"
+    [ ! -L "$DATA_DIR/doc" ] && [ ! -L "$DOC_DIR" ] || fail 'Unsafe Voice Type documentation directory.'
+    mkdir -p "$BIN_DIR" "$(dirname "$DESKTOP_FILE")" "$(dirname "$ICON_FILE")" "$DOC_DIR"
+    install -m 644 "$PAYLOAD/LICENSE" "$DOC_DIR/LICENSE"
+    install -m 644 "$PAYLOAD/THIRD-PARTY-LICENSES.md" "$DOC_DIR/THIRD-PARTY-LICENSES.md"
+    install -m 644 "$PAYLOAD/LICENSE" "$DOC_DIR/LICENSE"
+    install -m 644 "$PAYLOAD/THIRD-PARTY-LICENSES.md" "$DOC_DIR/THIRD-PARTY-LICENSES.md"
     STAGED_BIN=$(mktemp "$BIN_DIR/.voice-type.XXXXXX")
     install -m 755 "$PAYLOAD/voice-type" "$STAGED_BIN"
     install -m 644 "$SOURCE_ICON" "$ICON_FILE"

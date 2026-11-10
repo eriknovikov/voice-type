@@ -20,9 +20,12 @@ requirements are GTK4, WebKitGTK 6.0, PulseAudio or PipeWire's PulseAudio server
 IBus, and a graphical session with D-Bus. On GNOME, the
 AppIndicator/KStatusNotifierItem extension makes the tray visible.
 
-Open **Voice Type** from the launcher. Add an OpenAI or OpenRouter profile,
-choose your microphone, and set your shortcut. Internet access and an API key
-are required. Local models are not included.
+Open **Voice Type** from the launcher. Add an OpenAI, OpenRouter, or on-device
+profile, choose your microphone, and set your shortcut. Cloud profiles need an
+API key. On-device profiles use one of the two verified Parakeet models managed
+in **Local Models**; weights are downloaded on demand and are not included in
+the application installer. A local failure never uploads audio or switches to
+a cloud provider.
 
 The installer defaults to `~/.local/bin/voice-type`. It verifies release checksums
 and refuses pre-v6 daemon archives. An upgrade requests a normal quit and waits
@@ -32,9 +35,12 @@ default on first launch. Existing preferences are retained.
 
 ## Build from source
 
-Install Go 1.26+, Node 22.12+ or Node 24, a C compiler, `pkg-config`, GTK4 and
-WebKitGTK 6.0 development packages. On Ubuntu 24.04 these include
-`libgtk-4-dev` and `libwebkitgtk-6.0-dev`.
+Install Go 1.26+, Node 22.12+ or Node 24, C and C++ compilers, CMake 3.16+,
+Python 3, `curl`, `tar`, `sha256sum`, `pkg-config`, GTK4 and WebKitGTK 6.0
+development packages. On Ubuntu 24.04 these include `cmake`, `libgtk-4-dev`
+and `libwebkitgtk-6.0-dev`. Vulkan acceleration is built when Vulkan development
+files and `glslc` are available; set `VOICE_TYPE_VULKAN=1` to require it or
+`VOICE_TYPE_VULKAN=0` to force CPU-only builds. CPU inference is always built.
 
 ```sh
 make build
@@ -44,8 +50,11 @@ make check
 
 The root Go module contains the application and dictation engine; `frontend/`
 contains the React UI. `cmd/voice-type` is the only executable entry point.
-CGO is required. The build embeds the frontend, with no development server.
-The root `VERSION` is the sole application version source.
+CGO is required. The build downloads the SHA-256-pinned
+`transcribe.cpp` source at revision
+`2778ae4bf5ca5f394d129a39467f4ad9552dc34f` and statically links its CPU
+engine. The build embeds the frontend, with no development server. The root
+`VERSION` is the sole application version source.
 
 ## Application commands
 
@@ -75,12 +84,31 @@ settings. X11 uses direct Wails shortcut registration.
 - Private recovery backups: `$XDG_DATA_HOME/voice-type/backups`
   (default `~/.local/share/voice-type/backups`).
 - Diagnostics: `~/.voice-type-logs.jsonl`, with one rotated segment; also in **Logs**.
+- Local models: `$XDG_DATA_HOME/voice-type/models` (default
+  `~/.local/share/voice-type/models`), with private partial downloads and
+  verified GGUF files.
 
 API keys are masked in routine reads. Reveal and Copy are explicit profile
 editor actions. Keys stay in private files; environment API keys are not imported.
 Changing profiles applies to the next recording; in-flight work retains its
 original credentials. Unavailable saved microphones fall back to System default
 after successful device enumeration.
+
+The on-device catalog offers **Parakeet Unified English** (English, streaming)
+and **Parakeet TDT v3** (25 European languages, batch only). Downloads are
+pinned to immutable Hugging Face revisions and verified by exact size and
+SHA-256 before atomic installation. Pause preserves a partial download; resume
+uses a range request only when the server confirms the saved strong ETag and
+exact byte range. Failed transfers can be retried or cancelled. Removing an
+active model is blocked until the dictation finishes.
+
+Unified English profiles offer **Process while recording** (default), **Live
+insertion**, or **No streaming**. Live insertion sends only the engine's
+append-only committed text. Voice Type never edits or deletes inserted text; if
+the final transcript disagrees, it retains the recording and reports the issue.
+Text is sent to whichever application is focused at insertion time. Both
+catalog models support saved vocabulary as decoder bias; the UI states model
+capabilities rather than silently dropping unsupported settings.
 
 Missing or corrupt settings recover from a last-valid backup, with a visible
 notice. Damaged originals are preserved. Unreadable files remain untouched and
@@ -99,7 +127,8 @@ configuration, vocabulary, backups, logs and retained audio are kept.
 ## Integration checks
 
 ```sh
-VOICE_TYPE_TEST_IBUS_DAEMON=/usr/bin/ibus-daemon go test -race ./...
+PKG_CONFIG_PATH="$PWD/build/transcribe/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
+  VOICE_TYPE_TEST_IBUS_DAEMON=/usr/bin/ibus-daemon go test -race ./...
 make native-check
 ```
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Check, Copy, Eye, EyeOff, Trash2 } from "lucide-react";
 import { api, type ProfileSummary, type ProfileUpdate } from "./api";
+import { Dropdown } from "./Dropdown";
 import { ConfirmDialog, SegmentedControl } from "./ui";
 
 export const providerName = (provider: string) =>
@@ -9,7 +10,20 @@ export const providerName = (provider: string) =>
     ? "OpenAI"
     : provider === "openrouter"
       ? "OpenRouter"
+      : provider === "local"
+        ? "On-device"
       : provider;
+const unifiedModel = "parakeet-unified-en";
+const modelSupportsStreaming = (modelID: string) => modelID === unifiedModel;
+const defaultMode = (modelID: string) =>
+  modelSupportsStreaming(modelID) ? "process" : "none";
+const localModelOptions = [
+  {
+    value: unifiedModel,
+    label: "Parakeet Unified English · 731 MB",
+  },
+  { value: "parakeet-tdt-v3", label: "Parakeet TDT v3 · 740 MB" },
+];
 const nextName = (provider: string, profiles: ProfileSummary[]) => {
   let index = 1;
   while (
@@ -26,6 +40,7 @@ const nextName = (provider: string, profiles: ProfileSummary[]) => {
 const providerForms = {
   openai: { label: "OpenAI", requiresKey: true },
   openrouter: { label: "OpenRouter", requiresKey: true },
+  local: { label: "On-device", requiresKey: false },
 };
 export function ProfileEditor({
   profile,
@@ -46,6 +61,11 @@ export function ProfileEditor({
   const initialName = useRef(profile?.name ?? nextName("openai", profiles));
   const [name, setName] = useState(initialName.current);
   const [nameEdited, setNameEdited] = useState(false);
+  const initialModelID = profile?.model_id ?? unifiedModel;
+  const initialStreamingMode =
+    profile?.streaming_mode ?? defaultMode(initialModelID);
+  const [modelID, setModelID] = useState(initialModelID);
+  const [streamingMode, setStreamingMode] = useState(initialStreamingMode);
   const [key, setKey] = useState("");
   const [keyEdited, setKeyEdited] = useState(false);
   const [revealed, setRevealed] = useState<string>();
@@ -69,6 +89,9 @@ export function ProfileEditor({
   const dirty =
     name !== initialName.current ||
     provider !== (profile?.provider ?? "openai") ||
+    (provider === "local" &&
+      (modelID !== initialModelID ||
+        streamingMode !== initialStreamingMode)) ||
     keyEdited;
   const requestClose = (): Promise<boolean> => {
     if (busy || deleting) return Promise.resolve(false);
@@ -205,7 +228,12 @@ export function ProfileEditor({
                     id: profile?.id,
                     name: name.trim(),
                     provider,
-                    ...(!profile || keyEdited ? { api_key: key.trim() } : {}),
+                    ...(definition.requiresKey && (!profile || keyEdited)
+                      ? { api_key: key.trim() }
+                      : {}),
+                    ...(provider === "local"
+                      ? { model_id: modelID, streaming_mode: streamingMode }
+                      : {}),
                   });
                   if (alive.current) onClose();
                 } catch (e) {
@@ -234,6 +262,9 @@ export function ProfileEditor({
                     )}
                     onChange={(value) => {
                       setProvider(value);
+                      if (value === "local") {
+                        setStreamingMode(defaultMode(modelID));
+                      }
                       if (!nameEdited) setName(nextName(value, profiles));
                     }}
                   />
@@ -356,6 +387,55 @@ export function ProfileEditor({
                     </p>
                   )}
                 </div>
+              )}
+              {provider === "local" && (
+                <>
+                  <div className="profile-form-field">
+                    <label htmlFor="local-model">Local model</label>
+                    <Dropdown
+                      id="local-model"
+                      label="Local model"
+                      value={modelID}
+                      disabled={busy}
+                      options={localModelOptions}
+                      onChange={(value) => {
+                        setModelID(value);
+                        setStreamingMode(defaultMode(value));
+                      }}
+                    />
+                    <p className="quiet">
+                      Models are downloaded and verified in Local Models. Both
+                      models use saved vocabulary as decoder bias.
+                    </p>
+                  </div>
+                  <div className="profile-form-field">
+                    <span className="field-label">Dictation mode</span>
+                    {modelSupportsStreaming(modelID) ? (
+                      <>
+                        <SegmentedControl
+                          label="Dictation mode"
+                          value={streamingMode}
+                          disabled={busy}
+                          options={[
+                            { value: "process", label: "Process while recording" },
+                            { value: "live", label: "Live insertion" },
+                            { value: "none", label: "No streaming" },
+                          ]}
+                          onChange={setStreamingMode}
+                        />
+                        <p className="quiet">
+                          Live insertion sends only committed text. Voice Type
+                          never edits or removes text already inserted.
+                        </p>
+                      </>
+                    ) : (
+                      <p className="quiet">
+                        This model transcribes after recording stops and does
+                        not support streaming.
+                      </p>
+                    )}
+                  </div>
+                </>
               )}
               {error && (
                 <p className="field-error" role="alert">

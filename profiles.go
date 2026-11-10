@@ -24,6 +24,18 @@ func (p Profile) APIKey() string {
 	return strings.TrimSpace(key)
 }
 
+func (p Profile) ModelID() string {
+	var id string
+	_ = json.Unmarshal(p.Config["model_id"], &id)
+	return strings.TrimSpace(id)
+}
+
+func (p Profile) StreamingMode() streamingMode {
+	var mode streamingMode
+	_ = json.Unmarshal(p.Config["streaming_mode"], &mode)
+	return mode
+}
+
 func (c Config) activeProfile() (Profile, bool) {
 	for _, p := range c.Profiles {
 		if p.ID == c.ActiveProfile {
@@ -42,6 +54,13 @@ func validateProfile(p Profile) error {
 		var key string
 		if err := json.Unmarshal(p.Config["api_key"], &key); err != nil || strings.TrimSpace(key) == "" {
 			return errors.New("this provider requires an API key")
+		}
+	case providerLocal:
+		if !validLocalModelID(p.ModelID()) {
+			return errors.New("choose a supported local transcription model")
+		}
+		if err := validateStreamingMode(p.ModelID(), p.StreamingMode()); err != nil {
+			return err
 		}
 	default:
 		return errors.New("unsupported profile provider")
@@ -92,10 +111,14 @@ func migrateLegacyProfiles(cfg Config) ([]Profile, string) {
 }
 
 func providerLabel(provider string) string {
-	if provider == providerOpenAI {
+	switch provider {
+	case providerOpenAI:
 		return "OpenAI"
+	case providerLocal:
+		return "On-device"
+	default:
+		return "OpenRouter"
 	}
-	return "OpenRouter"
 }
 
 func nextProfileName(profiles []Profile, provider string) string {

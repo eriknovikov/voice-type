@@ -52,6 +52,7 @@ type engine struct {
 	lastAttemptFailed bool
 	recorder          audioRecorder
 	stt               *sttClient
+	localModels       *LocalModelManager
 	runLog            *runLog
 
 	mu    sync.Mutex
@@ -63,6 +64,8 @@ type engine struct {
 	sessionID     uint64
 	sessionCtx    context.Context
 	sessionCancel context.CancelFunc
+	activeLocal   *localModelUse
+	activeStream  *localStreamSession
 
 	testRecorder *Recorder
 	testTimer    *time.Timer
@@ -71,10 +74,12 @@ type engine struct {
 
 func newEngine(cfg Config, recorder audioRecorder, settings sttSettings) *engine {
 	notice, recoveryVersion := configRecoveryNotice()
+	models := newLocalModelManager()
 	d := &engine{
 		cfg:             cfg,
 		recorder:        recorder,
-		stt:             newSTTClient(settings),
+		stt:             newSTTClientWithModels(settings, models),
+		localModels:     models,
 		recoveryVersion: recoveryVersion,
 	}
 	if notice != "" {
@@ -124,6 +129,7 @@ func (d *engine) startSession() error {
 	}
 	d.configError = ""
 	d.state = stateChecking
+	stt := d.stt
 	d.sessionID++
 	sessionID := d.sessionID
 	ctx, cancel := context.WithCancel(context.Background())
@@ -132,14 +138,35 @@ func (d *engine) startSession() error {
 	d.sessionWG.Add(1)
 	d.mu.Unlock()
 
+	var localUse *localModelUse
+	var localStream *localStreamSession
+	var err error
+	cleanupLocal := func() {
+		if setter, ok := d.recorder.(interface{ SetChunkSink(func([]int16)) }); ok {
+			setter.SetChunkSink(nil)
+		}
+		if localStream != nil {
+			localStream.Abort()
+		}
+		if localUse != nil {
+			localUse.close()
+		}
+	}
 	started := false
 	defer func() {
 		if !started {
+			cleanupLocal()
 			d.mu.Lock()
 			if d.sessionID == sessionID && d.state == stateChecking {
 				d.state = stateIdle
 				d.sessionCtx = nil
 				d.sessionCancel = nil
+			}
+			if d.activeLocal == localUse {
+				d.activeLocal = nil
+			}
+			if d.activeStream == localStream {
+				d.activeStream = nil
 			}
 			d.mu.Unlock()
 			cancel()
@@ -154,10 +181,39 @@ func (d *engine) startSession() error {
 	}
 	d.mu.Unlock()
 
+	if stt != nil && stt.local != nil {
+		localUse, err = stt.local.models.acquire(ctx, stt.settings.Model)
+		if err != nil {
+			d.mu.Lock()
+			d.lastAttemptFailed = true
+			d.runLog.complete(stt.settings.Provider, stt.settings.Model, "", "local_model_unavailable", 0, 0, nil, err)
+			d.mu.Unlock()
+			logf("LOCAL", "recording blocked: %v", err)
+			return err
+		}
+		if mode := stt.settings.StreamingMode; mode == streamingModeProcess || mode == streamingModeLive {
+			localStream, err = startLocalStream(ctx, localUse, mode, stt.settings.Vocabulary)
+			if err != nil {
+				d.mu.Lock()
+				d.lastAttemptFailed = true
+				d.runLog.complete(stt.settings.Provider, stt.settings.Model, "", "local_stream_start_error", 0, 0, nil, err)
+				d.mu.Unlock()
+				logf("LOCAL", "streaming could not start: %v", err)
+				return err
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if setter, ok := d.recorder.(interface{ SetChunkSink(func([]int16)) }); ok && localStream != nil {
+		setter.SetChunkSink(localStream.OfferSamples)
+	}
+
 	if rec, ok := d.recorder.(*Recorder); ok {
 		rec.SetSource(d.cfg.Microphone)
 	}
-	err := d.recorder.Start()
+	err = d.recorder.Start()
 	d.mu.Lock()
 	if rec, ok := d.recorder.(*Recorder); ok && rec.sourceFellBack() {
 		d.showNotice(microphoneFallbackNotice)
@@ -165,7 +221,11 @@ func (d *engine) startSession() error {
 	}
 	if err != nil {
 		d.lastAttemptFailed = true
-		d.runLog.complete(d.cfg.Provider, providerModel(d.cfg.Provider), "", "capture_error", 0, 0, nil, err)
+		provider, model := d.cfg.Provider, providerModel(d.cfg.Provider)
+		if stt != nil {
+			provider, model = stt.settings.Provider, stt.settings.Model
+		}
+		d.runLog.complete(provider, model, "", "capture_error", 0, 0, nil, err)
 		d.mu.Unlock()
 		logf("AUDIO", "start failed: %v", err)
 		return err
@@ -173,10 +233,13 @@ func (d *engine) startSession() error {
 	if d.shuttingDown || ctx.Err() != nil || d.sessionID != sessionID || d.state != stateChecking {
 		d.mu.Unlock()
 		d.recorder.Stop()
+		cleanupLocal()
 		return errors.New("shutting down")
 	}
 
 	d.state = stateRecording
+	d.activeLocal = localUse
+	d.activeStream = localStream
 	d.capTimer = time.AfterFunc(maxDurationSeconds*time.Second, func() {
 		d.stopSessionMatching(sessionID, true)
 	})
@@ -204,7 +267,7 @@ func (d *engine) reloadConfig() error {
 		return err
 	}
 	d.cfg = cfg
-	d.stt = newSTTClient(settings)
+	d.stt = newSTTClientWithModels(settings, d.localModels)
 	return nil
 }
 
@@ -220,6 +283,8 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 	d.state = stateTranscribing
 	ctx := d.sessionCtx
 	stt := d.stt
+	localUse := d.activeLocal
+	localStream := d.activeStream
 	if durationCap {
 		logf("AUDIO", "duration cap of %ds reached -- stopping", maxDurationSeconds)
 	}
@@ -229,8 +294,21 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 	}
 	d.mu.Unlock()
 
+	streamFinished := false
 	defer func() {
+		if localStream != nil && !streamFinished {
+			localStream.Abort()
+		}
+		if localUse != nil {
+			localUse.close()
+		}
 		d.mu.Lock()
+		if d.activeStream == localStream {
+			d.activeStream = nil
+		}
+		if d.activeLocal == localUse {
+			d.activeLocal = nil
+		}
 		d.state = stateIdle
 		if operationErr != nil && !d.shuttingDown {
 			d.lastAttemptFailed = true
@@ -257,6 +335,16 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 		return nil
 	}
 	if recordErr != nil {
+		if stt.local != nil {
+			wav := WavEncode(samples)
+			retained := ""
+			if path, retainErr := retainWAV(wav); retainErr == nil {
+				retained = " -- audio retained at " + path
+			}
+			d.runLog.complete(stt.settings.Provider, stt.settings.Model, "", "capture_error", 0, wavDurationSeconds(samples), nil, recordErr)
+			logf("AUDIO", "capture failed: %v%s", recordErr, retained)
+			return fmt.Errorf("capture failed: %w%s", recordErr, retained)
+		}
 		d.runLog.complete(stt.settings.Provider, stt.settings.Model, "", "capture_error", 0, 0, nil, recordErr)
 		logf("AUDIO", "capture failed: %v", recordErr)
 		return recordErr
@@ -278,7 +366,11 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 	requestedModel := stt.settings.Model
 	t0 := time.Now()
 	attempts := make([]runLogAttempt, 0, sttMaxAttempts)
-	result, err := stt.transcribeContext(ctx, wav, func(model string, attempt int, requestDuration time.Duration, result sttResult, err error) {
+	outcome := ""
+	observe := func(model string, attempt int, requestDuration time.Duration, result sttResult, err error) {
+		if stt.local != nil {
+			attempt = len(attempts) + 1
+		}
 		status := http.StatusOK
 		if err != nil {
 			status = 0
@@ -294,13 +386,49 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 			DurationMS: requestDuration.Milliseconds(),
 			Error:      safeRequestError(err),
 		})
-	})
+	}
+	var result sttResult
+	var err error
+	liveInserted := false
+	if stt.local != nil {
+		if localStream != nil {
+			streamStarted := time.Now()
+			streamResult := localStream.Finish()
+			streamFinished = true
+			streamDuration := time.Since(streamStarted)
+			streamErr := streamResult.Err
+			streamResultValue := sttResult{Text: streamResult.Text, ModelID: requestedModel, Offline: true}
+			observe(requestedModel, 1, streamDuration, streamResultValue, streamErr)
+			if streamErr != nil {
+				if errors.Is(ctx.Err(), context.Canceled) {
+					return nil
+				}
+				if stt.settings.StreamingMode == streamingModeProcess {
+					logf("LOCAL", "streaming failed; retrying the full recording locally: %v", streamErr)
+					result, err = stt.local.transcribeSamples(ctx, samples, observe, localUse)
+				} else {
+					outcome = "local_stream_error"
+					err = streamErr
+				}
+			} else {
+				result = streamResultValue
+				liveInserted = stt.settings.StreamingMode == streamingModeLive
+				if liveInserted && result.Text != "" && streamResult.Inserted == "" {
+					err = errors.New("live streaming finished without any committed text; recording retained")
+					outcome = "local_stream_error"
+				}
+			}
+		} else {
+			result, err = stt.local.transcribeSamples(ctx, samples, observe, localUse)
+		}
+	} else {
+		result, err = stt.transcribeContext(ctx, wav, observe)
+	}
 	requestDuration := time.Since(t0)
 	finalModel := result.ModelID
 	if finalModel == "" && len(attempts) > 0 {
 		finalModel = attempts[len(attempts)-1].Model
 	}
-	outcome := ""
 	defer func() {
 		if outcome == "" {
 			outcome = requestOutcome(err)
@@ -344,6 +472,10 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 	}
 	if err := ctx.Err(); err != nil {
 		logf("OUTPUT", "cancelled before insertion")
+		return nil
+	}
+	if liveInserted {
+		logf("OUTPUT", "live insertion completed with %d committed characters", len(result.Text))
 		return nil
 	}
 
@@ -400,6 +532,8 @@ func (d *engine) Close() {
 		d.mu.Lock()
 		d.shuttingDown = true
 		state := d.state
+		activeStream := d.activeStream
+		activeLocal := d.activeLocal
 		if d.sessionCancel != nil {
 			d.sessionCancel()
 		}
@@ -415,12 +549,25 @@ func (d *engine) Close() {
 
 		if state == stateRecording {
 			d.recorder.Stop()
+			if activeStream != nil {
+				activeStream.Abort()
+			}
+			if activeLocal != nil {
+				activeLocal.close()
+			}
+			d.mu.Lock()
+			d.activeStream = nil
+			d.activeLocal = nil
+			d.mu.Unlock()
 			logf("AUDIO", "recording discarded during shutdown")
 		}
 		d.sessionWG.Wait()
 		d.StopMicrophoneTest()
 		if d.recorder != nil {
 			d.recorder.Close()
+		}
+		if d.localModels != nil {
+			d.localModels.Close()
 		}
 		d.runLog.close("ok")
 		if d.lock != nil {
