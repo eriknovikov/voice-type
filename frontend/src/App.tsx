@@ -346,7 +346,6 @@ export function App() {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <small>v{info?.version ?? "—"}</small>
           <div className={`save-status ${saveStatus}`}>
             <span role="status">
               {saveStatus === "saving"
@@ -369,6 +368,7 @@ export function App() {
               </button>
             )}
           </div>
+          <small>v{info?.version ?? "—"}</small>
         </div>
       </aside>
       <main id="main-content" tabIndex={-1} aria-busy={busy}>
