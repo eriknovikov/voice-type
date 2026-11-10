@@ -115,6 +115,30 @@ func (d *engine) Microphones() ([]AudioSource, error) {
 	return sources, nil
 }
 
+func (d *engine) LocalModels() ([]LocalModel, error) {
+	return d.localModels.List()
+}
+
+func (d *engine) InstallLocalModel(id string) error { return d.localModels.Install(id) }
+func (d *engine) ResumeLocalModel(id string) error  { return d.localModels.Resume(id) }
+func (d *engine) RetryLocalModel(id string) error   { return d.localModels.Retry(id) }
+func (d *engine) PauseLocalModel(id string) error   { return d.localModels.Pause(id) }
+func (d *engine) CancelLocalModel(id string) error  { return d.localModels.Cancel(id) }
+
+func (d *engine) RemoveLocalModel(id string) error {
+	if !d.toggleMu.TryLock() {
+		return errors.New("finish the current dictation before removing a model")
+	}
+	defer d.toggleMu.Unlock()
+	d.mu.Lock()
+	busy := d.shuttingDown || d.state != stateIdle
+	d.mu.Unlock()
+	if busy {
+		return errors.New("finish the current dictation before removing a model")
+	}
+	return d.localModels.Remove(id)
+}
+
 // Reserve work before spawning a goroutine. Additional commands are rejected,
 // never saved up to start another recording after transcription finishes.
 func (d *engine) prepareToggle() (func() error, error) {

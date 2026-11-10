@@ -24,10 +24,12 @@ type Settings struct {
 	Notice        string           `json:"notice"`
 }
 type ProfileSummary struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Provider  string `json:"provider"`
-	MaskedKey string `json:"masked_key"`
+	ID            string        `json:"id"`
+	Name          string        `json:"name"`
+	Provider      string        `json:"provider"`
+	MaskedKey     string        `json:"masked_key"`
+	ModelID       string        `json:"model_id,omitempty"`
+	StreamingMode streamingMode `json:"streaming_mode,omitempty"`
 }
 type VocabularyList struct {
 	OriginalName string   `json:"original_name,omitempty"`
@@ -42,11 +44,13 @@ type SettingsUpdate struct {
 	Vocabulary *[]VocabularyList `json:"vocabulary,omitempty"`
 }
 type ProfileUpdate struct {
-	Revision string  `json:"revision"`
-	ID       string  `json:"id,omitempty"`
-	Name     string  `json:"name"`
-	Provider string  `json:"provider"`
-	APIKey   *string `json:"api_key,omitempty"`
+	Revision      string  `json:"revision"`
+	ID            string  `json:"id,omitempty"`
+	Name          string  `json:"name"`
+	Provider      string  `json:"provider"`
+	APIKey        *string `json:"api_key,omitempty"`
+	ModelID       string  `json:"model_id,omitempty"`
+	StreamingMode string  `json:"streaming_mode,omitempty"`
 }
 
 var settingsMu sync.Mutex
@@ -172,7 +176,14 @@ func readSettings() (Settings, error) {
 		out.Vocabulary = append(out.Vocabulary, VocabularyList{Name: list.Name, Terms: cleanTerms(list.Terms)})
 	}
 	for _, p := range cfg.Profiles {
-		out.Profiles = append(out.Profiles, ProfileSummary{ID: p.ID, Name: p.Name, Provider: p.Provider, MaskedKey: maskedKey(p.APIKey())})
+		summary := ProfileSummary{ID: p.ID, Name: p.Name, Provider: p.Provider}
+		if p.Provider == providerLocal {
+			summary.ModelID = p.ModelID()
+			summary.StreamingMode = p.StreamingMode()
+		} else {
+			summary.MaskedKey = maskedKey(p.APIKey())
+		}
+		out.Profiles = append(out.Profiles, summary)
 	}
 	return out, nil
 }
@@ -297,7 +308,23 @@ func UpsertProfile(update ProfileUpdate) (Settings, error) {
 	}
 	profile.Name = strings.TrimSpace(update.Name)
 	if update.APIKey != nil {
+		if update.Provider == providerLocal && strings.TrimSpace(*update.APIKey) != "" {
+			return Settings{}, errors.New("local transcription profiles do not use API keys")
+		}
 		putConfig(profile.Config, "api_key", strings.TrimSpace(*update.APIKey))
+	}
+	if update.Provider == providerLocal {
+		modelChanged := update.ModelID != "" && update.ModelID != profile.ModelID()
+		if update.ModelID != "" {
+			putConfig(profile.Config, "model_id", update.ModelID)
+		} else if index < 0 {
+			putConfig(profile.Config, "model_id", localModelUnifiedEnglish)
+		}
+		if update.StreamingMode != "" {
+			putConfig(profile.Config, "streaming_mode", update.StreamingMode)
+		} else if index < 0 || modelChanged {
+			putConfig(profile.Config, "streaming_mode", defaultStreamingMode(profile.ModelID()))
+		}
 	}
 	if err := validateProfile(profile); err != nil {
 		return Settings{}, err

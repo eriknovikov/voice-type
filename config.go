@@ -62,8 +62,18 @@ const (
 const (
 	providerOpenAI     = "openai"
 	providerOpenRouter = "openrouter"
+	providerLocal      = "local"
 	defaultModelID     = "gpt-transcribe"
+
+	localModelUnifiedEnglish = "parakeet-unified-en"
+	localModelParakeetV3     = "parakeet-tdt-v3"
+
+	streamingModeProcess = "process"
+	streamingModeLive    = "live"
+	streamingModeNone    = "none"
 )
+
+type streamingMode string
 
 func configDefaults() Config {
 	return Config{
@@ -74,18 +84,23 @@ func configDefaults() Config {
 // sttSettings is a snapshot for one recording. Reloads never mutate it during
 // capture or transcription.
 type sttSettings struct {
-	Provider   string
-	Model      string
-	APIKey     string
-	Vocabulary []string
-	Workspace  string
+	Provider      string
+	Model         string
+	StreamingMode streamingMode
+	APIKey        string
+	Vocabulary    []string
+	Workspace     string
 }
 
 func providerModel(provider string) string {
-	if provider == providerOpenRouter {
+	switch provider {
+	case providerOpenRouter:
 		return "openai/" + defaultModelID
+	case providerLocal:
+		return localModelUnifiedEnglish
+	default:
+		return defaultModelID
 	}
-	return defaultModelID
 }
 
 func (s sttSettings) validateCredentials() error {
@@ -94,6 +109,15 @@ func (s sttSettings) validateCredentials() error {
 		if s.APIKey == "" {
 			return errors.New("select a profile with an API key in General")
 		}
+	case providerLocal:
+		if !validLocalModelID(s.Model) {
+			return errors.New("select a supported local model in General")
+		}
+		if err := validateStreamingMode(s.Model, s.StreamingMode); err != nil {
+			return err
+		}
+	default:
+		return errors.New("select a supported transcription profile in General")
 	}
 	return nil
 }
@@ -104,12 +128,21 @@ func (c Config) resolveSTT(workspace string) (sttSettings, error) {
 		if !ok {
 			return sttSettings{}, errors.New("select a profile in General before recording")
 		}
-		c.Provider, c.APIKey = profile.Provider, profile.APIKey()
+		c.Provider = profile.Provider
+		if profile.Provider == providerLocal {
+			c.APIKey = ""
+		} else {
+			c.APIKey = profile.APIKey()
+		}
 	}
-	if c.Provider != providerOpenAI && c.Provider != providerOpenRouter {
-		return sttSettings{}, errors.New("provider must be openai or openrouter")
+	if c.Provider != providerOpenAI && c.Provider != providerOpenRouter && c.Provider != providerLocal {
+		return sttSettings{}, errors.New("provider must be openai, openrouter, or local")
 	}
 	s := sttSettings{Provider: c.Provider, Model: providerModel(c.Provider), APIKey: configAPIKey(c), Workspace: workspace}
+	if profile, ok := c.activeProfile(); ok && profile.Provider == providerLocal {
+		s.Model = profile.ModelID()
+		s.StreamingMode = profile.StreamingMode()
+	}
 	if c.Provider == providerOpenAI {
 		if err := c.validateKeywords(workspace); err != nil {
 			return sttSettings{}, err

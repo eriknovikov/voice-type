@@ -43,7 +43,8 @@ case "$1" in
 esac
 `
 	for path, data := range map[string]string{
-		"build/voice-type": fixture, "go.mod": "module example.test/app\n", "icon.png": "fixture-icon",
+		"build/voice-type": fixture, "build/LICENSE": "voice-type license", "build/THIRD-PARTY-LICENSES.md": "third-party license",
+		"go.mod": "module example.test/app\n", "icon.png": "fixture-icon",
 		"tools/make": "#!/bin/sh\nexit 0\n",
 	} {
 		if err := os.WriteFile(filepath.Join(source, path), []byte(data), 0755); err != nil {
@@ -98,6 +99,11 @@ func TestInstallerCleanUpgradeUninstallPreservesData(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(bin, "voice-type-app")); !os.IsNotExist(err) {
 			t.Fatal("old executable survived")
 		}
+		for _, license := range []string{"LICENSE", "THIRD-PARTY-LICENSES.md"} {
+			if _, err := os.Stat(filepath.Join(os.Getenv("XDG_DATA_HOME"), "doc/voice-type", license)); err != nil {
+				t.Fatalf("installed license %s is missing: %v", license, err)
+			}
+		}
 		if iteration == 1 {
 			entry, err := os.ReadFile(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "autostart/voice-type.desktop"))
 			if err != nil || !strings.Contains(string(entry), `Exec="`+escapedExecutable+`" --background`) {
@@ -110,6 +116,11 @@ func TestInstallerCleanUpgradeUninstallPreservesData(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(bin, "voice-type")); !os.IsNotExist(err) {
 		t.Fatal("binary remained")
+	}
+	for _, license := range []string{"LICENSE", "THIRD-PARTY-LICENSES.md"} {
+		if _, err := os.Stat(filepath.Join(os.Getenv("XDG_DATA_HOME"), "doc/voice-type", license)); !os.IsNotExist(err) {
+			t.Fatalf("installed license %s remained after uninstall", license)
+		}
 	}
 	for _, path := range dataPaths {
 		data, err := os.ReadFile(path)
@@ -166,12 +177,12 @@ cp "$TEST_RELEASE/$(basename "$2")" "$4"
 				t.Fatal(err)
 			}
 			payload := filepath.Join(source, "build")
-			for _, name := range []string{"icon.png", "LICENSE"} {
+			for _, name := range []string{"icon.png", "LICENSE", "THIRD-PARTY-LICENSES.md"} {
 				if err := os.WriteFile(filepath.Join(payload, name), []byte(name), 0644); err != nil {
 					t.Fatal(err)
 				}
 			}
-			members := []string{"voice-type", "icon.png", "LICENSE"}
+			members := []string{"voice-type", "icon.png", "LICENSE", "THIRD-PARTY-LICENSES.md"}
 			if kind == "layout" {
 				members = append(members, "unexpected")
 				os.WriteFile(filepath.Join(payload, "unexpected"), nil, 0644)

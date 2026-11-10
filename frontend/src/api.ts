@@ -9,6 +9,8 @@ export interface ProfileSummary {
   name: string;
   provider: string;
   masked_key: string;
+  model_id?: string;
+  streaming_mode?: string;
 }
 export interface Settings {
   revision: string;
@@ -30,6 +32,33 @@ export interface ProfileUpdate {
   name: string;
   provider: string;
   api_key?: string;
+  model_id?: string;
+  streaming_mode?: string;
+}
+export interface LocalModel {
+  id: string;
+  name: string;
+  filename: string;
+  bytes: number;
+  downloaded_bytes: number;
+  progress: number;
+  languages: string;
+  supports_streaming: boolean;
+  vocabulary_support: string;
+  license: string;
+  license_url: string;
+  model_card_url: string;
+  engine_revision: string;
+  state:
+    | "not_installed"
+    | "downloading"
+    | "pausing"
+    | "paused"
+    | "verifying"
+    | "ready"
+    | "failed"
+    | "cancelling";
+  error: string;
 }
 export interface Status {
   state: string;
@@ -93,6 +122,13 @@ export const api = {
   workspace: (name: string) => call<void>("SelectWorkspace", name),
   status: () => call<Status>("Status"),
   microphones: () => call<AudioSource[]>("Microphones"),
+  localModels: () => call<LocalModel[]>("LocalModels"),
+  installLocalModel: (id: string) => call<void>("InstallLocalModel", id),
+  resumeLocalModel: (id: string) => call<void>("ResumeLocalModel", id),
+  retryLocalModel: (id: string) => call<void>("RetryLocalModel", id),
+  pauseLocalModel: (id: string) => call<void>("PauseLocalModel", id),
+  cancelLocalModel: (id: string) => call<void>("CancelLocalModel", id),
+  removeLocalModel: (id: string) => call<void>("RemoveLocalModel", id),
   startTest: (id: string) => call<void>("StartMicrophoneTest", id),
   stopTest: () => call<void>("StopMicrophoneTest"),
   toggle: () => call<void>("Toggle"),

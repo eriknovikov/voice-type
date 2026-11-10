@@ -2,6 +2,15 @@ import { Plus, Pencil } from "lucide-react";
 import type { ProfileSummary } from "./api";
 import { providerName } from "./ProfileEditor";
 
+const modelName = (id?: string) =>
+  id === "parakeet-tdt-v3" ? "Parakeet TDT v3" : "Parakeet Unified English";
+const modeName = (mode?: string) =>
+  mode === "live"
+    ? "Live insertion"
+    : mode === "none"
+      ? "No streaming"
+      : "Process while recording";
+
 export function Profiles({
   profiles,
   active,
@@ -53,7 +62,13 @@ export function Profiles({
                   <strong title={profile.name}>{profile.name}</strong>
                   <span className="profile-meta">
                     <span>{providerName(profile.provider)}</span>
-                    <span className="profile-key">{profile.masked_key}</span>
+                    {profile.provider === "local" ? (
+                      <span>
+                        {modelName(profile.model_id)} · {modeName(profile.streaming_mode)}
+                      </span>
+                    ) : (
+                      <span className="profile-key">{profile.masked_key}</span>
+                    )}
                   </span>
                 </span>
               </label>

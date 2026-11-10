@@ -90,6 +90,13 @@ func (b *Bridge) CopyProfileKey(id string) error {
 }
 func (b *Bridge) Status() Status                      { return b.engine.Status() }
 func (b *Bridge) Microphones() ([]AudioSource, error) { return b.engine.Microphones() }
+func (b *Bridge) LocalModels() ([]LocalModel, error)  { return b.engine.LocalModels() }
+func (b *Bridge) InstallLocalModel(id string) error   { return b.engine.InstallLocalModel(id) }
+func (b *Bridge) ResumeLocalModel(id string) error    { return b.engine.ResumeLocalModel(id) }
+func (b *Bridge) RetryLocalModel(id string) error     { return b.engine.RetryLocalModel(id) }
+func (b *Bridge) PauseLocalModel(id string) error     { return b.engine.PauseLocalModel(id) }
+func (b *Bridge) CancelLocalModel(id string) error    { return b.engine.CancelLocalModel(id) }
+func (b *Bridge) RemoveLocalModel(id string) error    { return b.engine.RemoveLocalModel(id) }
 func (b *Bridge) StartMicrophoneTest(id string) error {
 	if err := b.engine.StartMicrophoneTest(id); err != nil {
 		return err

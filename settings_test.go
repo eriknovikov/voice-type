@@ -149,6 +149,99 @@ func TestProfilesCreationEditingAndDeletion(t *testing.T) {
 		t.Fatal("adding after active deletion selected account")
 	}
 }
+
+func TestLocalProfilesKeepModeAndVocabularyWithoutCloudCredentials(t *testing.T) {
+	settingsTestHome(t)
+	view := readSettingsTest(t)
+	vocabulary := []VocabularyList{{Name: "general", Terms: []string{"Voice Type"}}}
+	view, err := SaveSettings(SettingsUpdate{Revision: view.Revision, Vocabulary: &vocabulary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err = UpsertProfile(ProfileUpdate{
+		Revision:      view.Revision,
+		Name:          "Private",
+		Provider:      providerLocal,
+		ModelID:       localModelUnifiedEnglish,
+		StreamingMode: streamingModeProcess,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := view.Profiles[0]
+	if profile.Provider != providerLocal || profile.ModelID != localModelUnifiedEnglish || profile.StreamingMode != streamingModeProcess || profile.MaskedKey != "" {
+		t.Fatalf("local profile summary: %+v", profile)
+	}
+	cfg, err := configReadStrict()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := cfg.resolveSTT("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Provider != providerLocal || settings.Model != localModelUnifiedEnglish || settings.StreamingMode != streamingModeProcess || len(settings.Vocabulary) != 1 {
+		t.Fatalf("local settings lost profile fields or vocabulary: %+v", settings)
+	}
+	if err := settings.validateCredentials(); err != nil {
+		t.Fatalf("local profile should not require an API key: %v", err)
+	}
+	if _, err := UpsertProfile(ProfileUpdate{
+		Revision:      view.Revision,
+		ID:            profile.ID,
+		Name:          profile.Name,
+		Provider:      providerLocal,
+		ModelID:       localModelParakeetV3,
+		StreamingMode: streamingModeLive,
+	}); err == nil {
+		t.Fatal("non-streaming Parakeet v3 accepted live insertion")
+	}
+	view, err = UpsertProfile(ProfileUpdate{
+		Revision:      view.Revision,
+		ID:            profile.ID,
+		Name:          profile.Name,
+		Provider:      providerLocal,
+		ModelID:       localModelParakeetV3,
+		StreamingMode: streamingModeNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = configReadStrict()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err = cfg.resolveSTT("")
+	if err != nil || settings.Model != localModelParakeetV3 || settings.StreamingMode != streamingModeNone || len(settings.Vocabulary) != 1 {
+		t.Fatalf("batch local profile round-trip lost settings: %+v %v", settings, err)
+	}
+}
+
+func TestLocalProfileRejectsCloudKeyAndUnknownModel(t *testing.T) {
+	settingsTestHome(t)
+	view := readSettingsTest(t)
+	secret := "must-not-be-used"
+	if _, err := UpsertProfile(ProfileUpdate{
+		Revision:      view.Revision,
+		Name:          "Local",
+		Provider:      providerLocal,
+		APIKey:        &secret,
+		ModelID:       localModelUnifiedEnglish,
+		StreamingMode: streamingModeProcess,
+	}); err == nil {
+		t.Fatal("local profile accepted cloud credentials")
+	}
+	if _, err := UpsertProfile(ProfileUpdate{
+		Revision:      view.Revision,
+		Name:          "Unknown",
+		Provider:      providerLocal,
+		ModelID:       "arbitrary-file.gguf",
+		StreamingMode: streamingModeNone,
+	}); err == nil {
+		t.Fatal("local profile accepted an unlisted model")
+	}
+}
+
 func TestMigrationDoesNotResurrectRemovedLegacyKey(t *testing.T) {
 	settingsTestHome(t)
 	data := []byte(`{"provider":"openai","api_key":"old-secret","api_keys":{"openai":"","openrouter":"other-secret"}}`)
