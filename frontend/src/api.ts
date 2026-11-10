@@ -8,7 +8,14 @@ export interface ProfileSummary {
   id: string;
   name: string;
   provider: string;
-  masked_key: string;
+  model_id?: string;
+  streaming_mode?: string;
+  languages?: string[];
+}
+export interface APIKeySummary {
+  masked_key?: string;
+  saved: boolean;
+  error?: string;
 }
 export interface Settings {
   revision: string;
@@ -17,6 +24,7 @@ export interface Settings {
   microphone: string;
   vocabulary: VocabularyList[];
   workspace: string;
+  api_keys: Record<string, APIKeySummary>;
   notice?: string;
 }
 export interface SettingsUpdate {
@@ -29,7 +37,31 @@ export interface ProfileUpdate {
   id?: string;
   name: string;
   provider: string;
-  api_key?: string;
+  model_id?: string;
+  streaming_mode?: string;
+  languages?: string[];
+}
+export interface LocalModel {
+  id: string;
+  name: string;
+  bytes: number;
+  downloaded_bytes: number;
+  progress: number;
+  languages: string;
+  supports_streaming: boolean;
+  license: string;
+  license_url: string;
+  model_card_url: string;
+  state:
+    | "not_installed"
+    | "downloading"
+    | "pausing"
+    | "paused"
+    | "verifying"
+    | "ready"
+    | "failed"
+    | "cancelling";
+  error: string;
 }
 export interface Status {
   state: string;
@@ -68,6 +100,24 @@ export interface LogRecord {
   audio_ms: number;
   attempt_count: number;
   attempts: unknown[];
+  timing?: {
+    capture_requested?: string;
+    capture_started?: string;
+    capture_startup_ms?: number;
+    startup_backlog_drained?: string;
+    connection_started?: string;
+    connection_ready?: string;
+    connection_ms?: number;
+    stop_requested?: string;
+    capture_stopped?: string;
+    final_audio_sent?: string;
+    commit_sent?: string;
+    transcript_received?: string;
+    insertion_submitted?: string;
+    insertion_cleanup_completed?: string;
+    stop_to_transcript_ms?: number;
+    stop_to_submission_ms?: number;
+  };
 }
 const call = <T>(method: string, ...args: unknown[]): Promise<T> =>
   Call.ByName(
@@ -88,11 +138,22 @@ export const api = {
     call<Settings>("DeleteProfile", revision, id),
   selectProfile: (revision: string, id: string) =>
     call<Settings>("SelectProfile", revision, id),
-  revealProfileKey: (id: string) => call<string>("RevealProfileKey", id),
-  copyProfileKey: (id: string) => call<void>("CopyProfileKey", id),
+  saveAPIKey: (provider: string, key: string) =>
+    call<Settings>("SaveAPIKey", provider, key),
+  deleteAPIKey: (provider: string) =>
+    call<Settings>("DeleteAPIKey", provider),
+  copyAPIKey: (provider: string) =>
+    call<void>("CopyAPIKey", provider),
   workspace: (name: string) => call<void>("SelectWorkspace", name),
   status: () => call<Status>("Status"),
   microphones: () => call<AudioSource[]>("Microphones"),
+  localModels: () => call<LocalModel[]>("LocalModels"),
+  installLocalModel: (id: string) => call<void>("InstallLocalModel", id),
+  resumeLocalModel: (id: string) => call<void>("ResumeLocalModel", id),
+  retryLocalModel: (id: string) => call<void>("RetryLocalModel", id),
+  pauseLocalModel: (id: string) => call<void>("PauseLocalModel", id),
+  cancelLocalModel: (id: string) => call<void>("CancelLocalModel", id),
+  removeLocalModel: (id: string) => call<void>("RemoveLocalModel", id),
   startTest: (id: string) => call<void>("StartMicrophoneTest", id),
   stopTest: () => call<void>("StopMicrophoneTest"),
   toggle: () => call<void>("Toggle"),

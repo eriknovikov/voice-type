@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Check, Copy, Eye, EyeOff, Trash2 } from "lucide-react";
-import { api, type ProfileSummary, type ProfileUpdate } from "./api";
+import { Trash2 } from "lucide-react";
+import type { APIKeySummary, ProfileSummary, ProfileUpdate } from "./api";
+import { Dropdown } from "./Dropdown";
 import { ConfirmDialog, SegmentedControl } from "./ui";
 
 export const providerName = (provider: string) =>
@@ -9,7 +10,20 @@ export const providerName = (provider: string) =>
     ? "OpenAI"
     : provider === "openrouter"
       ? "OpenRouter"
+      : provider === "local"
+        ? "On-device"
       : provider;
+const unifiedModel = "parakeet-unified-en";
+const modelSupportsStreaming = (modelID: string) => modelID === unifiedModel;
+const defaultMode = (modelID: string) =>
+  modelSupportsStreaming(modelID) ? "process" : "none";
+const localModelOptions = [
+  {
+    value: unifiedModel,
+    label: "Parakeet Unified English · 731 MB",
+  },
+  { value: "parakeet-tdt-v3", label: "Parakeet TDT v3 · 740 MB" },
+];
 const nextName = (provider: string, profiles: ProfileSummary[]) => {
   let index = 1;
   while (
@@ -26,10 +40,17 @@ const nextName = (provider: string, profiles: ProfileSummary[]) => {
 const providerForms = {
   openai: { label: "OpenAI", requiresKey: true },
   openrouter: { label: "OpenRouter", requiresKey: true },
+  local: { label: "On-device", requiresKey: false },
+};
+type ProviderDraft = {
+  modelID: string;
+  streamingMode: string;
+  languages: string;
 };
 export function ProfileEditor({
   profile,
   profiles,
+  apiKeys,
   onSave,
   onDelete,
   onClose,
@@ -37,6 +58,7 @@ export function ProfileEditor({
 }: {
   profile: ProfileSummary | null;
   profiles: ProfileSummary[];
+  apiKeys: Record<string, APIKeySummary>;
   onSave: (update: Omit<ProfileUpdate, "revision">) => Promise<void>;
   onDelete: () => Promise<void>;
   onClose: () => void;
@@ -45,31 +67,64 @@ export function ProfileEditor({
   const [provider, setProvider] = useState(profile?.provider ?? "openai");
   const initialName = useRef(profile?.name ?? nextName("openai", profiles));
   const [name, setName] = useState(initialName.current);
-  const [nameEdited, setNameEdited] = useState(false);
-  const [key, setKey] = useState("");
-  const [keyEdited, setKeyEdited] = useState(false);
-  const [revealed, setRevealed] = useState<string>();
-  const [visible, setVisible] = useState(false);
+  const autoName = useRef(profile ? null : initialName.current);
+  const initialLanguages = (profile?.languages ?? []).join(", ");
+  const localModelID =
+    profile?.provider === "local"
+      ? (profile.model_id ?? unifiedModel)
+      : unifiedModel;
+  const localMode =
+    profile?.provider === "local"
+      ? (profile.streaming_mode ?? defaultMode(localModelID))
+      : defaultMode(localModelID);
+  const initialDrafts = useRef<Record<string, ProviderDraft>>({
+    openai: {
+      modelID: unifiedModel,
+      streamingMode:
+        profile?.provider === "openai"
+          ? (profile.streaming_mode ?? "none")
+          : "process",
+      languages: initialLanguages,
+    },
+    openrouter: {
+      modelID: unifiedModel,
+      streamingMode: "none",
+      languages: "",
+    },
+    local: {
+      modelID: localModelID,
+      streamingMode: localMode,
+      languages: "",
+    },
+  });
+  const providerDrafts = useRef(structuredClone(initialDrafts.current));
+  const startingDraft = initialDrafts.current[profile?.provider ?? "openai"];
+  const [modelID, setModelID] = useState(startingDraft.modelID);
+  const [streamingMode, setStreamingMode] = useState(
+    startingDraft.streamingMode,
+  );
+  const [languages, setLanguages] = useState(startingDraft.languages);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [nameError, setNameError] = useState("");
-  const [keyError, setKeyError] = useState("");
-  const [copied, setCopied] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   const nameInput = useRef<HTMLInputElement>(null);
-  const keyInput = useRef<HTMLInputElement>(null);
   const alive = useRef(true);
-  const copiedTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const dismiss = useRef<{
     promise: Promise<boolean>;
     resolve: (value: boolean) => void;
   } | null>(null);
   const previousFocus = useRef(document.activeElement);
   const dirty =
-    name !== initialName.current ||
+    (profile ? name !== initialName.current : name !== autoName.current) ||
     provider !== (profile?.provider ?? "openai") ||
-    keyEdited;
+    (provider === "local" &&
+      (modelID !== initialDrafts.current.local.modelID ||
+        streamingMode !== initialDrafts.current.local.streamingMode)) ||
+    (provider === "openai" &&
+      (streamingMode !== initialDrafts.current.openai.streamingMode ||
+        languages !== initialDrafts.current.openai.languages));
   const requestClose = (): Promise<boolean> => {
     if (busy || deleting) return Promise.resolve(false);
     if (!dirty) {
@@ -95,11 +150,11 @@ export function ProfileEditor({
     alive.current = true;
     return () => {
       alive.current = false;
-      clearTimeout(copiedTimer.current);
       dismiss.current?.resolve(false);
     };
   }, []);
   const definition = providerForms[provider as keyof typeof providerForms];
+  const keySummary = apiKeys[provider];
   const validateName = () => {
     const message = !name.trim()
       ? "Enter a profile name."
@@ -112,30 +167,6 @@ export function ProfileEditor({
         : "";
     setNameError(message);
     return !message;
-  };
-  const toggleReveal = async () => {
-    if (visible) {
-      setVisible(false);
-      setRevealed(undefined);
-      return;
-    }
-    setError("");
-    if (!profile || keyEdited) {
-      setVisible(true);
-      return;
-    }
-    setBusy(true);
-    try {
-      const value = await api.revealProfileKey(profile.id);
-      if (alive.current) {
-        setRevealed(value);
-        setVisible(true);
-      }
-    } catch (e) {
-      if (alive.current) setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      if (alive.current) setBusy(false);
-    }
   };
   const settleDismiss = (discard: boolean) => {
     const pending = dismiss.current;
@@ -185,17 +216,8 @@ export function ProfileEditor({
               onSubmit={async (event) => {
                 event.preventDefault();
                 const validName = validateName();
-                const missingKey =
-                  definition.requiresKey &&
-                  (!profile || keyEdited) &&
-                  !key.trim();
-                setKeyError(missingKey ? "Enter an API key." : "");
                 if (!validName) {
                   nameInput.current?.focus();
-                  return;
-                }
-                if (missingKey) {
-                  keyInput.current?.focus();
                   return;
                 }
                 setBusy(true);
@@ -205,7 +227,18 @@ export function ProfileEditor({
                     id: profile?.id,
                     name: name.trim(),
                     provider,
-                    ...(!profile || keyEdited ? { api_key: key.trim() } : {}),
+                    ...(provider === "local"
+                      ? { model_id: modelID, streaming_mode: streamingMode }
+                      : {}),
+                    ...(provider === "openai"
+                      ? {
+                          streaming_mode: streamingMode,
+                          languages: languages
+                            .split(",")
+                            .map((code) => code.trim().toLowerCase())
+                            .filter(Boolean),
+                        }
+                      : {}),
                   });
                   if (alive.current) onClose();
                 } catch (e) {
@@ -217,27 +250,30 @@ export function ProfileEditor({
               }}
             >
               <div className="profile-form-field">
-                {profile ? (
-                  <>
-                    <span className="field-label">Provider</span>
-                    <div className="read-only-field">
-                      {providerName(provider)}
-                    </div>
-                  </>
-                ) : (
-                  <SegmentedControl
-                    label="Provider"
-                    value={provider}
-                    disabled={busy}
-                    options={Object.entries(providerForms).map(
-                      ([value, form]) => ({ value, label: form.label }),
-                    )}
-                    onChange={(value) => {
-                      setProvider(value);
-                      if (!nameEdited) setName(nextName(value, profiles));
-                    }}
-                  />
-                )}
+                <SegmentedControl
+                  label="Provider"
+                  value={provider}
+                  disabled={busy}
+                  options={Object.entries(providerForms).map(
+                    ([value, form]) => ({ value, label: form.label }),
+                  )}
+                  onChange={(value) => {
+                    providerDrafts.current[provider] = {
+                      modelID,
+                      streamingMode,
+                      languages,
+                    };
+                    setProvider(value);
+                    const next = providerDrafts.current[value];
+                    setModelID(next.modelID);
+                    setStreamingMode(next.streamingMode);
+                    setLanguages(next.languages);
+                    if (autoName.current !== null) {
+                      autoName.current = nextName(value, profiles);
+                      setName(autoName.current);
+                    }
+                  }}
+                />
               </div>
               <div className="profile-form-field">
                 <label htmlFor="profile-name">Name</label>
@@ -254,7 +290,7 @@ export function ProfileEditor({
                   }
                   onChange={(event) => {
                     setName(event.target.value);
-                    setNameEdited(true);
+                    autoName.current = null;
                     setNameError("");
                   }}
                   onBlur={validateName}
@@ -271,91 +307,107 @@ export function ProfileEditor({
               </div>
               {definition.requiresKey && (
                 <div className="profile-form-field">
-                  <label htmlFor="profile-key">API key</label>
-                  <div className="key-editor">
+                  <span className="field-label">API key</span>
+                  <p className="quiet key-summary" role="status">
+                    {keySummary?.saved
+                      ? `${keySummary.masked_key} · Saved for ${definition.label}`
+                      : keySummary?.error ||
+                        `No ${definition.label} API key saved`}
+                  </p>
+                  <p className="quiet">Manage API keys in the sidebar.</p>
+                </div>
+              )}
+              {provider === "openai" && (
+                <>
+                  <div className="profile-form-field">
+                    <span className="field-label">Transcription mode</span>
+                    <SegmentedControl
+                      label="Transcription mode"
+                      value={streamingMode}
+                      disabled={busy}
+                      options={[
+                        { value: "process", label: "Upload while recording" },
+                        { value: "none", label: "Record then upload" },
+                      ]}
+                      onChange={setStreamingMode}
+                    />
+                    <p className="quiet">
+                      GPT Transcribe inserts the final text once, after you stop.
+                      Upload while recording starts capture immediately and
+                      connects in the background; transcription begins at Stop.
+                    </p>
+                  </div>
+                  <div className="profile-form-field">
+                    <label htmlFor="profile-languages">
+                      Language hints (optional)
+                    </label>
                     <input
-                      ref={keyInput}
-                      id="profile-key"
-                      name="profile-key"
-                      type={visible ? "text" : "password"}
-                      value={keyEdited ? key : (revealed ?? key)}
-                      placeholder={profile?.masked_key ?? "Paste API key…"}
+                      id="profile-languages"
+                      value={languages}
+                      disabled={busy}
                       autoComplete="off"
                       spellCheck={false}
+                      placeholder="Automatic recognition"
+                      onChange={(event) => setLanguages(event.target.value)}
+                    />
+                    <p className="quiet">
+                      Leave blank for automatic recognition, or enter language
+                      codes separated by commas, for example en, es, de.
+                    </p>
+                  </div>
+                </>
+              )}
+              {provider === "local" && (
+                <>
+                  <div className="profile-form-field">
+                    <label htmlFor="local-model">Local model</label>
+                    <Dropdown
+                      id="local-model"
+                      label="Local model"
+                      value={modelID}
                       disabled={busy}
-                      aria-invalid={!!keyError}
-                      aria-describedby={
-                        keyError ? "profile-key-error" : undefined
-                      }
-                      onChange={(event) => {
-                        setKey(event.target.value);
-                        setKeyEdited(true);
-                        setRevealed(undefined);
-                        setKeyError("");
+                      options={localModelOptions}
+                      onChange={(value) => {
+                        setModelID(value);
+                        setStreamingMode(defaultMode(value));
                       }}
                     />
-                    <button
-                      type="button"
-                      className="icon-button"
-                      aria-label={visible ? "Hide API key" : "Reveal API key"}
-                      title={visible ? "Hide key" : "Reveal key"}
-                      disabled={busy}
-                      onClick={() => void toggleReveal()}
-                    >
-                      {visible ? (
-                        <EyeOff size={16} aria-hidden="true" />
-                      ) : (
-                        <Eye size={16} aria-hidden="true" />
-                      )}
-                    </button>
-                    {profile && (
-                      <button
-                        type="button"
-                        className="icon-button"
-                        aria-label="Copy saved API key"
-                        title={copied ? "Copied" : "Copy saved key"}
-                        disabled={busy || keyEdited}
-                        onClick={async () => {
-                          setError("");
-                          try {
-                            await api.copyProfileKey(profile.id);
-                            if (alive.current) {
-                              setCopied(true);
-                              clearTimeout(copiedTimer.current);
-                              copiedTimer.current = setTimeout(
-                                () => setCopied(false),
-                                1600,
-                              );
-                            }
-                          } catch (e) {
-                            if (alive.current)
-                              setError(
-                                e instanceof Error ? e.message : String(e),
-                              );
-                          }
-                        }}
-                      >
-                        {copied ? (
-                          <Check size={16} aria-hidden="true" />
-                        ) : (
-                          <Copy size={16} aria-hidden="true" />
-                        )}
-                      </button>
+                    <p className="quiet">
+                      Models are downloaded and verified in Local Models. Both
+                      models use saved vocabulary as decoder bias.
+                    </p>
+                  </div>
+                  <div className="profile-form-field">
+                    <span className="field-label">Dictation mode</span>
+                    {modelSupportsStreaming(modelID) ? (
+                      <>
+                        <SegmentedControl
+                          label="Dictation mode"
+                          value={streamingMode}
+                          disabled={busy}
+                          options={[
+                            {
+                              value: "process",
+                              label: "Process while recording",
+                            },
+                            { value: "live", label: "Live insertion" },
+                            { value: "none", label: "No streaming" },
+                          ]}
+                          onChange={setStreamingMode}
+                        />
+                        <p className="quiet">
+                          Live insertion sends only committed text. Voice Type
+                          never edits or removes text already inserted.
+                        </p>
+                      </>
+                    ) : (
+                      <p className="quiet">
+                        No streaming. This model transcribes after recording
+                        stops.
+                      </p>
                     )}
                   </div>
-                  <span className="sr-only" role="status">
-                    {copied ? "API key copied" : ""}
-                  </span>
-                  {keyError && (
-                    <p
-                      id="profile-key-error"
-                      className="field-error"
-                      role="alert"
-                    >
-                      {keyError}
-                    </p>
-                  )}
-                </div>
+                </>
               )}
               {error && (
                 <p className="field-error" role="alert">
@@ -402,7 +454,7 @@ export function ProfileEditor({
       {deleting && (
         <ConfirmDialog
           title={`Delete ${profile?.name}?`}
-          description="This profile and its API key will be removed. If it is selected, choose another profile before your next dictation."
+          description="This profile will be removed. Its provider API key is shared and stays available to other profiles."
           confirmLabel="Delete profile"
           onConfirm={async () => {
             await onDelete();

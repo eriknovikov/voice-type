@@ -312,7 +312,16 @@ func TestIBusSubmission(t *testing.T) {
 			if tc == "expired" {
 				e.deadline = time.Now().Add(-time.Second)
 			}
-			err := submitInsertPure(ctx, c, e, "test text")
+			notified := false
+			err := submitInsertPureWithSubmission(ctx, c, e, "test text", func() {
+				if reads != 1 {
+					t.Error("submission timing occurred after daemon barrier")
+				}
+				notified = true
+			})
+			if notified != (tc == "success" || tc == "barrier failure") {
+				t.Fatal("submission notification did not match actual send")
+			}
 			if (err == nil) != (tc == "success") {
 				t.Fatalf("submit: %v", err)
 			}

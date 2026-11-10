@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/zalando/go-keyring"
 )
 
 func settingsTestHome(t *testing.T) {
@@ -15,6 +17,7 @@ func settingsTestHome(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "environment-must-not-be-used")
 	t.Setenv("OPENROUTER_API_KEY", "environment-must-not-be-used")
+	keyring.MockInit()
 }
 func ptr[T any](v T) *T { return &v }
 func readSettingsTest(t *testing.T) Settings {
@@ -27,7 +30,12 @@ func readSettingsTest(t *testing.T) Settings {
 }
 func addProfileTest(t *testing.T, s Settings, provider, name, key string) Settings {
 	t.Helper()
-	s, err := UpsertProfile(ProfileUpdate{Revision: s.Revision, Provider: provider, Name: name, APIKey: &key})
+	if key != "" {
+		if err := SaveAPIKey(provider, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := UpsertProfile(ProfileUpdate{Revision: s.Revision, Provider: provider, Name: name})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +43,7 @@ func addProfileTest(t *testing.T, s Settings, provider, name, key string) Settin
 }
 func TestProfileMigrationAndConflict(t *testing.T) {
 	settingsTestHome(t)
-	original := []byte(`{ // exact original remains in the private migration backup
+	original := []byte(`{ // comments are accepted during migration
  "provider":"openai", "api_key":"legacy-fallback", "api_keys":{"openai":"saved-openai-key","openrouter":"saved-router-key"},
  "future":{"enabled":true}, "vocabulary":{"general":["Go"],"work":["Wails"]},
  }`)
@@ -46,10 +54,8 @@ func TestProfileMigrationAndConflict(t *testing.T) {
 	if len(view.Profiles) != 2 || view.ActiveProfile != "legacy-openai" {
 		t.Fatalf("migration: %+v", view)
 	}
-	for _, p := range view.Profiles {
-		if p.MaskedKey == "" {
-			t.Fatal("missing key mask")
-		}
+	if !view.APIKeys[providerOpenAI].Saved || !view.APIKeys[providerOpenRouter].Saved {
+		t.Fatal("migrated keys missing from keyring")
 	}
 	encoded, _ := json.Marshal(view)
 	for _, secret := range []string{"saved-openai-key", "saved-router-key", "environment-must-not-be-used", "legacy-fallback"} {
@@ -57,14 +63,20 @@ func TestProfileMigrationAndConflict(t *testing.T) {
 			t.Fatal("routine settings contain a secret")
 		}
 	}
-	cfg, err := configReadStrict()
-	if err != nil || configAPIKey(cfg) != "saved-openai-key" {
-		t.Fatal("saved key precedence changed", err)
+	key, _, err := providerAPIKey(providerOpenAI)
+	if err != nil || key != "saved-openai-key" {
+		t.Fatal("saved key was not migrated", err)
 	}
 	backupDir, _ := BackupDirectory()
 	backup, _ := os.ReadFile(filepath.Join(backupDir, "config-before-profiles.jsonc"))
-	if string(backup) != string(original) {
-		t.Fatal("migration backup changed original JSONC")
+	for _, secret := range []string{"saved-openai-key", "saved-router-key", "legacy-fallback"} {
+		if strings.Contains(string(backup), secret) {
+			t.Fatal("migration backup retained a plaintext API key")
+		}
+	}
+	var migratedBackup map[string]json.RawMessage
+	if err := json.Unmarshal(backup, &migratedBackup); err != nil || migratedBackup["future"] == nil || migratedBackup["vocabulary"] == nil {
+		t.Fatal("sanitized migration backup lost legacy settings")
 	}
 	data, _ := os.ReadFile(configFilePath())
 	var raw map[string]json.RawMessage
@@ -79,8 +91,8 @@ func TestProfileMigrationAndConflict(t *testing.T) {
 	if _, err := SelectProfile(view.Revision, "legacy-openai"); err == nil || !strings.Contains(err.Error(), "changed elsewhere") {
 		t.Fatal("stale revision accepted")
 	}
-	cfg, _ = configReadStrict()
-	if configAPIKey(cfg) != "saved-router-key" || saved.ActiveProfile != "legacy-openrouter" {
+	key, _, err = providerAPIKey(providerOpenRouter)
+	if err != nil || key != "saved-router-key" || saved.ActiveProfile != "legacy-openrouter" {
 		t.Fatal("selected profile not used")
 	}
 }
@@ -99,34 +111,40 @@ func TestProfilesCreationEditingAndDeletion(t *testing.T) {
 	if view.Profiles[0].Name != "OpenAI 1" || view.ActiveProfile != first {
 		t.Fatal("first profile default")
 	}
-	view = addProfileTest(t, view, "openai", "", "second-api-secret")
+	view = addProfileTest(t, view, "openai", "", "first-api-secret")
 	second := view.Profiles[1].ID
 	if view.Profiles[1].Name != "OpenAI 2" || view.ActiveProfile != first {
 		t.Fatal("second profile selected unexpectedly")
 	}
-	if _, err := UpsertProfile(ProfileUpdate{Revision: view.Revision, Provider: "openrouter", Name: "openai 1", APIKey: ptr("other-key")}); err == nil {
+	if _, err := UpsertProfile(ProfileUpdate{Revision: view.Revision, Provider: "openrouter", Name: "Missing key"}); err == nil {
+		t.Fatal("cloud profile accepted without a shared provider key")
+	}
+	if _, err := UpsertProfile(ProfileUpdate{Revision: view.Revision, Provider: "openrouter", Name: "openai 1"}); err == nil {
 		t.Fatal("duplicate name accepted")
 	}
-	if _, err := UpsertProfile(ProfileUpdate{Revision: view.Revision, Provider: "openrouter", Name: "new", APIKey: ptr("")}); err == nil {
-		t.Fatal("missing key accepted")
+	if err := SaveAPIKey(providerOpenRouter, "other-key"); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := UpsertProfile(ProfileUpdate{Revision: view.Revision, ID: first, Provider: "openrouter", Name: "changed"}); err == nil {
-		t.Fatal("provider mutated")
+	view, err := UpsertProfile(ProfileUpdate{Revision: view.Revision, ID: first, Provider: providerLocal, Name: "changed", ModelID: localModelUnifiedEnglish, StreamingMode: streamingModeProcess})
+	if err != nil || view.Profiles[0].Provider != providerLocal {
+		t.Fatal("provider could not be changed", err)
 	}
-	var err error
 	view, err = UpsertProfile(ProfileUpdate{Revision: view.Revision, ID: first, Provider: "openai", Name: "Personal"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, err := RevealProfileKey(first)
+	key, _, err := providerAPIKey(providerOpenAI)
 	if err != nil || key != "first-api-secret" {
-		t.Fatal("name edit replaced key")
+		t.Fatal("shared provider key changed")
 	}
-	view, err = UpsertProfile(ProfileUpdate{Revision: view.Revision, ID: first, Provider: "openai", Name: "Personal", APIKey: ptr("replacement-secret")})
+	if err := SaveAPIKey(providerOpenAI, "replacement-secret"); err != nil {
+		t.Fatal(err)
+	}
+	view, err = UpsertProfile(ProfileUpdate{Revision: view.Revision, ID: first, Provider: "openai", Name: "Personal", StreamingMode: streamingModeProcess})
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, _ = RevealProfileKey(first)
+	key, _, _ = providerAPIKey(providerOpenAI)
 	if key != "replacement-secret" {
 		t.Fatal("key not replaced")
 	}
@@ -137,18 +155,110 @@ func TestProfilesCreationEditingAndDeletion(t *testing.T) {
 	if view.ActiveProfile != "" || len(view.Profiles) != 1 || view.Profiles[0].ID != second {
 		t.Fatal("deleting active profile selected another account")
 	}
-	cfg, _ = configReadStrict()
-	if configAPIKey(cfg) != "" {
-		t.Fatal("key selected after active deletion")
-	}
-	if _, err := RevealProfileKey(first); err == nil {
-		t.Fatal("deleted secret still accessible")
+	key, _, err = providerAPIKey(providerOpenAI)
+	if err != nil || key != "replacement-secret" {
+		t.Fatal("deleting a profile removed the shared provider key")
 	}
 	view = addProfileTest(t, view, "openrouter", "", "new-router-secret")
 	if view.ActiveProfile != "" {
 		t.Fatal("adding after active deletion selected account")
 	}
 }
+
+func TestLocalProfilesKeepModeAndVocabularyWithoutCloudCredentials(t *testing.T) {
+	settingsTestHome(t)
+	view := readSettingsTest(t)
+	vocabulary := []VocabularyList{{Name: "general", Terms: []string{"Voice Type"}}}
+	view, err := SaveSettings(SettingsUpdate{Revision: view.Revision, Vocabulary: &vocabulary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err = UpsertProfile(ProfileUpdate{
+		Revision:      view.Revision,
+		Name:          "Private",
+		Provider:      providerLocal,
+		ModelID:       localModelUnifiedEnglish,
+		StreamingMode: streamingModeProcess,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := view.Profiles[0]
+	if profile.Provider != providerLocal || profile.ModelID != localModelUnifiedEnglish || profile.StreamingMode != streamingModeProcess {
+		t.Fatalf("local profile summary: %+v", profile)
+	}
+	cfg, err := configReadStrict()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := cfg.resolveSTT("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Provider != providerLocal || settings.Model != localModelUnifiedEnglish || settings.StreamingMode != streamingModeProcess || len(settings.Vocabulary) != 1 {
+		t.Fatalf("local settings lost profile fields or vocabulary: %+v", settings)
+	}
+	if err := settings.validateCredentials(); err != nil {
+		t.Fatalf("local profile should not require an API key: %v", err)
+	}
+	if _, err := UpsertProfile(ProfileUpdate{
+		Revision:      view.Revision,
+		ID:            profile.ID,
+		Name:          profile.Name,
+		Provider:      providerLocal,
+		ModelID:       localModelParakeetV3,
+		StreamingMode: streamingModeLive,
+	}); err == nil {
+		t.Fatal("non-streaming Parakeet v3 accepted live insertion")
+	}
+	view, err = UpsertProfile(ProfileUpdate{
+		Revision:      view.Revision,
+		ID:            profile.ID,
+		Name:          profile.Name,
+		Provider:      providerLocal,
+		ModelID:       localModelParakeetV3,
+		StreamingMode: streamingModeNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = configReadStrict()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err = cfg.resolveSTT("")
+	if err != nil || settings.Model != localModelParakeetV3 || settings.StreamingMode != streamingModeNone || len(settings.Vocabulary) != 1 {
+		t.Fatalf("batch local profile round-trip lost settings: %+v %v", settings, err)
+	}
+}
+
+func TestLocalProfileRejectsCloudKeyAndUnknownModel(t *testing.T) {
+	settingsTestHome(t)
+	view := readSettingsTest(t)
+	secret := "must-not-be-used"
+	if err := SaveAPIKey(providerLocal, secret); err == nil {
+		t.Fatal("local provider accepted an API key")
+	}
+	if _, err := UpsertProfile(ProfileUpdate{
+		Revision:      view.Revision,
+		Name:          "Local",
+		Provider:      providerLocal,
+		ModelID:       localModelUnifiedEnglish,
+		StreamingMode: streamingModeProcess,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UpsertProfile(ProfileUpdate{
+		Revision:      view.Revision,
+		Name:          "Unknown",
+		Provider:      providerLocal,
+		ModelID:       "arbitrary-file.gguf",
+		StreamingMode: streamingModeNone,
+	}); err == nil {
+		t.Fatal("local profile accepted an unlisted model")
+	}
+}
+
 func TestMigrationDoesNotResurrectRemovedLegacyKey(t *testing.T) {
 	settingsTestHome(t)
 	data := []byte(`{"provider":"openai","api_key":"old-secret","api_keys":{"openai":"","openrouter":"other-secret"}}`)
@@ -314,5 +424,110 @@ func TestProfileProviderConfigurationUnknownFieldsSurviveEdit(t *testing.T) {
 	encoded, err := os.ReadFile(configFilePath())
 	if err != nil || !strings.Contains(string(encoded), "future_option") || !strings.Contains(string(encoded), "future_top_level") {
 		t.Fatal("editing a profile lost unknown configuration", err)
+	}
+}
+
+func TestUnknownProfileFieldsSurviveMigrationAndEdits(t *testing.T) {
+	settingsTestHome(t)
+	data := []byte(`{"profiles":[{"id":"one","name":"One","provider":"openai","future_profile":{"keep":true},"config":{"api_key":"old-key","future_config":true}}],"active_profile":"one"}`)
+	if err := os.WriteFile(configFilePath(), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	view := readSettingsTest(t)
+	if _, err := UpsertProfile(ProfileUpdate{Revision: view.Revision, ID: "one", Name: "Updated", Provider: providerOpenAI}); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := os.ReadFile(configFilePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Profiles []map[string]json.RawMessage `json:"profiles"`
+	}
+	if err := json.Unmarshal(encoded, &doc); err != nil || len(doc.Profiles) != 1 || doc.Profiles[0]["future_profile"] == nil {
+		t.Fatal("unknown profile fields were lost during migration or edit")
+	}
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(doc.Profiles[0]["config"], &config); err != nil || config["future_config"] == nil || config["api_key"] != nil {
+		t.Fatal("profile config was not preserved and sanitized")
+	}
+}
+
+func TestEditingProfileWithNullConfig(t *testing.T) {
+	settingsTestHome(t)
+	data := []byte(`{"profiles":[{"id":"one","name":"One","provider":"openai","config":null}],"active_profile":"one"}`)
+	if err := os.WriteFile(configFilePath(), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	view := readSettingsTest(t)
+	updated, err := UpsertProfile(ProfileUpdate{Revision: view.Revision, ID: "one", Name: "One", Provider: providerOpenAI, StreamingMode: streamingModeProcess})
+	if err != nil || updated.Profiles[0].StreamingMode != streamingModeProcess {
+		t.Fatal("editing a profile with an empty config failed", err)
+	}
+}
+
+func TestOpenAIModesLanguagesAndRecordingSnapshot(t *testing.T) {
+	settingsTestHome(t)
+	legacy := []byte(`{"profiles":[{"id":"old","name":"Old","provider":"openai","config":{"api_key":"old-key","future":{"keep":true}}}],"active_profile":"old","vocabulary":{"general":["Voice Type"],"work":["Parakeet"]}}`)
+	if err := os.WriteFile(configFilePath(), legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+	view := readSettingsTest(t)
+	if view.Profiles[0].StreamingMode != streamingModeNone {
+		t.Fatal("existing OpenAI profile no longer batch")
+	}
+	if err := SaveAPIKey(providerOpenAI, "new-key"); err != nil {
+		t.Fatal(err)
+	}
+	view, err := UpsertProfile(ProfileUpdate{Revision: view.Revision, Name: "New", Provider: providerOpenAI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Profiles[1].StreamingMode != streamingModeProcess || view.Profiles[1].ModelID != defaultModelID {
+		t.Fatal("new profile did not default to WebSocket GPT Transcribe")
+	}
+	view, err = UpsertProfile(ProfileUpdate{Revision: view.Revision, ID: "old", Name: "Old", Provider: providerOpenAI, StreamingMode: streamingModeProcess, Languages: ptr([]string{"en", "es", "de", "yue", "zh-cn"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := configReadStrict()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := cfg.resolveSTT("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Vocabulary) != 2 || len(snapshot.Languages) != 5 || snapshot.APIKey != "new-key" || snapshot.StreamingMode != streamingModeProcess {
+		t.Fatalf("wrong recording snapshot: %#v", snapshot)
+	}
+	if err := SaveAPIKey(providerOpenAI, "replacement-key"); err != nil {
+		t.Fatal(err)
+	}
+	view, err = UpsertProfile(ProfileUpdate{Revision: view.Revision, ID: "old", Name: "Changed", Provider: providerOpenAI, StreamingMode: streamingModeNone, Languages: ptr([]string{})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Languages) != 5 || snapshot.APIKey != "new-key" || snapshot.StreamingMode != streamingModeProcess {
+		t.Fatal("saved change mutated recording snapshot")
+	}
+	cfg, err = configReadStrict()
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := cfg.resolveSTT("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next.Languages) != 0 || next.StreamingMode != streamingModeNone || next.APIKey != "replacement-key" || cfg.Profiles[0].Config["future"] == nil {
+		t.Fatal("next snapshot or unknown fields lost")
+	}
+	for _, bad := range [][]string{{"English"}, {"en", "en"}, {"en-us"}, {""}} {
+		if _, err := UpsertProfile(ProfileUpdate{Revision: view.Revision, ID: "old", Name: "Changed", Provider: providerOpenAI, Languages: &bad}); err == nil {
+			t.Fatalf("invalid hints accepted: %v", bad)
+		}
+	}
+	if _, err := UpsertProfile(ProfileUpdate{Revision: view.Revision, ID: "old", Name: "Changed", Provider: providerOpenAI, StreamingMode: streamingModeLive}); err == nil {
+		t.Fatal("OpenAI live insertion accepted")
 	}
 }

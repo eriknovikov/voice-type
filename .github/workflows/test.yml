@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Native dependencies
-        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libx11-dev libxkbcommon-dev pkg-config ibus dbus-x11 xvfb gnome-settings-daemon-common shellcheck
+        run: sudo apt-get update && sudo apt-get install -y cmake libgtk-4-dev libwebkitgtk-6.0-dev libx11-dev libxkbcommon-dev pkg-config ibus dbus-x11 xvfb gnome-settings-daemon-common shellcheck
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -26,6 +26,8 @@ jobs:
       - run: make check build
       - name: Mock providers and isolated IBus
         run: VOICE_TYPE_TEST_IBUS_DAEMON=/usr/bin/ibus-daemon go test -race ./...
+        env:
+          PKG_CONFIG_PATH: ${{ github.workspace }}/build/transcribe/pkgconfig
       - name: Native application and tray
         run: xvfb-run -a make native-check
         env:

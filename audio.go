@@ -26,6 +26,9 @@ type Recorder struct {
 
 	bufMu         sync.Mutex
 	samples       []int16
+	chunkSink     func([]int16)
+	sessionBuffer *sessionAudioBuffer
+	bufferFailure func(error)
 	sourceID      string
 	fellBack      bool
 	level         float64
@@ -64,6 +67,7 @@ func (r *Recorder) Close() {
 	}
 	r.fellBack = false
 	r.streamMu.Unlock()
+	r.SetChunkSink(nil)
 
 	if r.client != nil {
 		r.client.Close()
@@ -151,9 +155,15 @@ func (r *Recorder) Stop() ([]int16, error) {
 	}
 
 	r.bufMu.Lock()
+	r.chunkSink = nil
 	defer r.bufMu.Unlock()
-	out := make([]int16, len(r.samples))
-	copy(out, r.samples)
+	var out []int16
+	if r.sessionBuffer != nil {
+		out = r.sessionBuffer.freeze()
+		r.sessionBuffer, r.bufferFailure = nil, nil
+	} else {
+		out = append([]int16(nil), r.samples...)
+	}
 	r.samples = r.samples[:0]
 	if streamErr != nil {
 		streamErr = fmt.Errorf("record stream: %w", streamErr)
@@ -186,6 +196,26 @@ func (r *Recorder) SetSource(id string) {
 	r.streamMu.Lock()
 	defer r.streamMu.Unlock()
 	r.sourceID = id
+}
+
+// SetChunkSink receives copied audio chunks outside the recorder's sample
+// buffer lock. The sink must return promptly; the full recording is retained
+// independently even when a streaming consumer cannot keep up.
+// Cloud capture and upload share one session-owned buffer. A local stream
+// continues to use SetChunkSink and the recorder's existing full recording.
+func (r *Recorder) SetSessionBuffer(buffer *sessionAudioBuffer, failure func(error)) {
+	r.bufMu.Lock()
+	r.sessionBuffer, r.bufferFailure = buffer, failure
+	if buffer != nil {
+		r.samples = nil
+	}
+	r.bufMu.Unlock()
+}
+
+func (r *Recorder) SetChunkSink(sink func([]int16)) {
+	r.bufMu.Lock()
+	r.chunkSink = sink
+	r.bufMu.Unlock()
 }
 
 func (r *Recorder) sourceFellBack() bool {
@@ -246,9 +276,9 @@ func (r *Recorder) TakeLevel() float64 { return r.Level() }
 
 func (r *Recorder) acceptSamples(samples []int16) (int, error) {
 	r.bufMu.Lock()
-	defer r.bufMu.Unlock()
 	if r.meterOnly {
 		if len(samples) == 0 {
+			r.bufMu.Unlock()
 			return 0, nil
 		}
 		if r.meterWindow == nil {
@@ -271,8 +301,29 @@ func (r *Recorder) acceptSamples(samples []int16) (int, error) {
 		variance := math.Max(0, r.meterSquares/count-mean*mean)
 		r.level = math.Sqrt(variance) / 32768
 		r.meterAt = time.Now()
+		r.bufMu.Unlock()
 	} else {
+		if buffer := r.sessionBuffer; buffer != nil {
+			err := buffer.append(samples)
+			failure := r.bufferFailure
+			r.bufMu.Unlock()
+			if err != nil && failure != nil {
+				failure(err)
+			}
+			// The engine coordinates Stop; do not also ask Pulse to stop itself on
+			// another goroutine after an upload failure.
+			return len(samples), nil
+		}
 		r.samples = append(r.samples, samples...)
+		sink := r.chunkSink
+		var copyOfSamples []int16
+		if sink != nil && len(samples) > 0 {
+			copyOfSamples = append([]int16(nil), samples...)
+		}
+		r.bufMu.Unlock()
+		if sink != nil && copyOfSamples != nil {
+			sink(copyOfSamples)
+		}
 	}
 	return len(samples), nil
 }

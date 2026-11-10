@@ -15,6 +15,7 @@ func TestTrayFailureColorAndActiveStates(t *testing.T) {
 		{Status{State: "idle"}, "idle"},
 		{Status{State: "idle", LastAttemptFailed: true}, "error"},
 		{Status{State: "testing", LastAttemptFailed: true}, "error"},
+		{Status{State: "checking", LastAttemptFailed: true}, "checking"},
 		{Status{State: "recording", LastAttemptFailed: true}, "recording"},
 		{Status{State: "transcribing", LastAttemptFailed: true}, "transcribing"},
 	} {
@@ -22,7 +23,7 @@ func TestTrayFailureColorAndActiveStates(t *testing.T) {
 			t.Fatalf("%+v -> %s", test.status, state)
 		}
 	}
-	colors := map[string]color.RGBA{"idle": {145, 150, 158, 255}, "recording": {116, 195, 170, 255}, "transcribing": {237, 188, 105, 255}, "error": {245, 110, 106, 255}}
+	colors := map[string]color.RGBA{"idle": {145, 150, 158, 255}, "recording": {116, 195, 170, 255}, "transcribing": {237, 188, 105, 255}, "checking": {237, 188, 105, 255}, "error": {245, 110, 106, 255}}
 	for state, want := range colors {
 		icon, err := png.Decode(bytes.NewReader(trayIcon(state)))
 		if err != nil {

@@ -3,9 +3,10 @@
 Report vulnerabilities privately through the repository's GitHub security
 advisory flow. Do not include API keys, recorded speech or transcripts in issues.
 
-Voice Type runs as your desktop user. It records from PulseAudio/PipeWire and
-sends each completed recording over HTTPS to the selected OpenAI or OpenRouter
-profile. There is no offline transcription or silent provider fallback.
+Voice Type runs as your desktop user. It records from PulseAudio/PipeWire.
+Cloud profiles send audio to the selected OpenAI or OpenRouter provider over an
+encrypted connection; On-device profiles process audio locally. There is no
+silent fallback from local processing to a cloud provider.
 
 Text insertion uses IBus, restores the previous input engine, and rejects
 protected/password fields. It does not use clipboard pasting, simulated typing,
@@ -18,12 +19,15 @@ set is a fixed whitelist, never shell code. A private OS-held engine lock preven
 concurrent engines, including across separate session buses sharing a runtime
 directory. GNOME integration changes only Voice Type's owned shortcut entries.
 
-Profile API keys are stored in `~/.voice-type-config.jsonc` and private recovery
-backups, with file mode 0600 and application directories 0700. Keys are masked in
-routine UI responses and exposed only by explicit Reveal or Copy actions. Copying
-places the key on your system clipboard. Environment keys are not imported.
-Configuration writes are atomic and synced; revisions prevent stale UI writes.
-These files are private to your OS user, not encrypted against that user or root.
+OpenAI and OpenRouter API keys are stored in the Linux Secret Service, one per
+provider. The active config and current recovery backups contain profile settings
+but not migrated API keys. Existing inline keys migrate after successful
+credential-store writes. Preserved damaged files and other older copies can still
+contain plaintext keys. Keys are masked in routine UI responses and exposed only
+by explicit Copy actions. Environment keys are not imported. Configuration writes
+are atomic and synced; revisions prevent stale UI writes. If no compatible
+credential store is available, cloud profiles fail explicitly instead of falling
+back to plaintext.
 
 Diagnostic logs are bounded and exclude transcripts, audio, API keys and raw
 provider responses. Normal audio is held in memory. Failed transcription or

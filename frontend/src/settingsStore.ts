@@ -136,5 +136,11 @@ export class SettingsStore {
     if (this.saved) this.saved = { ...this.saved, workspace };
     this.publish();
   };
+  mutateAPIKeys = (operation: () => Promise<Settings>) =>
+    this.enqueue(async () => {
+      const result = await operation();
+      if (this.saved) this.saved = { ...this.saved, api_keys: result.api_keys };
+      this.publish();
+    });
   dispose = () => clearTimeout(this.timer);
 }

@@ -264,6 +264,27 @@ func TestNativeTray(t *testing.T) {
 			}
 		}
 	}
+	// Configuration failures above change tray state. Wait for its updated menu
+	// and ensure a click from the original layout still addresses the same action.
+	for {
+		var updatedRevision uint32
+		var updated trayMenuLayout
+		if err := menu.Call("com.canonical.dbusmenu.GetLayout", 0, int32(0), int32(-1), []string{"label", "enabled"}).Store(&updatedRevision, &updated); err != nil {
+			t.Fatal(err)
+		}
+		if updatedRevision > revision {
+			for _, label := range []string{"Open settings", "Quit"} {
+				if findTrayItem(layout, label) != findTrayItem(updated, label) {
+					t.Fatalf("state update replaced stable action ID for %s", label)
+				}
+			}
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal("tray state update was not published")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	// Trigger actual native menu callbacks through their published protocol.
 	if err := menu.Call("com.canonical.dbusmenu.Event", 0, findTrayItem(layout, "Open settings"), "clicked", dbus.MakeVariant(int32(0)), uint32(0)).Err; err != nil {
 		t.Fatal(err)
@@ -297,6 +318,8 @@ func TestNativeTray(t *testing.T) {
 		{"uninstall.sh", filepath.Join(source, "uninstall.sh"), 0755},
 		{"icon.png", filepath.Join(source, "icon.png"), 0644},
 		{binary, filepath.Join(source, "build/voice-type"), 0755},
+		{filepath.Join(filepath.Dir(binary), "LICENSE"), filepath.Join(source, "build/LICENSE"), 0644},
+		{filepath.Join(filepath.Dir(binary), "THIRD-PARTY-LICENSES.md"), filepath.Join(source, "build/THIRD-PARTY-LICENSES.md"), 0644},
 	} {
 		data, err := os.ReadFile(asset.from)
 		if err != nil {

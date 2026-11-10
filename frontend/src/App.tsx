@@ -11,6 +11,8 @@ import {
   Keyboard,
   RefreshCw,
   Settings2,
+  Download,
+  KeyRound,
   X,
 } from "lucide-react";
 import { Events } from "@wailsio/runtime";
@@ -19,6 +21,7 @@ import {
   type Status,
   type DesktopInfo,
   type AudioSource,
+  type LocalModel,
   type LogRecord,
   type Preferences,
   type ProfileSummary,
@@ -34,10 +37,21 @@ import { Profiles } from "./Profiles";
 import { LogViewer } from "./LogViewer";
 import { ConfirmDialog } from "./ui";
 import { SettingsStore } from "./settingsStore";
+import { LocalModels } from "./LocalModels";
+import { APIKeys } from "./APIKeys";
 
-type Tab = "settings" | "audio" | "shortcuts" | "vocabulary" | "logs";
+type Tab =
+  | "settings"
+  | "local-models"
+  | "api-keys"
+  | "audio"
+  | "shortcuts"
+  | "vocabulary"
+  | "logs";
 const tabs = [
   { id: "settings", label: "General", icon: Settings2 },
+  { id: "local-models", label: "Local Models", icon: Download },
+  { id: "api-keys", label: "API Keys", icon: KeyRound },
   { id: "audio", label: "Audio", icon: Mic },
   { id: "shortcuts", label: "Keyboard Shortcuts", icon: Keyboard },
   { id: "vocabulary", label: "Vocabulary", icon: BookOpen },
@@ -62,6 +76,7 @@ export function App() {
     level: 0,
   });
   const [sources, setSources] = useState<AudioSource[]>([]);
+  const [localModels, setLocalModels] = useState<LocalModel[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState("general");
@@ -239,6 +254,30 @@ export function App() {
       clearTimeout(timer);
     };
   }, [tab]);
+  useEffect(() => {
+    if (tab !== "local-models") return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const models = await api.localModels();
+        if (alive)
+          setLocalModels((previous) =>
+            JSON.stringify(previous) === JSON.stringify(models)
+              ? previous
+              : models,
+          );
+      } catch (e) {
+        if (alive) setError(errorText(e));
+      }
+      if (alive) timer = setTimeout(poll, 700);
+    };
+    void poll();
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [tab]);
   const navigate = (next: Tab) =>
     void run(async () => {
       await store.flush();
@@ -342,6 +381,8 @@ export function App() {
                 ? "Offline"
                 : status.state === "idle"
                   ? "Idle"
+                  : status.state === "checking"
+                    ? "Preparing — wait before speaking"
                   : status.state === "testing"
                     ? "Testing microphone"
                     : status.state.charAt(0).toUpperCase() +
@@ -449,6 +490,26 @@ export function App() {
                   </section>
                 )}
               </>
+            )}
+            {tab === "local-models" && (
+              <LocalModels
+                models={localModels}
+                busy={busy}
+                onInstall={(id) => void run(() => api.installLocalModel(id))}
+                onResume={(id) => void run(() => api.resumeLocalModel(id))}
+                onRetry={(id) => void run(() => api.retryLocalModel(id))}
+                onPause={(id) => void run(() => api.pauseLocalModel(id))}
+                onCancel={(id) => void run(() => api.cancelLocalModel(id))}
+                onRemove={(id) => void run(() => api.removeLocalModel(id))}
+              />
+            )}
+            {tab === "api-keys" && (
+              <APIKeys
+                keys={settings.api_keys}
+                busy={busy}
+                mutate={store.mutateAPIKeys}
+                onError={setError}
+              />
             )}
             {tab === "audio" && (
               <section className="settings-section">
@@ -636,6 +697,7 @@ export function App() {
         <ProfileEditor
           profile={editor.profile}
           profiles={settings.profiles}
+          apiKeys={settings.api_keys}
           onSave={(update) =>
             store.mutate((revision) =>
               api.upsertProfile({ ...update, revision }),

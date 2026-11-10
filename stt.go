@@ -26,9 +26,13 @@ type sttResult struct {
 	Seconds *float64
 	Cost    *float64
 	ModelID string
+	Offline bool
 }
 
 func (r sttResult) billingSummary() string {
+	if r.Offline {
+		return "on-device inference"
+	}
 	seconds, cost := "unavailable", "unavailable"
 	if r.Seconds != nil {
 		seconds = fmt.Sprintf("%.0fs", *r.Seconds)
@@ -85,9 +89,23 @@ type sttClient struct {
 	endpoint   string
 	http       *http.Client
 	retryDelay time.Duration
+	local      *localTranscriber
 }
 
 func newSTTClient(settings sttSettings) *sttClient {
+	return newSTTClientWithModels(settings, nil)
+}
+
+func newSTTClientWithModels(settings sttSettings, models *LocalModelManager) *sttClient {
+	if settings.Provider == providerLocal {
+		if models == nil {
+			models = newLocalModelManager()
+		}
+		return &sttClient{
+			settings: settings,
+			local:    &localTranscriber{settings: settings, models: models},
+		}
+	}
 	endpoint := openRouterEndpoint
 	if settings.Provider == providerOpenAI {
 		endpoint = openAIEndpoint
@@ -143,8 +161,10 @@ func sttBuildMultipart(settings sttSettings, wav []byte) ([]byte, string, error)
 	if err := writer.WriteField("model", settings.Model); err != nil {
 		return nil, "", err
 	}
-	if err := writer.WriteField("languages[]", "en"); err != nil {
-		return nil, "", err
+	for _, code := range settings.Languages {
+		if err := writer.WriteField("languages[]", code); err != nil {
+			return nil, "", err
+		}
 	}
 	for _, term := range settings.Vocabulary {
 		if err := writer.WriteField("keywords[]", term); err != nil {
@@ -169,6 +189,9 @@ func sttBuildMultipart(settings sttSettings, wav []byte) ([]byte, string, error)
 }
 
 func (c *sttClient) buildRequest(ctx context.Context, wav []byte) (*http.Request, error) {
+	if c.settings.Provider == providerLocal {
+		return nil, errors.New("local transcription never creates cloud requests")
+	}
 	var payload []byte
 	var err error
 	contentType := "application/json"
@@ -204,6 +227,9 @@ func (c *sttClient) TranscribeContext(ctx context.Context, wav []byte) (sttResul
 }
 
 func (c *sttClient) transcribeContext(ctx context.Context, wav []byte, observe sttAttemptObserver) (sttResult, error) {
+	if c.local != nil {
+		return c.local.transcribeWAV(ctx, wav, observe)
+	}
 	var lastErr error
 	for attempt := 1; attempt <= sttMaxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {

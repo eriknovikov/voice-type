@@ -62,8 +62,18 @@ const (
 const (
 	providerOpenAI     = "openai"
 	providerOpenRouter = "openrouter"
+	providerLocal      = "local"
 	defaultModelID     = "gpt-transcribe"
+
+	localModelUnifiedEnglish = "parakeet-unified-en"
+	localModelParakeetV3     = "parakeet-tdt-v3"
+
+	streamingModeProcess = "process"
+	streamingModeLive    = "live"
+	streamingModeNone    = "none"
 )
+
+type streamingMode string
 
 func configDefaults() Config {
 	return Config{
@@ -74,26 +84,41 @@ func configDefaults() Config {
 // sttSettings is a snapshot for one recording. Reloads never mutate it during
 // capture or transcription.
 type sttSettings struct {
-	Provider   string
-	Model      string
-	APIKey     string
-	Vocabulary []string
-	Workspace  string
+	Provider      string
+	Model         string
+	StreamingMode streamingMode
+	APIKey        string
+	Vocabulary    []string
+	Languages     []string
+	Workspace     string
 }
 
 func providerModel(provider string) string {
-	if provider == providerOpenRouter {
+	switch provider {
+	case providerOpenRouter:
 		return "openai/" + defaultModelID
+	case providerLocal:
+		return localModelUnifiedEnglish
+	default:
+		return defaultModelID
 	}
-	return defaultModelID
 }
 
 func (s sttSettings) validateCredentials() error {
 	switch s.Provider {
 	case providerOpenAI, providerOpenRouter:
 		if s.APIKey == "" {
-			return errors.New("select a profile with an API key in General")
+			return errors.New("add the provider API key in API Keys")
 		}
+	case providerLocal:
+		if !validLocalModelID(s.Model) {
+			return errors.New("select a supported local model in General")
+		}
+		if err := validateStreamingMode(s.Model, s.StreamingMode); err != nil {
+			return err
+		}
+	default:
+		return errors.New("select a supported transcription profile in General")
 	}
 	return nil
 }
@@ -104,12 +129,29 @@ func (c Config) resolveSTT(workspace string) (sttSettings, error) {
 		if !ok {
 			return sttSettings{}, errors.New("select a profile in General before recording")
 		}
-		c.Provider, c.APIKey = profile.Provider, profile.APIKey()
+		c.Provider = profile.Provider
 	}
-	if c.Provider != providerOpenAI && c.Provider != providerOpenRouter {
-		return sttSettings{}, errors.New("provider must be openai or openrouter")
+	if c.Provider != providerOpenAI && c.Provider != providerOpenRouter && c.Provider != providerLocal {
+		return sttSettings{}, errors.New("provider must be openai, openrouter, or local")
 	}
-	s := sttSettings{Provider: c.Provider, Model: providerModel(c.Provider), APIKey: configAPIKey(c), Workspace: workspace}
+	s := sttSettings{Provider: c.Provider, Model: providerModel(c.Provider), Workspace: workspace}
+	if c.Provider == providerOpenAI || c.Provider == providerOpenRouter {
+		key, saved, err := providerAPIKey(c.Provider)
+		if err != nil {
+			return sttSettings{}, err
+		}
+		if !saved {
+			return sttSettings{}, fmt.Errorf("add an %s API key in API Keys before recording", providerLabel(c.Provider))
+		}
+		s.APIKey = key
+	}
+	if profile, ok := c.activeProfile(); ok {
+		if profile.Provider == providerLocal {
+			s.Model = profile.ModelID()
+		}
+		s.StreamingMode = profile.StreamingMode()
+		s.Languages = profile.Languages()
+	}
 	if c.Provider == providerOpenAI {
 		if err := c.validateKeywords(workspace); err != nil {
 			return sttSettings{}, err
@@ -440,13 +482,9 @@ func configValidate(raw map[string]json.RawMessage) (Config, error) {
 	} else {
 		cfg.Profiles, cfg.ActiveProfile = migrateLegacyProfiles(cfg)
 	}
-	// Keep internal reporting compatible; credentials always come from profiles.
-	cfg.APIKey = ""
-	cfg.APIKeys = nil
 	if profile, ok := cfg.activeProfile(); ok {
-		cfg.Provider, cfg.APIKey = profile.Provider, profile.APIKey()
+		cfg.Provider = profile.Provider
 	}
-
 	return cfg, nil
 }
 
@@ -477,15 +515,3 @@ func configReadStrict() (Config, error) {
 	return configValidate(raw)
 }
 
-func configAPIKey(cfg Config) string {
-	if cfg.Profiles != nil {
-		if profile, ok := cfg.activeProfile(); ok {
-			return profile.APIKey()
-		}
-		return ""
-	}
-	if k, ok := cfg.APIKeys[cfg.Provider]; ok {
-		return strings.TrimSpace(k)
-	}
-	return strings.TrimSpace(cfg.APIKey)
-}

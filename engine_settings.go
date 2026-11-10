@@ -1,6 +1,9 @@
 package voicetype
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 type Status struct {
 	LastAttemptFailed bool    `json:"last_attempt_failed"`
@@ -115,6 +118,30 @@ func (d *engine) Microphones() ([]AudioSource, error) {
 	return sources, nil
 }
 
+func (d *engine) LocalModels() ([]LocalModel, error) {
+	return d.localModels.List()
+}
+
+func (d *engine) InstallLocalModel(id string) error { return d.localModels.Install(id) }
+func (d *engine) ResumeLocalModel(id string) error  { return d.localModels.Resume(id) }
+func (d *engine) RetryLocalModel(id string) error   { return d.localModels.Retry(id) }
+func (d *engine) PauseLocalModel(id string) error   { return d.localModels.Pause(id) }
+func (d *engine) CancelLocalModel(id string) error  { return d.localModels.Cancel(id) }
+
+func (d *engine) RemoveLocalModel(id string) error {
+	if !d.toggleMu.TryLock() {
+		return errors.New("finish the current dictation before removing a model")
+	}
+	defer d.toggleMu.Unlock()
+	d.mu.Lock()
+	busy := d.shuttingDown || d.state != stateIdle
+	d.mu.Unlock()
+	if busy {
+		return errors.New("finish the current dictation before removing a model")
+	}
+	return d.localModels.Remove(id)
+}
+
 // Reserve work before spawning a goroutine. Additional commands are rejected,
 // never saved up to start another recording after transcription finishes.
 func (d *engine) prepareToggle() (func() error, error) {
@@ -124,6 +151,14 @@ func (d *engine) prepareToggle() (func() error, error) {
 		return nil, errors.New("shutting down")
 	}
 	if d.state == stateChecking {
+		if d.stt != nil && d.stt.settings.Provider == providerOpenAI && d.stt.settings.StreamingMode == streamingModeProcess {
+			// A quick Stop is a finishing request, even if microphone startup has
+			// not returned yet. Do not cancel the in-flight connection or its audio.
+			if d.pendingStartupStop.IsZero() {
+				d.pendingStartupStop = time.Now()
+			}
+			return nil, nil
+		}
 		if d.sessionCancel != nil {
 			d.sessionCancel()
 		}
