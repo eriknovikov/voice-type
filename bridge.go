@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -29,6 +30,7 @@ type DesktopInfo struct {
 }
 type Bridge struct {
 	app                 *application.App
+	copyText            func(string) bool
 	window              *application.WebviewWindow
 	engine              *engine
 	mu                  sync.Mutex
@@ -77,19 +79,46 @@ func (b *Bridge) SelectProfile(revision, id string) (Settings, error) {
 	}
 	return value, err
 }
-func (b *Bridge) RevealProfileKey(id string) (string, error) { return RevealProfileKey(id) }
-func (b *Bridge) CopyProfileKey(id string) error {
-	key, err := RevealProfileKey(id)
+func (b *Bridge) SaveAPIKey(provider, key string) (Settings, error) {
+	if err := SaveAPIKey(provider, key); err != nil {
+		return Settings{}, err
+	}
+	b.engine.RefreshSettings()
+	return ReadSettings()
+}
+func (b *Bridge) DeleteAPIKey(provider string) (Settings, error) {
+	if err := DeleteAPIKey(provider); err != nil {
+		return Settings{}, err
+	}
+	b.engine.RefreshSettings()
+	return ReadSettings()
+}
+func (b *Bridge) CopyAPIKey(provider string) error {
+	key, saved, err := providerAPIKey(provider)
 	if err != nil {
 		return err
 	}
-	if !b.app.Clipboard.SetText(key) {
+	if !saved {
+		return fmt.Errorf("no %s API key is saved", providerLabel(provider))
+	}
+	copyText := b.copyText
+	if copyText == nil {
+		copyText = b.app.Clipboard.SetText
+	}
+	if !copyText(key) {
 		return errors.New("could not copy the API key")
 	}
 	return nil
 }
 func (b *Bridge) Status() Status                      { return b.engine.Status() }
 func (b *Bridge) Microphones() ([]AudioSource, error) { return b.engine.Microphones() }
+func (b *Bridge) LocalModels() ([]LocalModel, error)  { return b.engine.LocalModels() }
+func (b *Bridge) InstallLocalModel(id string) error   { return b.engine.InstallLocalModel(id) }
+func (b *Bridge) ResumeLocalModel(id string) error    { return b.engine.ResumeLocalModel(id) }
+func (b *Bridge) RetryLocalModel(id string) error     { return b.engine.RetryLocalModel(id) }
+func (b *Bridge) PauseLocalModel(id string) error     { return b.engine.PauseLocalModel(id) }
+func (b *Bridge) CancelLocalModel(id string) error    { return b.engine.CancelLocalModel(id) }
+func (b *Bridge) RemoveLocalModel(id string) error    { return b.engine.RemoveLocalModel(id) }
 func (b *Bridge) StartMicrophoneTest(id string) error {
 	if err := b.engine.StartMicrophoneTest(id); err != nil {
 		return err

@@ -50,7 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Native dependencies
-        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev libx11-dev libxkbcommon-dev pkg-config ibus dbus-x11 xvfb gnome-settings-daemon-common shellcheck
+        run: sudo apt-get update && sudo apt-get install -y cmake libgtk-4-dev libwebkitgtk-6.0-dev libx11-dev libxkbcommon-dev pkg-config ibus dbus-x11 xvfb gnome-settings-daemon-common shellcheck
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
@@ -62,6 +62,8 @@ jobs:
       - run: make check build
       - name: Mock providers and isolated IBus
         run: VOICE_TYPE_TEST_IBUS_DAEMON=/usr/bin/ibus-daemon go test -race ./...
+        env:
+          PKG_CONFIG_PATH: ${{ github.workspace }}/build/transcribe/pkgconfig
       - name: Native application and tray
         run: xvfb-run -a make native-check
         env:
@@ -80,8 +82,8 @@ jobs:
           printf '%s\n' "$INFO" | grep -F "vcs.revision=$GITHUB_SHA"
           printf '%s\n' "$INFO" | grep -F 'vcs.modified=false'
           mkdir -p "$RUNNER_TEMP/payload" "$RUNNER_TEMP/release"
-          cp build/voice-type icon.png LICENSE "$RUNNER_TEMP/payload/"
-          tar -czf "$RUNNER_TEMP/release/voice-type-linux-$ARCH.tar.gz" -C "$RUNNER_TEMP/payload" LICENSE icon.png voice-type
+          cp build/voice-type build/THIRD-PARTY-LICENSES.md icon.png LICENSE "$RUNNER_TEMP/payload/"
+          tar -czf "$RUNNER_TEMP/release/voice-type-linux-$ARCH.tar.gz" -C "$RUNNER_TEMP/payload" LICENSE THIRD-PARTY-LICENSES.md icon.png voice-type
           tar -tzf "$RUNNER_TEMP/release/voice-type-linux-$ARCH.tar.gz"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

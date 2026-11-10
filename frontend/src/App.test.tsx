@@ -32,6 +32,13 @@ vi.mock("./api", () => ({
     save: vi.fn(),
     logs: vi.fn(),
     microphones: vi.fn(),
+    localModels: vi.fn(),
+    installLocalModel: vi.fn(),
+    resumeLocalModel: vi.fn(),
+    retryLocalModel: vi.fn(),
+    pauseLocalModel: vi.fn(),
+    cancelLocalModel: vi.fn(),
+    removeLocalModel: vi.fn(),
     stopTest: vi.fn(),
     startTest: vi.fn(),
     workspace: vi.fn(),
@@ -41,8 +48,9 @@ vi.mock("./api", () => ({
     upsertProfile: vi.fn(),
     deleteProfile: vi.fn(),
     selectProfile: vi.fn(),
-    revealProfileKey: vi.fn(),
-    copyProfileKey: vi.fn(),
+    saveAPIKey: vi.fn(),
+    deleteAPIKey: vi.fn(),
+    copyAPIKey: vi.fn(),
     frontendReady: vi.fn(),
     requestHide: vi.fn(),
     completeWindowAction: vi.fn(),
@@ -57,16 +65,23 @@ const base: Settings = {
       id: "personal",
       name: "Personal",
       provider: "openai",
-      masked_key: "sk-p****1234",
     },
     {
       id: "work",
       name: "Work",
       provider: "openai",
-      masked_key: "sk-w****5678",
     },
   ],
   active_profile: "personal",
+  api_keys: {
+    openai: {
+      masked_key: "sk-p••••1234",
+      saved: true,
+    },
+    openrouter: {
+      saved: false,
+    },
+  },
   microphone: "",
   vocabulary: [{ name: "general", terms: ["Wails"] }],
   workspace: "",
@@ -105,6 +120,23 @@ beforeEach(() => {
   });
   vi.mocked(api.logs).mockResolvedValue([]);
   vi.mocked(api.microphones).mockResolvedValue([]);
+  vi.mocked(api.localModels).mockResolvedValue([
+    {
+      id: "parakeet-unified-en",
+      name: "Parakeet Unified English",
+      bytes: 731357568,
+      downloaded_bytes: 0,
+      progress: 0,
+      languages: "English",
+      supports_streaming: true,
+      license:
+        "NVIDIA Open Model License (upstream; GGUF card also claims CC BY 4.0)",
+      license_url: "https://example.test/license",
+      model_card_url: "https://example.test/model",
+      state: "not_installed",
+      error: "",
+    },
+  ]);
   for (const method of [
     api.stopTest,
     api.startTest,
@@ -114,8 +146,14 @@ beforeEach(() => {
     api.frontendReady,
     api.requestHide,
     api.completeWindowAction,
-    api.copyProfileKey,
+    api.copyAPIKey,
     api.exportLogs,
+    api.installLocalModel,
+    api.resumeLocalModel,
+    api.retryLocalModel,
+    api.pauseLocalModel,
+    api.cancelLocalModel,
+    api.removeLocalModel,
   ])
     vi.mocked(method).mockResolvedValue();
 });
@@ -125,28 +163,13 @@ const ready = async () => {
   await screen.findByRole("button", { name: "Edit Personal" });
 };
 describe("profiles", () => {
-  it("shows masked summaries and reveals or copies only on explicit actions", async () => {
-    vi.mocked(api.revealProfileKey).mockResolvedValue("sk-private-secret-1234");
+  it("uses the shared saved key without exposing it in profile dialogs", async () => {
     await ready();
-    expect(screen.getByText("sk-p****1234")).toBeTruthy();
-    expect(api.revealProfileKey).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Edit Personal" }));
-    const key = screen.getByLabelText("API key") as HTMLInputElement;
-    expect(key.value).toBe("");
-    fireEvent.click(screen.getByRole("button", { name: "Copy saved API key" }));
-    await waitFor(() =>
-      expect(api.copyProfileKey).toHaveBeenCalledWith("personal"),
-    );
-    expect(api.revealProfileKey).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Reveal API key" }));
-    await waitFor(() => expect(key.value).toBe("sk-private-secret-1234"));
-    fireEvent.click(screen.getByRole("button", { name: "Hide API key" }));
-    expect(key.value).toBe("");
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    fireEvent.click(screen.getByRole("button", { name: "Edit Personal" }));
-    expect((screen.getByLabelText("API key") as HTMLInputElement).value).toBe(
-      "",
-    );
+    expect(
+      screen.getByText("sk-p••••1234 · Saved for OpenAI"),
+    ).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "API key" })).toBeNull();
   });
   it("creates a provider profile with a sensible name and explicit dialog save", async () => {
     vi.mocked(api.upsertProfile).mockImplementation(async (update) => ({
@@ -158,7 +181,6 @@ describe("profiles", () => {
           id: "new",
           name: update.name,
           provider: update.provider,
-          masked_key: "sk-n****9999",
         },
       ],
     }));
@@ -167,9 +189,7 @@ describe("profiles", () => {
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
       "OpenAI 1",
     );
-    fireEvent.change(screen.getByLabelText("API key"), {
-      target: { value: "sk-new-9999" },
-    });
+    expect(screen.getByText("sk-p••••1234 · Saved for OpenAI")).toBeTruthy();
     expect(api.upsertProfile).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
     await waitFor(() =>
@@ -177,10 +197,100 @@ describe("profiles", () => {
         revision: "r1",
         name: "OpenAI 1",
         provider: "openai",
-        api_key: "sk-new-9999",
+        streaming_mode: "process",
+        languages: [],
       }),
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+  it("preserves existing OpenAI batch mode and saves optional language hints", async () => {
+    vi.mocked(api.upsertProfile).mockResolvedValue(saved);
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Edit Personal" }));
+    expect((screen.getByLabelText("Record then upload") as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByLabelText("Upload while recording"));
+    fireEvent.change(screen.getByLabelText("Language hints (optional)"), {target: {value: "EN, es, de"}});
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    await waitFor(() => expect(api.upsertProfile).toHaveBeenCalledWith({revision: "r1", id: "personal", name: "Personal", provider: "openai", streaming_mode: "process", languages: ["en", "es", "de"]}));
+  });
+  it("shows a missing shared key without offering a profile-level credential", async () => {
+    saved.api_keys.openai = { saved: false };
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Edit Personal" }));
+    expect(screen.getByText("No OpenAI API key saved")).toBeTruthy();
+    expect(
+      screen.getByText("Manage API keys in the sidebar."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "API key" })).toBeNull();
+  });
+  it("closes without a discard prompt after switching back to the original new-profile defaults", async () => {
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.click(screen.getByLabelText("On-device"));
+    fireEvent.click(screen.getByLabelText("OpenAI"));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+  it("creates a local profile with the streaming default and no cloud key", async () => {
+    vi.mocked(api.upsertProfile).mockResolvedValue(saved);
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
+    fireEvent.click(screen.getByLabelText("On-device"));
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
+      "On-device 1",
+    );
+    expect(screen.getByLabelText("Local model")).toBeTruthy();
+    const modeGroup = within(
+      screen.getByRole("group", { name: "Dictation mode" }),
+    );
+    expect(
+      modeGroup
+        .getAllByRole("radio")
+        .map((radio) => (radio as HTMLInputElement).value),
+    ).toEqual(["process", "live", "none"]);
+    expect(
+      (modeGroup.getByLabelText("Process while recording") as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    await waitFor(() =>
+      expect(api.upsertProfile).toHaveBeenCalledWith({
+        revision: "r1",
+        name: "On-device 1",
+        provider: "local",
+        model_id: "parakeet-unified-en",
+        streaming_mode: "process",
+      }),
+    );
+  });
+  it("limits TDT v3 to the No streaming mode", async () => {
+    vi.mocked(api.upsertProfile).mockResolvedValue(saved);
+    saved.profiles.push({
+      id: "tdt",
+      name: "TDT",
+      provider: "local",
+      model_id: "parakeet-tdt-v3",
+      streaming_mode: "none",
+    });
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Edit TDT" }));
+    expect(screen.queryByRole("group", { name: "Dictation mode" })).toBeNull();
+    expect(
+      screen.getByText(
+        "No streaming. This model transcribes after recording stops.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    await waitFor(() =>
+      expect(api.upsertProfile).toHaveBeenCalledWith({
+        revision: "r1",
+        id: "tdt",
+        name: "TDT",
+        provider: "local",
+        model_id: "parakeet-tdt-v3",
+        streaming_mode: "none",
+      }),
+    );
   });
   it("confirms deleting an active profile and leaves no implicit selection", async () => {
     vi.mocked(api.deleteProfile).mockResolvedValue({
@@ -204,6 +314,24 @@ describe("profiles", () => {
     await screen.findByText("Select a profile to start dictating.");
     expect(api.deleteProfile).toHaveBeenCalledWith("r1", "personal");
   });
+});
+
+it("shows managed local models and starts a download", async () => {
+  await ready();
+  fireEvent.click(screen.getByRole("button", { name: "Local Models" }));
+  await screen.findByRole("heading", { name: "Parakeet Unified English" });
+  expect(screen.getByText("Not installed")).toBeTruthy();
+  expect(
+    screen.getByRole("link", {
+      name: /NVIDIA Open Model License.*GGUF card also claims CC BY 4.0/,
+    }),
+  ).toBeTruthy();
+  expect(screen.getByRole("link", { name: "pinned source" })).toBeTruthy();
+  expect(screen.getByText(/saved vocabulary supported/i)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Download" }));
+  await waitFor(() =>
+    expect(api.installLocalModel).toHaveBeenCalledWith("parakeet-unified-en"),
+  );
 });
 describe("autosave", () => {
   it("retains failed vocabulary edits for explicit retry without changing the selected microphone", async () => {
@@ -404,11 +532,15 @@ it("focuses invalid profile fields without submitting", async () => {
     target: { value: "New account" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
-  expect(document.activeElement).toBe(screen.getByLabelText("API key"));
-  expect(screen.getByLabelText("API key").getAttribute("aria-invalid")).toBe(
-    "true",
+  await waitFor(() =>
+    expect(api.upsertProfile).toHaveBeenCalledWith({
+      revision: "r1",
+      name: "New account",
+      provider: "openai",
+      streaming_mode: "process",
+      languages: [],
+    }),
   );
-  expect(api.upsertProfile).not.toHaveBeenCalled();
 });
 
 it("offers providers directly and preserves a custom profile name", async () => {
@@ -425,6 +557,107 @@ it("offers providers directly and preserves a custom profile name", async () => 
   expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
     "Personal router",
   );
+});
+
+it("changes an existing profile provider without changing its identity or name", async () => {
+  vi.mocked(api.upsertProfile).mockImplementation(async (update) => ({
+    ...saved,
+    revision: `${saved.revision}+`,
+    profiles: saved.profiles.map((profile) =>
+      profile.id === update.id
+        ? {
+            ...profile,
+            provider: update.provider,
+            model_id: update.model_id,
+            streaming_mode: update.streaming_mode,
+            languages: update.languages,
+          }
+        : profile,
+    ),
+  }));
+  await ready();
+  fireEvent.click(screen.getByRole("button", { name: "Edit Personal" }));
+  fireEvent.click(screen.getByRole("radio", { name: "On-device" }));
+  expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
+    "Personal",
+  );
+  expect(screen.getByLabelText("Local model")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+  await waitFor(() =>
+    expect(api.upsertProfile).toHaveBeenCalledWith({
+      revision: "r1",
+      id: "personal",
+      name: "Personal",
+      provider: "local",
+      model_id: "parakeet-unified-en",
+      streaming_mode: "process",
+    }),
+  );
+  await screen.findByText("On-device");
+  fireEvent.click(screen.getByRole("button", { name: "Edit Personal" }));
+  fireEvent.click(screen.getByRole("radio", { name: "OpenAI" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
+  await waitFor(() =>
+    expect(api.upsertProfile).toHaveBeenLastCalledWith({
+      revision: "r1+",
+      id: "personal",
+      name: "Personal",
+      provider: "openai",
+      streaming_mode: "process",
+      languages: [],
+    }),
+  );
+});
+
+it("adds, copies and deletes provider API keys in the sidebar page", async () => {
+  vi.mocked(api.saveAPIKey).mockResolvedValue({
+    ...saved,
+    api_keys: {
+      ...saved.api_keys,
+      openrouter: {
+        saved: true,
+        masked_key: "sk-o••••9876",
+      },
+    },
+  });
+  vi.mocked(api.deleteAPIKey).mockResolvedValue({
+    ...saved,
+    api_keys: {
+      ...saved.api_keys,
+      openai: { saved: false },
+    },
+  });
+  await ready();
+  fireEvent.click(screen.getByRole("button", { name: "API Keys" }));
+  await screen.findByText("sk-p••••1234");
+  fireEvent.click(
+    within(screen.getByText("OpenRouter").closest(".api-key-row")!)
+      .getByRole("button", { name: "Add key" }),
+  );
+  fireEvent.change(screen.getByLabelText("OpenRouter API key"), {
+    target: { value: "sk-or-new-9876" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save key" }));
+  await waitFor(() =>
+    expect(api.saveAPIKey).toHaveBeenCalledWith(
+      "openrouter",
+      "sk-or-new-9876",
+    ),
+  );
+  await screen.findByText("sk-o••••9876");
+  fireEvent.click(screen.getByRole("button", { name: "Copy OpenAI API key" }));
+  await waitFor(() => expect(api.copyAPIKey).toHaveBeenCalledWith("openai"));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Delete OpenAI API key" }),
+  );
+  const confirm = screen.getByRole("dialog", {
+    name: "Delete OpenAI API key?",
+  });
+  fireEvent.click(within(confirm).getByRole("button", { name: "Delete key" }));
+  await waitFor(() =>
+    expect(api.deleteAPIKey).toHaveBeenCalledWith("openai"),
+  );
+  expect(screen.getAllByRole("button", { name: "Add key" })).toHaveLength(2);
 });
 
 it("guards dirty profile drafts on native hide and Quit until explicitly discarded", async () => {
@@ -557,7 +790,7 @@ it("keeps vocabulary newline editing and makes renaming explicit", async () => {
   ).toBe("Alpha\nBeta");
   expect(screen.queryByRole("textbox", { name: "Vocabulary name" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Rename vocabulary" }));
-  const name = screen.getByRole("textbox", { name: "Vocabulary name" });
+  const name = await screen.findByRole("textbox", { name: "Vocabulary name" });
   expect(document.activeElement).toBe(name);
   fireEvent.change(name, { target: { value: "Discarded" } });
   fireEvent.keyDown(name, { key: "Escape" });
@@ -568,7 +801,7 @@ it("keeps vocabulary newline editing and makes renaming explicit", async () => {
     ),
   );
   fireEvent.click(screen.getByRole("button", { name: "Rename vocabulary" }));
-  const renamed = screen.getByRole("textbox", { name: "Vocabulary name" });
+  const renamed = await screen.findByRole("textbox", { name: "Vocabulary name" });
   fireEvent.change(renamed, { target: { value: "Clinical" } });
   fireEvent.keyDown(renamed, { key: "Enter" });
   await screen.findByRole("heading", { name: "Clinical" });
@@ -654,4 +887,11 @@ it("shows microphone timing only during a test and explains a blocked test", asy
   });
   await screen.findByText("Listening… Stops after 60 seconds.");
   expect(screen.getByRole("button", { name: "Stop test" })).toBeTruthy();
+});
+
+
+it("shows preparation distinctly from idle and recording", async () => {
+  vi.mocked(api.status).mockResolvedValue({state: "checking", error: "", level: 0});
+  await ready();
+  expect(await screen.findByText("Preparing — wait before speaking")).toBeTruthy();
 });

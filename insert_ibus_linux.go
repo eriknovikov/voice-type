@@ -692,7 +692,13 @@ func (i *ibusTextInserter) Insert(ctx context.Context, text string) error {
 	return i.insertAt(ctx, text, time.Time{})
 }
 
-func (i *ibusTextInserter) insertAt(ctx context.Context, text string, deadline time.Time) (err error) {
+func (i *ibusTextInserter) InsertWithSubmission(ctx context.Context, text string, submitted func()) error {
+	return i.insertAtWithSubmission(ctx, text, time.Time{}, submitted)
+}
+func (i *ibusTextInserter) insertAt(ctx context.Context, text string, deadline time.Time) error {
+	return i.insertAtWithSubmission(ctx, text, deadline, nil)
+}
+func (i *ibusTextInserter) insertAtWithSubmission(ctx context.Context, text string, deadline time.Time, submitted func()) (err error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if i.closed {
@@ -724,7 +730,7 @@ func (i *ibusTextInserter) insertAt(ctx context.Context, text string, deadline t
 	i.engine.deadline = deadline
 	i.engine.mu.Unlock()
 	_ = i.connection.socket.SetWriteDeadline(deadline.Add(insertPureSendGrace))
-	return submitInsertPure(ctx, i.connection, i.engine, text)
+	return submitInsertPureWithSubmission(ctx, i.connection, i.engine, text, submitted)
 }
 
 // waitReady waits only for outstanding IBus callbacks, not a fixed focus delay.
@@ -811,6 +817,9 @@ func (i *ibusTextInserter) cleanup() error {
 }
 
 func submitInsertPure(ctx context.Context, c *ibusConnection, engine *insertPureEngine, text string) error {
+	return submitInsertPureWithSubmission(ctx, c, engine, text, nil)
+}
+func submitInsertPureWithSubmission(ctx context.Context, c *ibusConnection, engine *insertPureEngine, text string, submitted func()) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -843,6 +852,9 @@ func submitInsertPure(ctx context.Context, c *ibusConnection, engine *insertPure
 	engine.mu.Unlock()
 	if err != nil {
 		return errors.New("IBus CommitText submission failed; it will not be retried")
+	}
+	if submitted != nil {
+		submitted()
 	}
 	// A round trip on the same connection keeps teardown after the signal.
 	// This is a daemon barrier, NOT acknowledgement from the application.

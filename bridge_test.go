@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/zalando/go-keyring"
 )
 
 func TestDesktopAutostartPreferences(t *testing.T) {
@@ -75,6 +76,7 @@ func isolatedPreferences(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	keyring.MockInit()
 }
 
 func TestPreferencesDefaultsAndOptOut(t *testing.T) {
@@ -297,6 +299,47 @@ func TestShortcutDoesNotWaitForPreferenceChanges(t *testing.T) {
 	b.activateShortcut()
 	if b.lastShortcutAt.Load() != last {
 		t.Fatal("shortcut activated while capturing keys")
+	}
+}
+
+func TestBridgeAPIKeysUseKeyring(t *testing.T) {
+	isolatedPreferences(t)
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	service, err := startEngine("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	app := application.New(application.Options{Name: "Voice Type"})
+	var copied string
+	bridge := &Bridge{
+		app:    app,
+		engine: service,
+		copyText: func(text string) bool {
+			copied = text
+			return true
+		},
+	}
+	settings, err := bridge.SaveAPIKey(providerOpenAI, "bridge-private-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !settings.APIKeys[providerOpenAI].Saved ||
+		strings.Contains(settings.APIKeys[providerOpenAI].MaskedKey, "bridge-private-key") {
+		t.Fatalf("unsafe bridge key summary: %+v", settings.APIKeys[providerOpenAI])
+	}
+	if err := bridge.CopyAPIKey(providerOpenAI); err != nil {
+		t.Fatal(err)
+	}
+	if copied != "bridge-private-key" {
+		t.Fatal("copy did not use the keyring secret")
+	}
+	settings, err = bridge.DeleteAPIKey(providerOpenAI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.APIKeys[providerOpenAI].Saved {
+		t.Fatal("deleted key remained visible")
 	}
 }
 

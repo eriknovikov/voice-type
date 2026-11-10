@@ -19,12 +19,15 @@ func TestProfileSessionIsolation(t *testing.T) {
 					t.Fatal(err)
 				}
 				firstKey, secondKey := "first-private-key", "second-private-key"
-				settings, err = UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: "Personal", Provider: "openai", APIKey: &firstKey})
+				if err := SaveAPIKey(providerOpenAI, firstKey); err != nil {
+					t.Fatal(err)
+				}
+				settings, err = UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: "Personal", Provider: "openai", StreamingMode: streamingModeNone})
 				if err != nil {
 					t.Fatal(err)
 				}
 				firstID := settings.ActiveProfile
-				settings, err = UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: "Work", Provider: "openai", APIKey: &secondKey})
+				settings, err = UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: "Work", Provider: "openai", StreamingMode: streamingModeNone})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -61,12 +64,17 @@ func TestProfileSessionIsolation(t *testing.T) {
 				case "select":
 					settings, err = SelectProfile(settings.Revision, secondID)
 				case "edit":
-					settings, err = UpsertProfile(ProfileUpdate{Revision: settings.Revision, ID: firstID, Name: "Renamed personal", Provider: "openai", APIKey: &secondKey})
+					settings, err = UpsertProfile(ProfileUpdate{Revision: settings.Revision, ID: firstID, Name: "Renamed personal", Provider: "openai", StreamingMode: streamingModeNone})
 				case "delete":
 					settings, err = DeleteProfile(settings.Revision, firstID)
 				}
 				if err != nil {
 					t.Fatal(err)
+				}
+				if action != "delete" {
+					if err := SaveAPIKey(providerOpenAI, secondKey); err != nil {
+						t.Fatal(err)
+					}
 				}
 				service.RefreshSettings()
 				if service.stt != original {

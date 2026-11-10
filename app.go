@@ -44,7 +44,7 @@ func trayIcon(state string) []byte {
 	}
 	if state == "recording" {
 		c = color.RGBA{116, 195, 170, 255}
-	} else if state == "transcribing" {
+	} else if state == "transcribing" || state == "checking" {
 		c = color.RGBA{237, 188, 105, 255}
 	}
 	// Use the launcher-like five-bar mark with rounded capsule ends.
@@ -173,17 +173,28 @@ func Run(version string, command Command) error {
 	tray.SetTooltip("Voice Type")
 	show := func() { window.Show(); window.Focus() }
 	tray.OnClick(show)
+	// Keep action IDs stable across state changes. A tray host can deliver a
+	// click from a layout it fetched just before a status update.
+	menu := app.NewMenu()
+	statusItem := menu.Add("Idle").SetEnabled(false)
+	actionItem := menu.Add("Start recording").OnClick(func(_ *application.Context) { b.toggleRecording() })
+	menu.Add("Open settings").OnClick(func(_ *application.Context) { show() })
+	menu.Add("Quit").OnClick(func(_ *application.Context) { go b.RequestQuit() })
+	tray.SetMenu(menu)
 	updateMenu := func(state string) {
-		menu := app.NewMenu()
 		statusLabel, action := "Idle", "Start recording"
-		if state == "recording" {
+		switch state {
+		case "checking":
+			statusLabel, action = "Preparing — wait before speaking", "Cancel preparation"
+		case "recording":
 			statusLabel, action = "Recording", "Stop recording"
+		case "transcribing":
+			statusLabel, action = "Transcribing", "Transcription in progress"
+		case "testing":
+			statusLabel, action = "Testing microphone", "Microphone test in progress"
 		}
-		menu.Add(statusLabel).SetEnabled(false)
-		menu.Add(action).OnClick(func(_ *application.Context) { b.toggleRecording() })
-		menu.Add("Open settings").OnClick(func(_ *application.Context) { show() })
-		menu.Add("Quit").OnClick(func(_ *application.Context) { go b.RequestQuit() })
-		tray.SetMenu(menu)
+		statusItem.SetLabel(statusLabel)
+		actionItem.SetLabel(action).SetEnabled(state != "transcribing" && state != "testing")
 		tray.SetIcon(trayIcon(state))
 		tooltip := "Voice Type · " + statusLabel
 		if state == "error" {
@@ -198,7 +209,7 @@ func Run(version string, command Command) error {
 	}
 	go func() {
 		last := ""
-		ticker := time.NewTicker(time.Second)
+		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 		for {
 			select {
@@ -217,7 +228,7 @@ func Run(version string, command Command) error {
 }
 
 func trayState(status Status) string {
-	if status.State == "recording" || status.State == "transcribing" {
+	if status.State == "checking" || status.State == "recording" || status.State == "transcribing" {
 		return status.State
 	}
 	if status.LastAttemptFailed {

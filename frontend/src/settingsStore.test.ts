@@ -8,6 +8,7 @@ const initial: Settings = {
   microphone: "",
   vocabulary: [{ name: "general", terms: [] }],
   workspace: "",
+  api_keys: {},
 };
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
@@ -18,6 +19,42 @@ const deferred = <T>() => {
 };
 afterEach(() => vi.useRealTimers());
 describe("serialized settings", () => {
+  it("keeps key updates when an older settings save completes", async () => {
+    const pending = deferred<Settings>();
+    const store = new SettingsStore(async () => initial, () => pending.promise);
+    await store.load();
+    store.patch({ microphone: "new-device" });
+    await Promise.resolve();
+    const update = store.mutateAPIKeys(async () => ({
+      ...initial,
+      api_keys: { openai: { saved: true } },
+    }));
+    pending.resolve({ ...initial, revision: "2", microphone: "new-device" });
+    await update;
+    expect(store.getSnapshot().settings?.api_keys.openai.saved).toBe(true);
+    expect(store.getSnapshot().settings?.microphone).toBe("new-device");
+    store.dispose();
+  });
+  it("serializes key changes so each response sees the previous change", async () => {
+    const pending = deferred<Settings>();
+    const store = new SettingsStore(async () => initial, vi.fn());
+    await store.load();
+    const first = store.mutateAPIKeys(() => pending.promise);
+    const secondOperation = vi.fn(async () => ({
+      ...initial,
+      api_keys: { openai: { saved: true }, openrouter: { saved: true } },
+    }));
+    const second = store.mutateAPIKeys(secondOperation);
+    await Promise.resolve();
+    expect(secondOperation).not.toHaveBeenCalled();
+    pending.resolve({ ...initial, api_keys: { openai: { saved: true } } });
+    await Promise.all([first, second]);
+    expect(store.getSnapshot().settings?.api_keys).toEqual({
+      openai: { saved: true },
+      openrouter: { saved: true },
+    });
+    store.dispose();
+  });
   it("refreshes a stale profile revision without losing drafts or repeating the action", async () => {
     let latest = initial;
     const store = new SettingsStore(async () => latest, vi.fn());

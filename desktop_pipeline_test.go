@@ -42,7 +42,10 @@ func TestDesktopPipeline(t *testing.T) {
 				t.Fatal(err)
 			}
 			key := "test-credential"
-			settings, err = UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: provider + " 1", Provider: provider, APIKey: &key})
+			if err := SaveAPIKey(provider, key); err != nil {
+				t.Fatal(err)
+			}
+			settings, err = UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: provider + " 1", Provider: provider, StreamingMode: streamingModeNone})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -174,7 +177,14 @@ func TestLiveProviders(t *testing.T) {
 	for _, profile := range cfg.Profiles {
 		t.Run(profile.Name, func(t *testing.T) {
 			provider := profile.Provider
-			key := profile.APIKey()
+			key := ""
+			if provider != providerLocal {
+				var saved bool
+				key, saved, err = providerAPIKey(provider)
+				if err != nil || !saved {
+					t.Fatal("cannot read configured keyring credential", err)
+				}
+			}
 			client := newSTTClient(sttSettings{Provider: provider, APIKey: key, Model: providerModel(provider)})
 			result, err := client.TranscribeContext(context.Background(), wav)
 			if err != nil {

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"regexp"
 	"strings"
 )
 
@@ -16,12 +18,77 @@ type Profile struct {
 	Name     string                     `json:"name"`
 	Provider string                     `json:"provider"`
 	Config   map[string]json.RawMessage `json:"config"`
+	unknown  map[string]json.RawMessage
+}
+
+func (p *Profile) UnmarshalJSON(data []byte) error {
+	type profileFields Profile
+	var fields profileFields
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for _, name := range []string{"id", "name", "provider", "config"} {
+		delete(raw, name)
+	}
+	*p = Profile(fields)
+	p.unknown = raw
+	return nil
+}
+
+func (p Profile) MarshalJSON() ([]byte, error) {
+	fields := maps.Clone(p.unknown)
+	if fields == nil {
+		fields = make(map[string]json.RawMessage)
+	}
+	putConfig(fields, "id", p.ID)
+	putConfig(fields, "name", p.Name)
+	putConfig(fields, "provider", p.Provider)
+	putConfig(fields, "config", p.Config)
+	return json.Marshal(fields)
 }
 
 func (p Profile) APIKey() string {
 	var key string
 	_ = json.Unmarshal(p.Config["api_key"], &key)
 	return strings.TrimSpace(key)
+}
+
+func (p Profile) ModelID() string {
+	var id string
+	_ = json.Unmarshal(p.Config["model_id"], &id)
+	return strings.TrimSpace(id)
+}
+
+func (p Profile) StreamingMode() streamingMode {
+	var mode streamingMode
+	_ = json.Unmarshal(p.Config["streaming_mode"], &mode)
+	if p.Provider == providerOpenAI && mode == "" {
+		return streamingModeNone // Existing profiles keep their upload-after-stop behavior.
+	}
+	return mode
+}
+
+func (p Profile) Languages() []string {
+	var languages []string
+	_ = json.Unmarshal(p.Config["languages"], &languages)
+	return append([]string(nil), languages...)
+}
+
+var languageHintPattern = regexp.MustCompile(`^([a-z]{2,3}|zh-(cn|tw|hk))$`)
+
+func validateLanguageHints(languages []string) error {
+	seen := make(map[string]bool)
+	for _, code := range languages {
+		if !languageHintPattern.MatchString(code) || seen[code] {
+			return errors.New("language hints must be unique language codes, such as en, es, de, or zh-cn")
+		}
+		seen[code] = true
+	}
+	return nil
 }
 
 func (c Config) activeProfile() (Profile, bool) {
@@ -37,11 +104,40 @@ func validateProfile(p Profile) error {
 	if p.ID == "" || strings.TrimSpace(p.Name) == "" || strings.ContainsAny(p.Name, "\r\n") {
 		return errors.New("profile ID and name must be nonempty")
 	}
+	if raw, ok := p.Config["api_key"]; ok {
+		var key string
+		if string(raw) == "null" || json.Unmarshal(raw, &key) != nil {
+			return errors.New("profile API key must be a string")
+		}
+	}
 	switch p.Provider {
 	case providerOpenAI, providerOpenRouter:
-		var key string
-		if err := json.Unmarshal(p.Config["api_key"], &key); err != nil || strings.TrimSpace(key) == "" {
-			return errors.New("this provider requires an API key")
+		if p.Provider == providerOpenAI {
+			if raw, ok := p.Config["streaming_mode"]; ok {
+				var mode string
+				if err := json.Unmarshal(raw, &mode); err != nil {
+					return errors.New("invalid OpenAI transcription mode")
+				}
+			}
+			if mode := p.StreamingMode(); mode != streamingModeNone && mode != streamingModeProcess {
+				return errors.New("OpenAI supports upload while recording or record then upload")
+			}
+			if raw, ok := p.Config["languages"]; ok {
+				var languages []string
+				if err := json.Unmarshal(raw, &languages); err != nil {
+					return errors.New("language hints must be a list of language codes")
+				}
+				if err := validateLanguageHints(languages); err != nil {
+					return err
+				}
+			}
+		}
+	case providerLocal:
+		if !validLocalModelID(p.ModelID()) {
+			return errors.New("choose a supported local transcription model")
+		}
+		if err := validateStreamingMode(p.ModelID(), p.StreamingMode()); err != nil {
+			return err
 		}
 	default:
 		return errors.New("unsupported profile provider")
@@ -92,10 +188,14 @@ func migrateLegacyProfiles(cfg Config) ([]Profile, string) {
 }
 
 func providerLabel(provider string) string {
-	if provider == providerOpenAI {
+	switch provider {
+	case providerOpenAI:
 		return "OpenAI"
+	case providerLocal:
+		return "On-device"
+	default:
+		return "OpenRouter"
 	}
-	return "OpenRouter"
 }
 
 func nextProfileName(profiles []Profile, provider string) string {

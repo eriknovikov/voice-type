@@ -31,7 +31,65 @@ type runLogAttempt struct {
 	Error      string `json:"error,omitempty"`
 }
 
+// Submission is an IBus handoff, not confirmation of visible target text.
+type dictationTiming struct {
+	streamTiming
+	CaptureRequested time.Time
+	CaptureStarted   time.Time
+	StopRequested    time.Time
+	CaptureStopped   time.Time
+}
+type runLogTiming struct {
+	CaptureRequested          string `json:"capture_requested,omitempty"`
+	CaptureStarted            string `json:"capture_started,omitempty"`
+	CaptureStartupMS          *int64 `json:"capture_startup_ms,omitempty"`
+	StartupBacklogDrained     string `json:"startup_backlog_drained,omitempty"`
+	ConnectionStarted         string `json:"connection_started,omitempty"`
+	ConnectionReady           string `json:"connection_ready,omitempty"`
+	ConnectionMS              *int64 `json:"connection_ms,omitempty"`
+	StopRequested             string `json:"stop_requested,omitempty"`
+	CaptureStopped            string `json:"capture_stopped,omitempty"`
+	FinalAudioSent            string `json:"final_audio_sent,omitempty"`
+	CommitSent                string `json:"commit_sent,omitempty"`
+	TranscriptReceived        string `json:"transcript_received,omitempty"`
+	InsertionSubmitted        string `json:"insertion_submitted,omitempty"`
+	InsertionCleanupCompleted string `json:"insertion_cleanup_completed,omitempty"`
+	StopToTranscriptMS        *int64 `json:"stop_to_transcript_ms,omitempty"`
+	StopToSubmissionMS        *int64 `json:"stop_to_submission_ms,omitempty"`
+}
+
+func (t *dictationTiming) logTiming() *runLogTiming {
+	if t == nil {
+		return nil
+	}
+	stamp := func(v time.Time) string {
+		if v.IsZero() {
+			return ""
+		}
+		return v.UTC().Format(time.RFC3339Nano)
+	}
+	elapsed := func(v time.Time) *int64 {
+		if v.IsZero() || t.StopRequested.IsZero() || v.Before(t.StopRequested) {
+			return nil
+		}
+		ms := v.Sub(t.StopRequested).Milliseconds()
+		return &ms
+	}
+	var connectionMS *int64
+	if !t.ConnectionStarted.IsZero() && !t.ConnectionReady.IsZero() {
+		ms := t.ConnectionReady.Sub(t.ConnectionStarted).Milliseconds()
+		connectionMS = &ms
+	}
+	var captureStartupMS *int64
+	if !t.CaptureRequested.IsZero() && !t.CaptureStarted.IsZero() {
+		ms := t.CaptureStarted.Sub(t.CaptureRequested).Milliseconds()
+		captureStartupMS = &ms
+	}
+	return &runLogTiming{CaptureRequested: stamp(t.CaptureRequested), CaptureStarted: stamp(t.CaptureStarted), CaptureStartupMS: captureStartupMS, StartupBacklogDrained: stamp(t.StartupBacklogDrained), ConnectionStarted: stamp(t.ConnectionStarted), ConnectionReady: stamp(t.ConnectionReady), ConnectionMS: connectionMS, StopRequested: stamp(t.StopRequested), CaptureStopped: stamp(t.CaptureStopped), FinalAudioSent: stamp(t.FinalAudioSent), CommitSent: stamp(t.CommitSent), TranscriptReceived: stamp(t.TranscriptReceived), InsertionSubmitted: stamp(t.InsertionSubmitted), InsertionCleanupCompleted: stamp(t.InsertionCleanupCompleted), StopToTranscriptMS: elapsed(t.TranscriptReceived), StopToSubmissionMS: elapsed(t.InsertionSubmitted)}
+}
+
 type runLogRecord struct {
+	Timing          *runLogTiming   `json:"timing,omitempty"`
 	Timestamp       string          `json:"timestamp,omitempty"`
 	Event           string          `json:"event"`
 	Version         string          `json:"version"`
@@ -99,6 +157,9 @@ func newRunLog(version string) *runLog {
 }
 
 func (l *runLog) complete(provider, configuredModel, finalModel, outcome string, total time.Duration, audioSeconds float64, attempts []runLogAttempt, err error) {
+	l.completeTimed(provider, configuredModel, finalModel, outcome, total, audioSeconds, attempts, err, nil)
+}
+func (l *runLog) completeTimed(provider, configuredModel, finalModel, outcome string, total time.Duration, audioSeconds float64, attempts []runLogAttempt, err error, timings *dictationTiming) {
 	if l == nil {
 		return
 	}
@@ -112,6 +173,7 @@ func (l *runLog) complete(provider, configuredModel, finalModel, outcome string,
 	}
 	l.write(runLogRecord{
 		Event:           "dictation.completed",
+		Timing:          timings.logTiming(),
 		Version:         l.version,
 		Provider:        provider,
 		ConfiguredModel: configuredModel,
@@ -171,6 +233,10 @@ func safeRequestError(err error) string {
 	if errors.As(err, &sttErr) {
 		return fmt.Sprintf("%s %d", sttErr.Provider, sttErr.Status)
 	}
+	var cloudErr *cloudStreamError
+	if errors.As(err, &cloudErr) {
+		return cloudErr.Error()
+	}
 	return requestOutcome(err)
 }
 
@@ -180,6 +246,10 @@ func requestOutcome(err error) string {
 	}
 	if errors.Is(err, context.Canceled) {
 		return "cancelled"
+	}
+	var cloudErr *cloudStreamError
+	if errors.As(err, &cloudErr) {
+		return "cloud_stream_error"
 	}
 	var sttErr *sttError
 	if errors.As(err, &sttErr) {

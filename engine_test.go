@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/zalando/go-keyring"
 )
 
 func setupEngineTest(t *testing.T) int {
@@ -21,6 +23,7 @@ func setupEngineTest(t *testing.T) int {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
+	keyring.MockInit()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +66,10 @@ func TestEngineLifecycleAndIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := "test-key"
-	_, err = UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: "OpenAI 1", Provider: "openai", APIKey: &key})
+	if err := SaveAPIKey(providerOpenAI, key); err != nil {
+		t.Fatal(err)
+	}
+	_, err = UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: "OpenAI 1", Provider: "openai", StreamingMode: streamingModeNone})
 	service.RefreshSettings()
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +106,10 @@ func TestEngineShutdownDiscardsRecording(t *testing.T) {
 	setupEngineTest(t)
 	settings, _ := ReadSettings()
 	key := "test-key"
-	if _, err := UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: "OpenAI 1", Provider: "openai", APIKey: &key}); err != nil {
+	if err := SaveAPIKey(providerOpenAI, key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: "OpenAI 1", Provider: "openai", StreamingMode: streamingModeNone}); err != nil {
 		t.Fatal(err)
 	}
 	service, err := startEngine("test")
@@ -232,7 +241,10 @@ func TestEmbeddedToggleAsyncStateRules(t *testing.T) {
 	setupEngineTest(t)
 	settings, _ := ReadSettings()
 	key := "fixture-key"
-	if _, err := UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: "Test", Provider: "openai", APIKey: &key}); err != nil {
+	if err := SaveAPIKey(providerOpenAI, key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: "Test", Provider: "openai", StreamingMode: streamingModeNone}); err != nil {
 		t.Fatal(err)
 	}
 	service, err := startEngine("test")
@@ -248,8 +260,11 @@ func TestEmbeddedToggleAsyncStateRules(t *testing.T) {
 		t.Fatal("checking cancellation:", err)
 	}
 	close(recorder.release)
-	if err := <-started; err == nil {
-		t.Fatal("cancelled checking became a recording")
+	if err := <-started; err != nil {
+		t.Fatal("preparation cancellation reported as failure:", err)
+	}
+	if service.Status().LastAttemptFailed {
+		t.Fatal("preparation cancellation latched tray failure")
 	}
 	if service.Status().State != "idle" {
 		t.Fatal("cancelled capture not idle")
@@ -285,7 +300,10 @@ func TestDelayedStopNeverStartsANewSession(t *testing.T) {
 	setupEngineTest(t)
 	settings, _ := ReadSettings()
 	key := "fixture-key"
-	if _, err := UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: "Test", Provider: "openai", APIKey: &key}); err != nil {
+	if err := SaveAPIKey(providerOpenAI, key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UpsertProfile(ProfileUpdate{Revision: settings.Revision, Name: "Test", Provider: "openai", StreamingMode: streamingModeNone}); err != nil {
 		t.Fatal(err)
 	}
 	service, err := startEngine("test")
@@ -315,7 +333,10 @@ func TestCloseCancelsTranscriptionAndDrainsEngine(t *testing.T) {
 	setupEngineTest(t)
 	settings, _ := ReadSettings()
 	key := "fixture-key"
-	if _, err := UpsertProfile(ProfileUpdate{Revision: settings.Revision, Provider: "openai", Name: "Test", APIKey: &key}); err != nil {
+	if err := SaveAPIKey(providerOpenAI, key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UpsertProfile(ProfileUpdate{Revision: settings.Revision, Provider: "openai", Name: "Test", StreamingMode: streamingModeNone}); err != nil {
 		t.Fatal(err)
 	}
 	engine, err := startEngine("test")
