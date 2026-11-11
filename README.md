@@ -34,6 +34,63 @@ for engine ownership; unfinished dictation or pending edits prevent replacement.
 Older daemon processes must be stopped manually. Start at login is enabled by
 default on first launch. Existing preferences are retained.
 
+## FAQ
+
+Short answers for a new user; the app's **FAQ** tab has the same answers.
+[Settings and diagnostics](#settings-and-diagnostics) has storage and log paths.
+
+### How do I dictate?
+Add a profile, then press Ctrl+Space to start and stop; the text appears at your
+cursor through IBus. Closing the window leaves Voice Type in the tray, and
+**Quit** stops the app.
+
+### Which provider should I choose?
+OpenAI uses GPT Transcribe in the cloud with upload while recording. OpenRouter
+transcribes the complete recording in the cloud. Local needs no key, never
+uploads, and has no cloud fallback.
+
+### Where do I get an API key?
+Create one at
+[platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+(needs a funded account), or at [openrouter.ai/keys](https://openrouter.ai/keys)
+(needs credits). One key per provider, shared by its profiles, stays in the
+system keyring and is masked.
+
+### Which local model should I use?
+**Parakeet Unified English**: English only, about 731 MB download, about 1.1 GiB
+RAM, streaming. **Parakeet TDT v3**: 25 European languages, about 740 MB, about
+1.2 GiB RAM, batch only. Downloads are pinned to immutable revisions and
+verified by exact size and SHA-256. Unified has conflicting license statements:
+CC BY 4.0 in its GGUF metadata, NVIDIA Open Model License in the upstream card.
+TDT v3 is CC BY 4.0.
+
+### Can I keep memory lower?
+The per-profile model memory option keeps the model loaded for instant reuse or
+unloads it after dictation to free the RAM, making the next one slightly slower.
+
+### What about other languages?
+OpenAI recognizes languages automatically and accepts optional hints such as
+`en, es, de`. OpenRouter transcribes the complete recording. Locally, TDT v3
+covers 25 European languages and Unified English is English only.
+
+### What are the dictation modes?
+OpenAI profiles can upload while recording, the default for newly created
+profiles, and insert finalized text once at stop, or record then upload. Local
+Unified profiles process while recording, use live insertion, or turn streaming
+off. Live insertion appends committed text only and never edits.
+
+### Does Voice Type upload my audio?
+Only cloud profiles send audio to the selected provider; local profiles never
+upload and never fall back to cloud. Logs contain neither transcripts nor keys.
+
+### Why is the tray icon missing?
+GNOME needs the AppIndicator/KStatusNotifierItem extension, and cloud profiles
+need an unlocked Secret Service keyring.
+
+### Why did nothing get inserted?
+The focused app must accept IBus input; check Logs for the reason. A single
+recording is capped at ten minutes.
+
 ## Build from source
 
 Install Go 1.26+, Node 22.12+ or Node 24, C and C++ compilers, CMake 3.16+,

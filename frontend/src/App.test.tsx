@@ -497,6 +497,17 @@ it("loads logs only on opening, retains expansion and exports the outcome withou
   fireEvent.click(screen.getByRole("button", { name: "Export" }));
   await waitFor(() => expect(api.exportLogs).toHaveBeenCalledWith("all"));
 });
+it("opens the FAQ page from the sidebar", async () => {
+  await ready();
+  fireEvent.click(screen.getByRole("button", { name: "FAQ" }));
+  await screen.findByRole("heading", {
+    level: 1,
+    name: "FAQ",
+  });
+  expect(
+    screen.getByRole("heading", { level: 2, name: "Getting started" }),
+  ).toBeTruthy();
+});
 it("pauses status polling while the native window is hidden and refreshes when shown", async () => {
   await ready();
   await waitFor(() => expect(api.status).toHaveBeenCalled());

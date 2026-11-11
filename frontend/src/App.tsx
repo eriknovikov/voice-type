@@ -13,6 +13,7 @@ import {
   Settings2,
   Download,
   KeyRound,
+  CircleHelp,
   X,
 } from "lucide-react";
 import { Events } from "@wailsio/runtime";
@@ -39,6 +40,7 @@ import { ConfirmDialog } from "./ui";
 import { SettingsStore } from "./settingsStore";
 import { LocalModels } from "./LocalModels";
 import { APIKeys } from "./APIKeys";
+import { FAQ } from "./FAQ";
 
 type Tab =
   | "settings"
@@ -47,7 +49,8 @@ type Tab =
   | "audio"
   | "shortcuts"
   | "vocabulary"
-  | "logs";
+  | "logs"
+  | "faq";
 const tabs = [
   { id: "settings", label: "General", icon: Settings2 },
   { id: "local-models", label: "Local Models", icon: Download },
@@ -56,6 +59,7 @@ const tabs = [
   { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
   { id: "vocabulary", label: "Vocabulary", icon: BookOpen },
   { id: "logs", label: "Logs", icon: FileText },
+  { id: "faq", label: "FAQ", icon: CircleHelp },
 ] as const;
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
@@ -730,6 +734,7 @@ export function App() {
                 }
               />
             )}
+            {tab === "faq" && <FAQ />}
           </div>
         )}
       </main>
