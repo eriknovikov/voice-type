@@ -8,9 +8,8 @@
 # Usage: scripts/verify-packages.sh [package-directory]
 #
 # Set CONTAINER_RUNTIME=docker|podman to choose a runtime. Set
-# PACKAGE_VERIFY_SKIP_RUN=1 when the local package contains a binary built on a
-# newer toolchain than the target distribution; dependency installation and
-# package contents are still checked.
+# PACKAGE_VERIFY_SKIP_RUN=1 to skip the startup check; package contents and
+# dependency installation are still checked.
 set -eu
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -95,7 +94,7 @@ GLIBC_MIN=$(readelf -V "$BINARY" | grep -o 'GLIBC_[0-9.]*' | sed 's/^GLIBC_//' |
 [ -n "$GLIBC_MIN" ] || fail "cannot determine the glibc floor from $BINARY"
 
 run() {
-    "$RUNTIME" run --rm -v "$PACKAGE_DIR:/pkg:ro" -v "$TEMP_DIR:/check:ro" "$@"
+    "$RUNTIME" run --rm -v "$PACKAGE_DIR:/pkg:ro" "$@"
 }
 
 check_contents() {
@@ -200,7 +199,7 @@ if run -e DEBIAN_FRONTEND=noninteractive debian:12 sh -c '
     apt-get update -qq >/dev/null 2>&1 &&
     apt-get install -y "/pkg/$1"
 ' sh "$DEB_NAME" > "$TEMP_DIR/debian12.log" 2>&1; then
-    fail 'Debian 12 unexpectedly installed a package that requires WebKitGTK 6.0'
+    fail 'Debian 12 unexpectedly installed an incompatible package'
 fi
 grep -q 'libc6' "$TEMP_DIR/debian12.log" || {
     cat "$TEMP_DIR/debian12.log" >&2
