@@ -186,11 +186,11 @@ if [ "$MODE" = uninstall ]; then
 fi
 
 if [ "$MODE" = auto ]; then
-    if KIND=$(package_kind); then
+    if KIND=$(package_kind) && { [ "$(id -u)" -eq 0 ] || command -v sudo >/dev/null 2>&1; }; then
         MODE=package
     else
         MODE=user
-        printf '%s\n' 'No supported system package manager was found; installing per-user from the release archive.'
+        printf '%s\n' 'No supported system package manager or root/sudo access was found; installing per-user from the release archive.'
         printf '%s\n' 'For a system-wide installation with resolved dependencies, use the package for your distribution.'
     fi
 fi

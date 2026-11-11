@@ -14,6 +14,7 @@ set -eu
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 PACKAGE_DIR=${1:-"$ROOT/build/packages"}
+PACKAGE_DIR=$(CDPATH='' cd -- "$PACKAGE_DIR" && pwd)
 SKIP_RUN=${PACKAGE_VERIFY_SKIP_RUN:-0}
 
 RUNTIME=${CONTAINER_RUNTIME:-}
@@ -122,8 +123,8 @@ check_rpm_depends() {
 
 check_arch_depends() {
     ACTUAL=$(run archlinux sh -c \
-        'pacman -Qip "/pkg/$1" | sed -n "s/^Depends On *: //p"' sh "$ARCH_NAME" | tr -s ' ')
-    EXPECTED='gtk4 webkit2gtk-6.0 libsoup3 vulkan-icd-loader ibus'
+        'bsdtar -xOf "/pkg/$1" .PKGINFO | sed -n "s/^depend = //p" | sort' sh "$ARCH_NAME")
+    EXPECTED=$(printf '%s\n' gtk4 webkitgtk-6.0 libsoup3 vulkan-icd-loader ibus | sort)
     [ "$ACTUAL" = "$EXPECTED" ] || fail "unexpected Arch dependencies: $ACTUAL"
     printf 'dependencies OK\n'
 }
@@ -161,7 +162,7 @@ install_arch() {
     run -e VERSION_CHECK="$VERSION_CHECK" "$IMAGE" sh -c '
         pacman-key --init >/dev/null 2>&1 &&
         pacman-key --populate archlinux >/dev/null 2>&1 &&
-        pacman -Sy --noconfirm --quiet >/dev/null 2>&1 &&
+        pacman -Syu --noconfirm --quiet &&
         pacman -U --noconfirm "/pkg/$1" >/dev/null 2>&1 &&
         test "$(stat -c %a /usr/bin/voice-type)" = 755 &&
         sh -c "$VERSION_CHECK"
@@ -183,7 +184,7 @@ check_rpm_depends
 
 if [ -n "$ARCHPKG" ]; then
     printf '\n== Arch contents ==\n'
-    ARCH_FILES=$(run archlinux pacman -Qlp "/pkg/$ARCH_NAME")
+    ARCH_FILES=$(run archlinux sh -c 'pacman -Qqlp "/pkg/$1" | grep -v "/$"' sh "$ARCH_NAME")
     check_contents "$ARCH_FILES"
     check_arch_depends
 fi

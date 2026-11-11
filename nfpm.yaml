@@ -61,7 +61,7 @@ overrides:
   archlinux:
     depends:
       - gtk4
-      - webkit2gtk-6.0
+      - webkitgtk-6.0
       - libsoup3
       - vulkan-icd-loader
       - ibus
