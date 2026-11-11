@@ -33,6 +33,7 @@ func TestDesktopPipeline(t *testing.T) {
 	client := newTestIBusClient(t, address, "desktop-pipeline-client", 0)
 	client.focus(t)
 	setupEngineTest(t)
+	useCredentialStore(t, &memoryCredentials{values: map[string]string{}})
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
 	for _, provider := range []string{providerOpenAI, providerOpenRouter} {
