@@ -1,14 +1,14 @@
 node_modules
 dist
-build
+build/*
+!build/config.yml
 bun.lock
 TODO.md
 releases
 .cursor
 .env
 .env.*
-/v5/voice-type
 /benchmark*.wav
 tools
 /assets/
-v5/cmd/try/
+/memories/
