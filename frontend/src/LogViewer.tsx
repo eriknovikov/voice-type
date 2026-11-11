@@ -59,7 +59,7 @@ export function LogViewer({
           options={[
             { value: "all", label: "All" },
             { value: "errors", label: "Errors" },
-            { value: "ok", label: "Successful" },
+            { value: "ok", label: "Success" },
           ]}
         />
         <div className="actions">
@@ -135,7 +135,7 @@ export function LogViewer({
                           {timestamp.format(date)}
                         </time>
                       ) : (
-                        "Time unavailable"
+                        "—"
                       )}
                       {row.provider && (
                         <span>{providerName(row.provider)}</span>
@@ -188,13 +188,7 @@ export function LogViewer({
         ) : (
           <div className="empty">
             <FileText size={24} aria-hidden="true" />
-            <h2>
-              {total
-                ? "No records on this page"
-                : retained
-                  ? "No matching logs"
-                  : "No logs yet"}
-            </h2>
+            <h2>No logs</h2>
           </div>
         )}
       </section>

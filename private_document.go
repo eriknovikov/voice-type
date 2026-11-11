@@ -136,7 +136,7 @@ func ReadPrivateDocument(path, backupName string, validate func([]byte) error) (
 		if err := atomicPrivateWrite(path, last); err != nil {
 			return nil, "", fmt.Errorf("restore settings backup: %w", err)
 		}
-		return last, "Settings were restored from the last valid backup.", nil
+		return last, "Settings restored.", nil
 	}
 	if err == nil {
 		if err := preservePrivateDocument(backupName+".backup", last); err != nil {

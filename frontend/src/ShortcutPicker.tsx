@@ -97,18 +97,12 @@ export function ShortcutPicker({
     <div className="shortcut-row">
       <div className="shortcut-description">
         <span>{name}</span>
-        <p className="quiet" id="shortcut-hint">
-          {editing
-            ? "Press keys, then Enter or click away to save. Escape disables."
-            : "Click the shortcut to change it."}
-        </p>
       </div>
       <div className="shortcut-control">
         <button
           className="shortcut-key"
           aria-label={`Change ${name.toLowerCase()} shortcut`}
           aria-pressed={editing}
-          aria-describedby="shortcut-hint"
           onClick={() => {
             if (active.current) return;
             active.current = true;
@@ -177,7 +171,7 @@ export function ShortcutPicker({
               )
             }
           >
-            Reset to Ctrl+Space
+            Reset
           </button>
         )}
       </div>

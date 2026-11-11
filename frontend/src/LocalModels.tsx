@@ -1,5 +1,4 @@
 import {
-  Check,
   Download,
   Pause,
   Play,
@@ -21,6 +20,8 @@ const stateLabel: Record<LocalModel["state"], string> = {
 };
 
 const formatSize = (bytes: number) => `${(bytes / 1_000_000).toFixed(0)} MB`;
+const formatRAM = (bytes: number) =>
+  `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
 
 export function LocalModels({
   models,
@@ -43,44 +44,26 @@ export function LocalModels({
 }) {
   return (
     <section className="settings-section local-models">
-      <p className="quiet local-models-intro">
-        Models are stored privately on this device. Audio selected for a local
-        profile stays on-device; a local failure never switches to a cloud
-        provider. Downloaded models are checksum-verified before use.
-      </p>
       {models.map((model) => (
         <article className="settings-group local-model-card" key={model.id}>
           <div className="local-model-heading">
             <div>
               <h2>{model.name}</h2>
               <p className="quiet">
-                {model.languages} · {formatSize(model.bytes)} download
+                {model.languages} · {formatSize(model.bytes)}
+              </p>
+              <p
+                className="quiet"
+                title="Approximate resident memory while the model is loaded"
+              >
+                ~{formatRAM(model.ram_bytes)} RAM when loaded
               </p>
             </div>
-            <span className={`badge model-state ${model.state}`} role="status">
-              {model.state === "ready" && <Check size={14} aria-hidden="true" />}
-              {stateLabel[model.state]}
-            </span>
-          </div>
-          <div className="local-model-capabilities">
-            <span>
-              {model.supports_streaming
-                ? "Streaming: process while recording, live insertion, or no streaming"
-                : "Batch only: transcribe after recording stops"}
-            </span>
-            <span>Saved vocabulary supported</span>
-            <span>
-              License: {" "}
-              <a href={model.license_url} target="_blank" rel="noreferrer">
-                {model.license}
-              </a>
-            </span>
-            <span>
-              Model card: {" "}
-              <a href={model.model_card_url} target="_blank" rel="noreferrer">
-                pinned source
-              </a>
-            </span>
+            {model.state !== "ready" && model.state !== "not_installed" && (
+              <span className={`badge model-state ${model.state}`} role="status">
+                {stateLabel[model.state]}
+              </span>
+            )}
           </div>
           {(model.state === "downloading" ||
             model.state === "pausing" ||
@@ -91,11 +74,12 @@ export function LocalModels({
                 max={100}
                 value={model.state === "verifying" ? 100 : model.progress}
               />
-              <span>
-                {model.state === "verifying"
-                  ? "Checking size and SHA-256…"
-                  : `${formatSize(model.downloaded_bytes)} of ${formatSize(model.bytes)}`}
-              </span>
+              {model.state !== "verifying" && (
+                <span>
+                  {formatSize(model.downloaded_bytes)} of{" "}
+                  {formatSize(model.bytes)}
+                </span>
+              )}
             </div>
           )}
           {model.error && (
@@ -136,7 +120,7 @@ export function LocalModels({
                 </button>
                 {model.downloaded_bytes > 0 && (
                   <button disabled={busy} onClick={() => onCancel(model.id)}>
-                    <X size={15} aria-hidden="true" /> Cancel download
+                    <X size={15} aria-hidden="true" /> Cancel
                   </button>
                 )}
               </>
@@ -153,11 +137,7 @@ export function LocalModels({
           </div>
         </article>
       ))}
-      {!models.length && <p className="quiet">Loading local model catalog…</p>}
-      <p className="quiet local-models-footnote">
-        Downloads resume only when the server confirms the same pinned artifact.
-        Model weights are not included in the application installer.
-      </p>
+      {!models.length && <p className="quiet">Loading…</p>}
     </section>
   );
 }

@@ -56,13 +56,13 @@ func loadPreferences() (Preferences, string, error) {
 	}
 	if len(data) == 0 {
 		if notice != "" {
-			notice = "Damaged desktop preferences were preserved and reset."
+			notice = "Preferences were reset."
 		}
 		return Preferences{Shortcut: "Ctrl+Space", Autostart: true}, notice, nil
 	}
 	prefs, err := parsePreferences(data)
 	if notice != "" {
-		notice = "Desktop preferences were restored from backup."
+		notice = "Preferences restored."
 	}
 	return prefs, notice, err
 }
@@ -113,7 +113,7 @@ func (b *Bridge) applyAutostart(enabled bool) error {
 // actual registration. A failed registration remains visible and can be retried.
 func (b *Bridge) initializePreferences() {
 	if b.preferencesError != "" {
-		b.recordPreferenceError("Desktop preferences could not be loaded. Check file permissions in settings.")
+		b.recordPreferenceError("Preferences could not be loaded.")
 		return
 	} // Do not change startup settings when preferences are unreadable.
 	if b.notice != "" {

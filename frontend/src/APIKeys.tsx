@@ -30,10 +30,7 @@ export function APIKeys({
           />
         ))}
       </div>
-      <p className="quiet section-note">
-        Keys are stored in your system keyring. Every profile using a provider
-        reuses that provider’s saved key.
-      </p>
+      <p className="quiet section-note">Stored in your system keyring.</p>
     </section>
   );
 }
@@ -167,7 +164,7 @@ function APIKeyRow({
               onClick={() => void save()}
               disabled={saving || busy}
             >
-              {saving ? "Saving…" : "Save key"}
+              {saving ? "Saving…" : "Save"}
             </button>
           </div>
         </>
@@ -210,8 +207,12 @@ function APIKeyRow({
               </button>
             </>
           )}
-          <button type="button" onClick={() => setEditing(true)} disabled={busy}>
-            {summary?.saved ? "Replace key" : "Add key"}
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            disabled={busy}
+          >
+            {summary?.saved ? "Replace" : "Add"}
           </button>
         </div>
       )}
@@ -223,7 +224,7 @@ function APIKeyRow({
       {deleting && (
         <ConfirmDialog
           title={`Delete ${providerName(provider)} API key?`}
-          description={`Profiles using ${providerName(provider)} will need a new key before their next recording.`}
+          description="Existing profiles will need a new key."
           confirmLabel="Delete key"
           onCancel={() => setDeleting(false)}
           onConfirm={async () => {

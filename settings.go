@@ -25,12 +25,13 @@ type Settings struct {
 	Notice        string                   `json:"notice"`
 }
 type ProfileSummary struct {
-	ID            string        `json:"id"`
-	Name          string        `json:"name"`
-	Provider      string        `json:"provider"`
-	ModelID       string        `json:"model_id,omitempty"`
-	StreamingMode streamingMode `json:"streaming_mode,omitempty"`
-	Languages     []string      `json:"languages,omitempty"`
+	ID                   string        `json:"id"`
+	Name                 string        `json:"name"`
+	Provider             string        `json:"provider"`
+	ModelID              string        `json:"model_id,omitempty"`
+	StreamingMode        streamingMode `json:"streaming_mode,omitempty"`
+	Languages            []string      `json:"languages,omitempty"`
+	UnloadAfterDictation bool          `json:"unload_after_dictation,omitempty"`
 }
 type VocabularyList struct {
 	OriginalName string   `json:"original_name,omitempty"`
@@ -45,13 +46,14 @@ type SettingsUpdate struct {
 	Vocabulary *[]VocabularyList `json:"vocabulary,omitempty"`
 }
 type ProfileUpdate struct {
-	Revision      string    `json:"revision"`
-	ID            string    `json:"id,omitempty"`
-	Name          string    `json:"name"`
-	Provider      string    `json:"provider"`
-	ModelID       string    `json:"model_id,omitempty"`
-	StreamingMode string    `json:"streaming_mode,omitempty"`
-	Languages     *[]string `json:"languages,omitempty"`
+	Revision             string    `json:"revision"`
+	ID                   string    `json:"id,omitempty"`
+	Name                 string    `json:"name"`
+	Provider             string    `json:"provider"`
+	ModelID              string    `json:"model_id,omitempty"`
+	StreamingMode        string    `json:"streaming_mode,omitempty"`
+	Languages            *[]string `json:"languages,omitempty"`
+	UnloadAfterDictation *bool     `json:"unload_after_dictation,omitempty"`
 }
 
 var settingsMu sync.Mutex
@@ -377,6 +379,7 @@ func readSettings() (Settings, error) {
 		if p.Provider == providerLocal {
 			summary.ModelID = p.ModelID()
 			summary.StreamingMode = p.StreamingMode()
+			summary.UnloadAfterDictation = p.UnloadAfterDictation()
 		} else {
 			if p.Provider == providerOpenAI {
 				summary.ModelID = defaultModelID
@@ -514,6 +517,7 @@ func UpsertProfile(update ProfileUpdate) (Settings, error) {
 			delete(profile.Config, "model_id")
 			delete(profile.Config, "streaming_mode")
 			delete(profile.Config, "languages")
+			delete(profile.Config, "unload_after_dictation")
 		}
 		profile.Provider = update.Provider
 	}
@@ -530,6 +534,13 @@ func UpsertProfile(update ProfileUpdate) (Settings, error) {
 			putConfig(profile.Config, "streaming_mode", update.StreamingMode)
 		} else if index < 0 || providerChanged || modelChanged {
 			putConfig(profile.Config, "streaming_mode", defaultStreamingMode(profile.ModelID()))
+		}
+		if update.UnloadAfterDictation != nil {
+			if *update.UnloadAfterDictation {
+				putConfig(profile.Config, "unload_after_dictation", true)
+			} else {
+				delete(profile.Config, "unload_after_dictation")
+			}
 		}
 	}
 	if update.Provider == providerOpenAI {

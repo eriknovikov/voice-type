@@ -201,28 +201,28 @@ func Run(version string, command Command) error {
 	// click from a layout it fetched just before a status update.
 	menu := app.NewMenu()
 	statusItem := menu.Add("Idle").SetEnabled(false)
-	actionItem := menu.Add("Start recording").OnClick(func(_ *application.Context) { b.toggleRecording() })
-	menu.Add("Open settings").OnClick(func(_ *application.Context) { show() })
+	actionItem := menu.Add("Record").OnClick(func(_ *application.Context) { b.toggleRecording() })
+	menu.Add("Settings").OnClick(func(_ *application.Context) { show() })
 	menu.Add("Quit").OnClick(func(_ *application.Context) { go b.RequestQuit() })
 	tray.SetMenu(menu)
 	updateMenu := func(state string) {
-		statusLabel, action := "Idle", "Start recording"
+		statusLabel, action := "Idle", "Record"
 		switch state {
 		case "checking":
-			statusLabel, action = "Preparing — wait before speaking", "Cancel preparation"
+			statusLabel, action = "Preparing", "Cancel"
 		case "recording":
-			statusLabel, action = "Recording", "Stop recording"
+			statusLabel, action = "Recording", "Stop"
 		case "transcribing":
-			statusLabel, action = "Transcribing", "Transcription in progress"
+			statusLabel, action = "Transcribing", "Transcribing"
 		case "testing":
-			statusLabel, action = "Testing microphone", "Microphone test in progress"
+			statusLabel, action = "Testing", "Testing"
 		}
 		statusItem.SetLabel(statusLabel)
 		actionItem.SetLabel(action).SetEnabled(state != "transcribing" && state != "testing")
 		tray.SetIcon(trayIcon(state))
 		tooltip := "Voice Type · " + statusLabel
 		if state == "error" {
-			tooltip = "Voice Type · Dictation failed — open settings to view logs"
+			tooltip = "Voice Type · Dictation failed"
 		}
 		tray.SetTooltip(tooltip)
 	}

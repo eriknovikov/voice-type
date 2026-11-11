@@ -84,13 +84,14 @@ func configDefaults() Config {
 // sttSettings is a snapshot for one recording. Reloads never mutate it during
 // capture or transcription.
 type sttSettings struct {
-	Provider      string
-	Model         string
-	StreamingMode streamingMode
-	APIKey        string
-	Vocabulary    []string
-	Languages     []string
-	Workspace     string
+	Provider             string
+	Model                string
+	StreamingMode        streamingMode
+	UnloadAfterDictation bool
+	APIKey               string
+	Vocabulary           []string
+	Languages            []string
+	Workspace            string
 }
 
 func providerModel(provider string) string {
@@ -148,6 +149,7 @@ func (c Config) resolveSTT(workspace string) (sttSettings, error) {
 	if profile, ok := c.activeProfile(); ok {
 		if profile.Provider == providerLocal {
 			s.Model = profile.ModelID()
+			s.UnloadAfterDictation = profile.UnloadAfterDictation()
 		}
 		s.StreamingMode = profile.StreamingMode()
 		s.Languages = profile.Languages()

@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Trash2 } from "lucide-react";
-import type { APIKeySummary, ProfileSummary, ProfileUpdate } from "./api";
+import type {
+  APIKeySummary,
+  LocalModel,
+  ProfileSummary,
+  ProfileUpdate,
+} from "./api";
 import { Dropdown } from "./Dropdown";
-import { ConfirmDialog, SegmentedControl } from "./ui";
+import { ConfirmDialog, RadioGroup, SegmentedControl } from "./ui";
 
 export const providerName = (provider: string) =>
   provider === "openai"
@@ -11,8 +16,8 @@ export const providerName = (provider: string) =>
     : provider === "openrouter"
       ? "OpenRouter"
       : provider === "local"
-        ? "On-device"
-      : provider;
+        ? "Local"
+        : provider;
 const unifiedModel = "parakeet-unified-en";
 const modelSupportsStreaming = (modelID: string) => modelID === unifiedModel;
 const defaultMode = (modelID: string) =>
@@ -24,6 +29,12 @@ const localModelOptions = [
   },
   { value: "parakeet-tdt-v3", label: "Parakeet TDT v3 · 740 MB" },
 ];
+const downloadedLocalModels = (models: LocalModel[]) =>
+  localModelOptions.filter((option) =>
+    models.some(
+      (model) => model.id === option.value && model.state === "ready",
+    ),
+  );
 const nextName = (provider: string, profiles: ProfileSummary[]) => {
   let index = 1;
   while (
@@ -40,28 +51,33 @@ const nextName = (provider: string, profiles: ProfileSummary[]) => {
 const providerForms = {
   openai: { label: "OpenAI", requiresKey: true },
   openrouter: { label: "OpenRouter", requiresKey: true },
-  local: { label: "On-device", requiresKey: false },
+  local: { label: "Local", requiresKey: false },
 };
 type ProviderDraft = {
   modelID: string;
   streamingMode: string;
   languages: string;
+  unloadAfter: boolean;
 };
 export function ProfileEditor({
   profile,
   profiles,
   apiKeys,
+  localModels,
   onSave,
   onDelete,
   onClose,
+  onManageModels,
   closeGuard,
 }: {
   profile: ProfileSummary | null;
   profiles: ProfileSummary[];
   apiKeys: Record<string, APIKeySummary>;
+  localModels: LocalModel[];
   onSave: (update: Omit<ProfileUpdate, "revision">) => Promise<void>;
   onDelete: () => Promise<void>;
   onClose: () => void;
+  onManageModels: () => void;
   closeGuard: RefObject<(() => Promise<boolean>) | null>;
 }) {
   const [provider, setProvider] = useState(profile?.provider ?? "openai");
@@ -77,6 +93,10 @@ export function ProfileEditor({
     profile?.provider === "local"
       ? (profile.streaming_mode ?? defaultMode(localModelID))
       : defaultMode(localModelID);
+  const initialUnload =
+    profile?.provider === "local"
+      ? (profile.unload_after_dictation ?? false)
+      : false;
   const initialDrafts = useRef<Record<string, ProviderDraft>>({
     openai: {
       modelID: unifiedModel,
@@ -85,16 +105,19 @@ export function ProfileEditor({
           ? (profile.streaming_mode ?? "none")
           : "process",
       languages: initialLanguages,
+      unloadAfter: false,
     },
     openrouter: {
       modelID: unifiedModel,
       streamingMode: "none",
       languages: "",
+      unloadAfter: false,
     },
     local: {
       modelID: localModelID,
       streamingMode: localMode,
       languages: "",
+      unloadAfter: initialUnload,
     },
   });
   const providerDrafts = useRef(structuredClone(initialDrafts.current));
@@ -104,11 +127,30 @@ export function ProfileEditor({
     startingDraft.streamingMode,
   );
   const [languages, setLanguages] = useState(startingDraft.languages);
+  const [unloadAfter, setUnloadAfter] = useState(startingDraft.unloadAfter);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [nameError, setNameError] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [discarding, setDiscarding] = useState(false);
+  const downloadedModels = downloadedLocalModels(localModels);
+  const localModelReady =
+    provider !== "local" ||
+    downloadedModels.some((option) => option.value === modelID);
+  const selectedRAM =
+    localModels.find((model) => model.id === modelID)?.ram_bytes ?? 0;
+  const ramGiB = selectedRAM
+    ? `~${(selectedRAM / (1024 * 1024 * 1024)).toFixed(1)} GiB`
+    : "memory";
+  useEffect(() => {
+    if (provider !== "local") return;
+    const downloaded = downloadedLocalModels(localModels);
+    if (downloaded.length === 0) return;
+    if (downloaded.some((option) => option.value === modelID)) return;
+    const fallback = downloaded[0].value;
+    setModelID(fallback);
+    setStreamingMode(defaultMode(fallback));
+  }, [provider, localModels, modelID]);
   const nameInput = useRef<HTMLInputElement>(null);
   const alive = useRef(true);
   const dismiss = useRef<{
@@ -121,7 +163,8 @@ export function ProfileEditor({
     provider !== (profile?.provider ?? "openai") ||
     (provider === "local" &&
       (modelID !== initialDrafts.current.local.modelID ||
-        streamingMode !== initialDrafts.current.local.streamingMode)) ||
+        streamingMode !== initialDrafts.current.local.streamingMode ||
+        unloadAfter !== initialDrafts.current.local.unloadAfter)) ||
     (provider === "openai" &&
       (streamingMode !== initialDrafts.current.openai.streamingMode ||
         languages !== initialDrafts.current.openai.languages));
@@ -228,7 +271,11 @@ export function ProfileEditor({
                     name: name.trim(),
                     provider,
                     ...(provider === "local"
-                      ? { model_id: modelID, streaming_mode: streamingMode }
+                      ? {
+                          model_id: modelID,
+                          streaming_mode: streamingMode,
+                          unload_after_dictation: unloadAfter,
+                        }
                       : {}),
                     ...(provider === "openai"
                       ? {
@@ -262,12 +309,14 @@ export function ProfileEditor({
                       modelID,
                       streamingMode,
                       languages,
+                      unloadAfter,
                     };
                     setProvider(value);
                     const next = providerDrafts.current[value];
                     setModelID(next.modelID);
                     setStreamingMode(next.streamingMode);
                     setLanguages(next.languages);
+                    setUnloadAfter(next.unloadAfter);
                     if (autoName.current !== null) {
                       autoName.current = nextName(value, profiles);
                       setName(autoName.current);
@@ -310,17 +359,14 @@ export function ProfileEditor({
                   <span className="field-label">API key</span>
                   <p className="quiet key-summary" role="status">
                     {keySummary?.saved
-                      ? `${keySummary.masked_key} · Saved for ${definition.label}`
-                      : keySummary?.error ||
-                        `No ${definition.label} API key saved`}
+                      ? keySummary.masked_key
+                      : keySummary?.error || `No ${definition.label} key`}
                   </p>
-                  <p className="quiet">Manage API keys in the sidebar.</p>
                 </div>
               )}
               {provider === "openai" && (
                 <>
                   <div className="profile-form-field">
-                    <span className="field-label">Transcription mode</span>
                     <SegmentedControl
                       label="Transcription mode"
                       value={streamingMode}
@@ -331,15 +377,10 @@ export function ProfileEditor({
                       ]}
                       onChange={setStreamingMode}
                     />
-                    <p className="quiet">
-                      GPT Transcribe inserts the final text once, after you stop.
-                      Upload while recording starts capture immediately and
-                      connects in the background; transcription begins at Stop.
-                    </p>
                   </div>
                   <div className="profile-form-field">
                     <label htmlFor="profile-languages">
-                      Language hints (optional)
+                      Languages (optional)
                     </label>
                     <input
                       id="profile-languages"
@@ -347,13 +388,9 @@ export function ProfileEditor({
                       disabled={busy}
                       autoComplete="off"
                       spellCheck={false}
-                      placeholder="Automatic recognition"
+                      placeholder="Auto"
                       onChange={(event) => setLanguages(event.target.value)}
                     />
-                    <p className="quiet">
-                      Leave blank for automatic recognition, or enter language
-                      codes separated by commas, for example en, es, de.
-                    </p>
                   </div>
                 </>
               )}
@@ -361,52 +398,86 @@ export function ProfileEditor({
                 <>
                   <div className="profile-form-field">
                     <label htmlFor="local-model">Local model</label>
-                    <Dropdown
-                      id="local-model"
-                      label="Local model"
-                      value={modelID}
-                      disabled={busy}
-                      options={localModelOptions}
-                      onChange={(value) => {
-                        setModelID(value);
-                        setStreamingMode(defaultMode(value));
-                      }}
-                    />
+                    {downloadedModels.length ? (
+                      <Dropdown
+                        id="local-model"
+                        label="Local model"
+                        value={modelID}
+                        disabled={busy}
+                        options={downloadedModels}
+                        onChange={(value) => {
+                          setModelID(value);
+                          setStreamingMode(defaultMode(value));
+                        }}
+                      />
+                    ) : (
+                      <p className="quiet">No models installed.</p>
+                    )}
                     <p className="quiet">
-                      Models are downloaded and verified in Local Models. Both
-                      models use saved vocabulary as decoder bias.
+                      To manage local models, go to{" "}
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={onManageModels}
+                      >
+                        Local Models
+                      </button>
+                      .
                     </p>
                   </div>
-                  <div className="profile-form-field">
-                    <span className="field-label">Dictation mode</span>
-                    {modelSupportsStreaming(modelID) ? (
-                      <>
-                        <SegmentedControl
-                          label="Dictation mode"
-                          value={streamingMode}
+                  {localModelReady && (
+                    <>
+                      <div className="profile-form-field">
+                        <span className="field-label">Dictation mode</span>
+                        {modelSupportsStreaming(modelID) ? (
+                          <RadioGroup
+                            label="Dictation mode"
+                            value={streamingMode}
+                            disabled={busy}
+                            options={[
+                              {
+                                value: "process",
+                                label: "Process while recording",
+                                recommended: true,
+                              },
+                              { value: "live", label: "Live insertion" },
+                              { value: "none", label: "No streaming" },
+                            ]}
+                            onChange={setStreamingMode}
+                          />
+                        ) : (
+                          <p className="quiet">Transcribes after recording.</p>
+                        )}
+                      </div>
+                      <div className="profile-form-field">
+                        <span className="field-label">Model memory</span>
+                        <RadioGroup
+                          label="Model memory"
+                          value={unloadAfter ? "unload" : "keep"}
                           disabled={busy}
                           options={[
                             {
-                              value: "process",
-                              label: "Process while recording",
+                              value: "keep",
+                              label: "Keep loaded",
+                              recommended: true,
                             },
-                            { value: "live", label: "Live insertion" },
-                            { value: "none", label: "No streaming" },
+                            {
+                              value: "unload",
+                              label: "Unload after dictation",
+                            },
                           ]}
-                          onChange={setStreamingMode}
+                          onChange={(value) =>
+                            setUnloadAfter(value === "unload")
+                          }
                         />
-                        <p className="quiet">
-                          Live insertion sends only committed text. Voice Type
-                          never edits or removes text already inserted.
+                        <p className="quiet model-memory-hint">
+                          {unloadAfter
+                            ? `Frees ${ramGiB} while idle; next dictation starts ~0.1–0.5 s later.`
+                            : `Uses ${ramGiB} while idle; stays ready for instant reuse.`}
                         </p>
-                      </>
-                    ) : (
-                      <p className="quiet">
-                        No streaming. This model transcribes after recording
-                        stops.
-                      </p>
-                    )}
-                  </div>
+                      </div>
+                    </>
+                  )}
                 </>
               )}
               {error && (
@@ -433,7 +504,11 @@ export function ProfileEditor({
                 >
                   Cancel
                 </button>
-                <button type="submit" className="primary" disabled={busy}>
+                <button
+                  type="submit"
+                  className="primary"
+                  disabled={busy || !localModelReady}
+                >
                   {busy ? "Saving…" : "Save profile"}
                 </button>
               </div>
@@ -444,7 +519,7 @@ export function ProfileEditor({
       {discarding && (
         <ConfirmDialog
           title="Discard profile changes?"
-          description="Your changes to this profile have not been saved."
+          description="Unsaved changes will be lost."
           confirmLabel="Discard changes"
           cancelLabel="Keep editing"
           onConfirm={() => settleDismiss(true)}
@@ -454,7 +529,7 @@ export function ProfileEditor({
       {deleting && (
         <ConfirmDialog
           title={`Delete ${profile?.name}?`}
-          description="This profile will be removed. Its provider API key is shared and stays available to other profiles."
+          description="The shared API key is kept."
           confirmLabel="Delete profile"
           onConfirm={async () => {
             await onDelete();

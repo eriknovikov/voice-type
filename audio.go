@@ -233,7 +233,7 @@ func (r *Recorder) sourceFellBack() bool {
 	return r.fellBack
 }
 
-const microphoneFallbackNotice = "The selected microphone is unavailable. Switched to System default."
+const microphoneFallbackNotice = "Microphone unavailable. Using System default."
 
 // A successful enumeration is necessary before deciding a device disappeared.
 func reconcileMicrophone(id string, sources []AudioSource) (bool, error) {

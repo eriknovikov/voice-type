@@ -21,12 +21,14 @@ import (
 )
 
 type localModelDefinition struct {
-	ID                string
-	Name              string
-	Filename          string
-	Repository        string
-	Revision          string
-	Bytes             int64
+	ID         string
+	Name       string
+	Filename   string
+	Repository string
+	Revision   string
+	Bytes      int64
+	// RAMBytes is the measured resident memory added by a loaded model.
+	RAMBytes          int64
 	SHA256            string
 	Languages         string
 	SupportsStreaming bool
@@ -44,6 +46,7 @@ var localModelCatalog = []localModelDefinition{
 		Repository:        "handy-computer/parakeet-unified-en-0.6b-gguf",
 		Revision:          "7e948f21b7bdbac698d3318db9d350f1096f3b6c",
 		Bytes:             731_357_568,
+		RAMBytes:          1_181_116_006, // ~1.1 GiB resident while loaded
 		SHA256:            "4b50b6dd862bf6e346929aaf4f5eaacec003bfa3f56462d6c874b41ef2f38795",
 		Languages:         "English",
 		SupportsStreaming: true,
@@ -59,6 +62,7 @@ var localModelCatalog = []localModelDefinition{
 		Repository:        "handy-computer/parakeet-tdt-0.6b-v3-gguf",
 		Revision:          "85ac09ea12fc4b1112fa76810059364bc6adc9de",
 		Bytes:             739_508_576,
+		RAMBytes:          1_288_490_189, // ~1.2 GiB resident while loaded
 		SHA256:            "5859f77944efcd8eafa23a6350731960b2b55b2203df51f319665c807d802cc7",
 		Languages:         "25 European languages",
 		VocabularySupport: "Biasing",
@@ -83,6 +87,7 @@ type LocalModel struct {
 	ID                string  `json:"id"`
 	Name              string  `json:"name"`
 	Bytes             int64   `json:"bytes"`
+	RAMBytes          int64   `json:"ram_bytes"`
 	DownloadedBytes   int64   `json:"downloaded_bytes"`
 	Progress          float64 `json:"progress"`
 	Languages         string  `json:"languages"`
@@ -383,6 +388,7 @@ func modelStatus(definition localModelDefinition, state string, downloaded int64
 		ID:                definition.ID,
 		Name:              definition.Name,
 		Bytes:             definition.Bytes,
+		RAMBytes:          definition.RAMBytes,
 		DownloadedBytes:   downloaded,
 		Progress:          progress,
 		Languages:         definition.Languages,

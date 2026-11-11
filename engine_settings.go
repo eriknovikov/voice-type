@@ -57,7 +57,7 @@ func startEngine(version string) (*engine, error) {
 	}
 	if configErr != nil {
 		d.configError = configErr.Error()
-		d.runLog.diagnostic("configuration.failed", "error", "Configuration could not be loaded. Open settings to repair it.")
+		d.runLog.diagnostic("configuration.failed", "error", "Configuration could not be loaded.")
 	} else if err := settings.validateCredentials(); err != nil {
 		d.configError = err.Error()
 	}
@@ -101,6 +101,9 @@ func (d *engine) RefreshSettings() {
 		evict = true
 		if d.stt != nil && d.stt.local != nil {
 			selected = d.stt.settings.Model
+			if d.stt.settings.UnloadAfterDictation {
+				selected = ""
+			}
 		}
 	}
 	d.mu.Unlock()
