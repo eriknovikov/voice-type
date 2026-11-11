@@ -3,7 +3,19 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 export CGO_ENABLED = 1
 export PKG_CONFIG_PATH := $(CURDIR)/build/transcribe/pkgconfig:$(PKG_CONFIG_PATH)
 
-.PHONY: all build frontend native-engine check native-check install clean dev
+PACKAGE_DIR := build/packages
+PACKAGE_GOARCH := $(shell go env GOARCH)
+PACKAGE_EPOCH := $(shell git log -1 --format=%ct)
+PACKAGERS := deb rpm
+# Arch Linux officially supports x86_64 only; Arch Linux ARM is a separate
+# distribution, so do not publish an aarch64 package under Arch's name.
+ifeq ($(PACKAGE_GOARCH),amd64)
+PACKAGERS += archlinux
+endif
+NFPM_VERSION := v2.48.0
+NFPM ?= nfpm
+
+.PHONY: all build frontend native-engine check native-check install clean dev packages verify-packages
 all: build
 
 frontend:
@@ -28,8 +40,27 @@ check: frontend native-engine
 	go vet ./...
 	go test -race ./...
 	python3 -c 'import ast, pathlib; [ast.parse(p.read_text()) for p in pathlib.Path("scripts").glob("*.py")]'
-	sh -n install.sh uninstall.sh scripts/build-transcribe.sh
-	shellcheck -s sh install.sh uninstall.sh scripts/build-transcribe.sh
+	sh -n install.sh uninstall.sh scripts/build-transcribe.sh scripts/verify-packages.sh
+	shellcheck -s sh install.sh uninstall.sh scripts/build-transcribe.sh scripts/verify-packages.sh
+
+packages:
+	@command -v "$(NFPM)" >/dev/null 2>&1 || { printf '%s\n' 'nfpm is required: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@$(NFPM_VERSION)'; exit 1; }
+	@$(MAKE) VOICE_TYPE_VULKAN=0 build
+	@set -e; \
+	command -v readelf >/dev/null 2>&1 || { printf '%s\n' 'readelf is required to determine the glibc floor.' >&2; exit 1; }; \
+	GLIBC_MIN=$$(readelf -V build/voice-type | grep -o 'GLIBC_[0-9.]*' | sed 's/^GLIBC_//' | sort -Vu | tail -1); \
+	[ -n "$$GLIBC_MIN" ] || { printf '%s\n' 'Cannot determine the glibc floor.' >&2; exit 1; }; \
+	rm -rf "$(PACKAGE_DIR)"; \
+	mkdir -p "$(PACKAGE_DIR)"; \
+	for packager in $(PACKAGERS); do \
+		printf 'Packaging %s (glibc >= %s)...\n' "$$packager" "$$GLIBC_MIN"; \
+		VERSION="$(VERSION)" GOARCH="$(PACKAGE_GOARCH)" GLIBC_MIN="$$GLIBC_MIN" SOURCE_DATE_EPOCH="$(PACKAGE_EPOCH)" \
+			"$(NFPM)" package --config nfpm.yaml --packager "$$packager" --target "$(PACKAGE_DIR)"; \
+	done; \
+	ls -l "$(PACKAGE_DIR)"
+
+verify-packages:
+	./scripts/verify-packages.sh "$(PACKAGE_DIR)"
 
 native-check: build
 	VOICE_TYPE_DESKTOP_TEST_BINARY="$(CURDIR)/build/voice-type" go test -race -count=1 -run '^TestNativeTray$$' -v

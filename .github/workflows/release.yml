@@ -47,6 +47,10 @@ jobs:
             arch: arm64
             goarch: arm64
     runs-on: ${{ matrix.runner }}
+    # Keep the transcribe engine CPU-only so packaged artifacts do not change
+    # when a runner image happens to add Vulkan development files.
+    env:
+      VOICE_TYPE_VULKAN: "0"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Native dependencies
@@ -68,6 +72,12 @@ jobs:
         run: xvfb-run -a make native-check
         env:
           GDK_BACKEND: x11
+      - name: Install packaging tool
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Build distribution packages
+        run: make packages
       - name: Verify and package application
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -85,10 +95,14 @@ jobs:
           cp build/voice-type build/THIRD-PARTY-LICENSES.md icon.png LICENSE "$RUNNER_TEMP/payload/"
           tar -czf "$RUNNER_TEMP/release/voice-type-linux-$ARCH.tar.gz" -C "$RUNNER_TEMP/payload" LICENSE THIRD-PARTY-LICENSES.md icon.png voice-type
           tar -tzf "$RUNNER_TEMP/release/voice-type-linux-$ARCH.tar.gz"
+      - name: Install packages in clean distributions
+        run: ./scripts/verify-packages.sh
+      - name: Collect release assets
+        run: cp build/packages/* "$RUNNER_TEMP/release/"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: voice-type-${{ matrix.arch }}
-          path: ${{ runner.temp }}/release/*.tar.gz
+          path: ${{ runner.temp }}/release/*
           if-no-files-found: error
 
   publish:
@@ -104,13 +118,22 @@ jobs:
           pattern: voice-type-*
           merge-multiple: true
           path: ${{ runner.temp }}/release
-      - name: Publish verified archives
+      - name: Publish verified assets
         working-directory: ${{ runner.temp }}/release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          sha256sum voice-type-linux-x64.tar.gz voice-type-linux-arm64.tar.gz > checksums.txt
+          test "$(find . -maxdepth 1 -name '*.tar.gz' | wc -l)" -eq 2
+          test "$(find . -maxdepth 1 -name '*.deb' | wc -l)" -eq 2
+          test "$(find . -maxdepth 1 -name '*.rpm' | wc -l)" -eq 2
+          test "$(find . -maxdepth 1 -name '*.pkg.tar.zst' | wc -l)" -eq 1
+          FILES=$(find . -maxdepth 1 -type f \
+            \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) \
+            -printf '%f\n' | sort)
+          printf '%s\n' "$FILES"
+          # shellcheck disable=SC2086
+          sha256sum $FILES > checksums.txt
           sha256sum -c checksums.txt
           TAG="v$VERSION"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
@@ -121,13 +144,15 @@ jobs:
           IS_DRAFT=$(gh release view "$TAG" --json isDraft --jq '.isDraft')
           if [ "$IS_DRAFT" = true ]; then
             test "$(gh release view "$TAG" --json targetCommitish --jq '.targetCommitish')" = "$GITHUB_SHA"
-            gh release upload "$TAG" voice-type-linux-x64.tar.gz voice-type-linux-arm64.tar.gz checksums.txt --clobber
+            # shellcheck disable=SC2086
+            gh release upload "$TAG" $FILES checksums.txt --clobber
           fi
           ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name')
-          test "$(printf '%s\n' "$ASSETS" | wc -l)" -eq 3
-          for NAME in voice-type-linux-x64.tar.gz voice-type-linux-arm64.tar.gz checksums.txt; do
+          test "$(printf '%s\n' "$ASSETS" | wc -l)" -eq $(($(printf '%s\n' "$FILES" | wc -l) + 1))
+          printf '%s\n' "$FILES" | while read -r NAME; do
             printf '%s\n' "$ASSETS" | grep -qx "$NAME"
           done
+          printf '%s\n' "$ASSETS" | grep -qx checksums.txt
           if [ "$IS_DRAFT" = true ]; then
             if [[ "$VERSION" == *-* ]]; then
               gh release edit "$TAG" --draft=false --prerelease

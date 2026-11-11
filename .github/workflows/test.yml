@@ -11,6 +11,10 @@ permissions:
 jobs:
   app:
     runs-on: ubuntu-24.04
+    # Keep the transcribe engine CPU-only so packaged artifacts do not change
+    # when a runner image happens to add Vulkan development files.
+    env:
+      VOICE_TYPE_VULKAN: "0"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Native dependencies
@@ -32,3 +36,11 @@ jobs:
         run: xvfb-run -a make native-check
         env:
           GDK_BACKEND: x11
+      - name: Install packaging tool
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Build distribution packages
+        run: make packages
+      - name: Install packages in clean distributions
+        run: ./scripts/verify-packages.sh
