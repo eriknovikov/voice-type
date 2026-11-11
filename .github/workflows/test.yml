@@ -36,6 +36,9 @@ jobs:
         run: xvfb-run -a make native-check
         env:
           GDK_BACKEND: x11
+          # WebKit's bubblewrap sandbox cannot create a user namespace on the
+          # hosted runner; the packaged application keeps its normal sandbox.
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1"
       - name: Install packaging tool
         run: |
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0
