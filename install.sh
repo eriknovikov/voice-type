@@ -233,7 +233,7 @@ if [ "$UNINSTALL" = 0 ]; then
         SOURCE_ICON=$PAYLOAD/icon.png
     fi
     for asset in "$PAYLOAD/voice-type" "$SOURCE_ICON" "$PAYLOAD/LICENSE" "$PAYLOAD/THIRD-PARTY-LICENSES.md"; do
-        [ -f "$asset" ] && [ ! -L "$asset" ] || fail 'Missing application binary or icon.'
+        if [ ! -f "$asset" ] || [ -L "$asset" ]; then fail 'Missing application binary or icon.'; fi
     done
     APP_VERSION=$("$PAYLOAD/voice-type" --version) || fail 'Cannot run application. Install GTK4 and WebKitGTK 6.0 runtime libraries.'
     case "$APP_VERSION" in [6-9].*|[1-9][0-9]*.*) ;; *) fail 'Refusing to install a daemon-only binary.' ;; esac
@@ -250,10 +250,10 @@ fi
 timeout 15 "$CONTROL_BIN" --quit || fail 'Could not request shutdown. Quit Voice Type and retry.'
 [ ! -L "$RUNTIME_DIR" ] || fail 'Unsafe runtime directory.'
 (umask 077; mkdir -p "$RUNTIME_DIR")
-[ "$(stat -c %u "$RUNTIME_DIR")" = "$(id -u)" ] && [ "$(stat -c %a "$RUNTIME_DIR")" = 700 ] || fail 'Runtime directory must be private and owned by you.'
+if [ "$(stat -c %u "$RUNTIME_DIR")" != "$(id -u)" ] || [ "$(stat -c %a "$RUNTIME_DIR")" != 700 ]; then fail 'Runtime directory must be private and owned by you.'; fi
 [ ! -L "$RUNTIME_DIR/engine.lock" ] || fail 'Unsafe engine lock.'
 (umask 077; touch "$RUNTIME_DIR/engine.lock")
-[ -f "$RUNTIME_DIR/engine.lock" ] && [ "$(stat -c %u "$RUNTIME_DIR/engine.lock")" = "$(id -u)" ] && [ "$(stat -c %a "$RUNTIME_DIR/engine.lock")" = 600 ] || fail 'Engine lock must be a private regular file owned by you.'
+if [ ! -f "$RUNTIME_DIR/engine.lock" ] || [ "$(stat -c %u "$RUNTIME_DIR/engine.lock")" != "$(id -u)" ] || [ "$(stat -c %a "$RUNTIME_DIR/engine.lock")" != 600 ]; then fail 'Engine lock must be a private regular file owned by you.'; fi
 exec 9>> "$RUNTIME_DIR/engine.lock"
 flock -w 15 9 || fail 'Voice Type is still running. Finish dictation or save/discard pending edits, then retry.'
 # Old installations predating the engine lock must also be closed manually.
@@ -263,13 +263,13 @@ for proc in /proc/[0-9]*/exe; do
  done
 
 if [ "$UNINSTALL" = 1 ]; then
-    [ ! -L "$DATA_DIR/doc" ] && [ ! -L "$DOC_DIR" ] || fail 'Unsafe Voice Type documentation directory.'
+    if [ -L "$DATA_DIR/doc" ] || [ -L "$DOC_DIR" ]; then fail 'Unsafe Voice Type documentation directory.'; fi
     "$CONTROL_BIN" --remove-shortcuts
     rm -f "$BIN_DIR/voice-type" "$BIN_DIR/voice-type-app" "$DESKTOP_FILE" "$ICON_FILE" "$CONFIG_DIR/autostart/voice-type.desktop" "$DOC_DIR/LICENSE" "$DOC_DIR/THIRD-PARTY-LICENSES.md"
     rm -f "$DATA_DIR/icons/hicolor/scalable/apps/voice-type.svg" "$DATA_DIR/icons/hicolor/512x512/apps/voice-type.png"
     printf '%s\n' 'Voice Type removed. Configuration, vocabulary, backups, logs and retained audio were kept.'
 else
-    [ ! -L "$DATA_DIR/doc" ] && [ ! -L "$DOC_DIR" ] || fail 'Unsafe Voice Type documentation directory.'
+    if [ -L "$DATA_DIR/doc" ] || [ -L "$DOC_DIR" ]; then fail 'Unsafe Voice Type documentation directory.'; fi
     mkdir -p "$BIN_DIR" "$(dirname "$DESKTOP_FILE")" "$(dirname "$ICON_FILE")" "$DOC_DIR"
     install -m 644 "$PAYLOAD/LICENSE" "$DOC_DIR/LICENSE"
     install -m 644 "$PAYLOAD/THIRD-PARTY-LICENSES.md" "$DOC_DIR/THIRD-PARTY-LICENSES.md"
