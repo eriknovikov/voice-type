@@ -178,7 +178,7 @@ func TestNativeTray(t *testing.T) {
 	if len(layout.Children) != 4 {
 		t.Fatalf("expected four tray rows, got %d", len(layout.Children))
 	}
-	for _, label := range []string{"Idle", "Start recording", "Open settings", "Quit"} {
+	for _, label := range []string{"Idle", "Record", "Settings", "Quit"} {
 		if findTrayItem(layout, label) < 0 {
 			t.Fatalf("missing menu action %q", label)
 		}
@@ -273,7 +273,7 @@ func TestNativeTray(t *testing.T) {
 			t.Fatal(err)
 		}
 		if updatedRevision > revision {
-			for _, label := range []string{"Open settings", "Quit"} {
+			for _, label := range []string{"Settings", "Quit"} {
 				if findTrayItem(layout, label) != findTrayItem(updated, label) {
 					t.Fatalf("state update replaced stable action ID for %s", label)
 				}
@@ -286,7 +286,7 @@ func TestNativeTray(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	// Trigger actual native menu callbacks through their published protocol.
-	if err := menu.Call("com.canonical.dbusmenu.Event", 0, findTrayItem(layout, "Open settings"), "clicked", dbus.MakeVariant(int32(0)), uint32(0)).Err; err != nil {
+	if err := menu.Call("com.canonical.dbusmenu.Event", 0, findTrayItem(layout, "Settings"), "clicked", dbus.MakeVariant(int32(0)), uint32(0)).Err; err != nil {
 		t.Fatal(err)
 	}
 	if err := menu.Call("com.canonical.dbusmenu.Event", 0, findTrayItem(layout, "Quit"), "clicked", dbus.MakeVariant(int32(0)), uint32(0)).Err; err != nil {

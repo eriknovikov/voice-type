@@ -11,6 +11,7 @@ export interface ProfileSummary {
   model_id?: string;
   streaming_mode?: string;
   languages?: string[];
+  unload_after_dictation?: boolean;
 }
 export interface APIKeySummary {
   masked_key?: string;
@@ -40,11 +41,13 @@ export interface ProfileUpdate {
   model_id?: string;
   streaming_mode?: string;
   languages?: string[];
+  unload_after_dictation?: boolean;
 }
 export interface LocalModel {
   id: string;
   name: string;
   bytes: number;
+  ram_bytes: number;
   downloaded_bytes: number;
   progress: number;
   languages: string;

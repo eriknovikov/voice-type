@@ -401,10 +401,15 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 				d.configError = err.Error()
 			} else {
 				d.configError = ""
-				evictModel = true
-				if d.stt != nil && d.stt.local != nil {
-					selectedModel = d.stt.settings.Model
-				}
+			}
+			evictModel = true
+			if stt != nil && stt.settings.Provider == providerLocal && stt.settings.UnloadAfterDictation {
+				// This profile opted out of keeping the model warm.
+				selectedModel = ""
+			} else if d.stt != nil && d.stt.local != nil {
+				selectedModel = d.stt.settings.Model
+			} else if stt != nil && stt.local != nil {
+				selectedModel = stt.settings.Model
 			}
 		}
 		d.mu.Unlock()
@@ -525,7 +530,7 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 					} else {
 						retained = " Audio could not be retained: " + retainErr.Error()
 					}
-					message := "Local processing while recording failed; Voice Type retried the full recording locally." + retained
+					message := "Local streaming failed; retried the full recording locally." + retained
 					d.mu.Lock()
 					d.showNotice(message)
 					d.mu.Unlock()

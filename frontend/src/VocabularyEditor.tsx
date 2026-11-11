@@ -56,7 +56,6 @@ export function VocabularyEditor({
     <div className="vocabulary-layout">
       <div className="vocabulary-nav">
         <div className="vocabulary-nav-heading">
-          <span className="vocabulary-nav-label">Vocabularies</span>
           <div className="vocabulary-mobile-selector">
             <Dropdown
               label="Vocabulary to edit"
@@ -208,9 +207,6 @@ export function VocabularyEditor({
                 </p>
               </div>
               <div className="actions">
-                {selected === "general" && (
-                  <span className="badge neutral">Always included</span>
-                )}
                 {inUse ? (
                   <span className="badge">
                     <Check size={13} aria-hidden="true" />
@@ -218,9 +214,7 @@ export function VocabularyEditor({
                   </span>
                 ) : selected !== "general" || active ? (
                   <button disabled={busy} onClick={onActivate}>
-                    {selected === "general"
-                      ? "Use general only"
-                      : "Use vocabulary"}
+                    {selected === "general" ? "Use general" : "Use"}
                   </button>
                 ) : null}
                 {selected !== "general" && (
@@ -231,26 +225,18 @@ export function VocabularyEditor({
                       onClick={onDelete}
                     >
                       <Trash2 size={15} aria-hidden="true" />
-                      Delete vocabulary
+                      Delete
                     </button>
                   </ActionsMenu>
                 )}
               </div>
             </div>
-            <label htmlFor="vocabulary-terms">Words and phrases</label>
-            <p
-              id="vocabulary-terms-hint"
-              className="quiet vocabulary-terms-hint"
-            >
-              One word or phrase per line.
-            </p>
+            <label htmlFor="vocabulary-terms">Terms</label>
             <textarea
               id="vocabulary-terms"
               name="vocabulary-terms"
               className="vocabulary-terms"
-              aria-describedby="vocabulary-terms-hint"
               disabled={busy}
-              placeholder={"Voice Type\nOpenAI\nWails"}
               value={list.terms.join("\n")}
               onChange={(event) => onTerms(event.target.value.split(/\r?\n/))}
               spellCheck={false}
@@ -259,7 +245,7 @@ export function VocabularyEditor({
           </>
         ) : (
           <div className="empty">
-            <p>Select a vocabulary to edit its terms.</p>
+            <p>Select a vocabulary.</p>
           </div>
         )}
       </section>
@@ -307,7 +293,6 @@ export function VocabularyEditor({
                     setName(event.target.value);
                     setError("");
                   }}
-                  placeholder="Medical terms…"
                 />
                 {error && (
                   <p
@@ -324,7 +309,7 @@ export function VocabularyEditor({
                   <button type="button">Cancel</button>
                 </Dialog.Close>
                 <button className="primary" type="submit">
-                  Create vocabulary
+                  Create
                 </button>
               </div>
             </form>

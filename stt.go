@@ -31,7 +31,7 @@ type sttResult struct {
 
 func (r sttResult) billingSummary() string {
 	if r.Offline {
-		return "on-device inference"
+		return "local inference"
 	}
 	seconds, cost := "unavailable", "unavailable"
 	if r.Seconds != nil {

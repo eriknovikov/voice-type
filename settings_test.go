@@ -232,6 +232,59 @@ func TestLocalProfilesKeepModeAndVocabularyWithoutCloudCredentials(t *testing.T)
 	}
 }
 
+func TestLocalProfileUnloadAfterDictation(t *testing.T) {
+	settingsTestHome(t)
+	view := readSettingsTest(t)
+	unload := true
+	view, err := UpsertProfile(ProfileUpdate{
+		Revision:             view.Revision,
+		Name:                 "Private",
+		Provider:             providerLocal,
+		ModelID:              localModelUnifiedEnglish,
+		StreamingMode:        streamingModeProcess,
+		UnloadAfterDictation: &unload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.Profiles[0].UnloadAfterDictation {
+		t.Fatalf("unload setting missing from summary: %+v", view.Profiles[0])
+	}
+	cfg, err := configReadStrict()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := cfg.resolveSTT("")
+	if err != nil || !settings.UnloadAfterDictation {
+		t.Fatalf("unload setting missing from resolved profile: %+v %v", settings, err)
+	}
+
+	unload = false
+	view, err = UpsertProfile(ProfileUpdate{
+		Revision:             view.Revision,
+		ID:                   view.Profiles[0].ID,
+		Name:                 "Private",
+		Provider:             providerLocal,
+		ModelID:              localModelUnifiedEnglish,
+		StreamingMode:        streamingModeProcess,
+		UnloadAfterDictation: &unload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Profiles[0].UnloadAfterDictation {
+		t.Fatalf("unload setting was not cleared: %+v", view.Profiles[0])
+	}
+	cfg, err = configReadStrict()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err = cfg.resolveSTT("")
+	if err != nil || settings.UnloadAfterDictation {
+		t.Fatalf("cleared unload setting survived: %+v %v", settings, err)
+	}
+}
+
 func TestLocalProfileRejectsCloudKeyAndUnknownModel(t *testing.T) {
 	settingsTestHome(t)
 	view := readSettingsTest(t)

@@ -5,7 +5,7 @@ advisory flow. Do not include API keys, recorded speech or transcripts in issues
 
 Voice Type runs as your desktop user. It records from PulseAudio/PipeWire.
 Cloud profiles send audio to the selected OpenAI or OpenRouter provider over an
-encrypted connection; On-device profiles process audio locally. There is no
+encrypted connection; Local profiles process audio locally. There is no
 silent fallback from local processing to a cloud provider.
 
 Text insertion uses IBus, restores the previous input engine, and rejects

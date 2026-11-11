@@ -78,6 +78,12 @@ func (p Profile) Languages() []string {
 	return append([]string(nil), languages...)
 }
 
+func (p Profile) UnloadAfterDictation() bool {
+	var unload bool
+	_ = json.Unmarshal(p.Config["unload_after_dictation"], &unload)
+	return unload
+}
+
 var languageHintPattern = regexp.MustCompile(`^([a-z]{2,3}|zh-(cn|tw|hk))$`)
 
 func validateLanguageHints(languages []string) error {
@@ -139,6 +145,12 @@ func validateProfile(p Profile) error {
 		if err := validateStreamingMode(p.ModelID(), p.StreamingMode()); err != nil {
 			return err
 		}
+		if raw, ok := p.Config["unload_after_dictation"]; ok {
+			var unload bool
+			if err := json.Unmarshal(raw, &unload); err != nil {
+				return errors.New("invalid model unload setting")
+			}
+		}
 	default:
 		return errors.New("unsupported profile provider")
 	}
@@ -192,7 +204,7 @@ func providerLabel(provider string) string {
 	case providerOpenAI:
 		return "OpenAI"
 	case providerLocal:
-		return "On-device"
+		return "Local"
 	default:
 		return "OpenRouter"
 	}

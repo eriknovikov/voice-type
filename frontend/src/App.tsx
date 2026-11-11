@@ -53,7 +53,7 @@ const tabs = [
   { id: "local-models", label: "Local Models", icon: Download },
   { id: "api-keys", label: "API Keys", icon: KeyRound },
   { id: "audio", label: "Audio", icon: Mic },
-  { id: "shortcuts", label: "Keyboard Shortcuts", icon: Keyboard },
+  { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
   { id: "vocabulary", label: "Vocabulary", icon: BookOpen },
   { id: "logs", label: "Logs", icon: FileText },
 ] as const;
@@ -144,6 +144,10 @@ export function App() {
   };
   useEffect(() => {
     void store.load().catch((e) => setError(errorText(e)));
+    void api
+      .localModels()
+      .then(setLocalModels)
+      .catch(() => {});
     const offError = Events.On("operation-error", (event) =>
       setError(String(eventValue(event.data))),
     );
@@ -317,6 +321,13 @@ export function App() {
       await prefsTail.current;
       setTab(next);
     });
+  const openProfileEditor = (profile: ProfileSummary | null) => {
+    setEditor({ profile });
+    void api
+      .localModels()
+      .then(setLocalModels)
+      .catch(() => {});
+  };
   const updateVocabulary = (lists: VocabularyList[], debounce = false) =>
     store.patch({ vocabulary: lists }, debounce);
   const list = settings?.vocabulary.find((item) => item.name === selected);
@@ -384,11 +395,9 @@ export function App() {
                 ? "Saving…"
                 : saveStatus === "saved" && showSaved
                   ? "Saved"
-                  : saveStatus === "pending"
-                    ? "Unsaved"
-                    : saveStatus === "error"
-                      ? "Not saved"
-                      : ""}
+                  : saveStatus === "error"
+                    ? "Not saved"
+                    : ""}
             </span>
             {saveStatus === "error" && (
               <button
@@ -414,9 +423,9 @@ export function App() {
                 : status.state === "idle"
                   ? "Idle"
                   : status.state === "checking"
-                    ? "Preparing — wait before speaking"
+                    ? "Preparing"
                   : status.state === "testing"
-                    ? "Testing microphone"
+                    ? "Testing"
                     : status.state.charAt(0).toUpperCase() +
                       status.state.slice(1)}
             </span>
@@ -464,7 +473,7 @@ export function App() {
         )}
         {!settings ? (
           <div className="empty">
-            <h2>{error ? "Settings unavailable" : "Loading settings…"}</h2>
+            <h2>{error ? "Settings unavailable" : "Loading…"}</h2>
             {error && (
               <button onClick={() => void run(store.load)}>Retry</button>
             )}
@@ -477,8 +486,8 @@ export function App() {
                   profiles={settings.profiles}
                   active={settings.active_profile}
                   busy={busy}
-                  onCreate={() => setEditor({ profile: null })}
-                  onEdit={(profile) => setEditor({ profile })}
+                  onCreate={() => openProfileEditor(null)}
+                  onEdit={(profile) => openProfileEditor(profile)}
                   onSelect={(id) =>
                     void run(() =>
                       store.mutate((revision) =>
@@ -515,8 +524,7 @@ export function App() {
                     </div>
                     {!info.tray_available && (
                       <p className="quiet section-note">
-                        GNOME needs the AppIndicator extension to show the tray
-                        icon.
+                        Tray requires the AppIndicator extension.
                       </p>
                     )}
                   </section>
@@ -588,7 +596,7 @@ export function App() {
                 </div>
                 <div className="settings-group microphone-test">
                   <div className="section-heading">
-                    <h2>Microphone test</h2>
+                    <h2>Microphone</h2>
                     <button
                       disabled={
                         busy || !["idle", "testing"].includes(status.state)
@@ -605,24 +613,18 @@ export function App() {
                         })
                       }
                     >
-                      {status.state === "testing"
-                        ? "Stop test"
-                        : "Test microphone"}
+                      {status.state === "testing" ? "Stop" : "Test"}
                     </button>
                   </div>
                   <MicrophoneMeter active={status.state === "testing"} />
                   {status.state === "testing" ? (
                     <p className="quiet meter-note" role="status">
-                      Listening… Stops after 60 seconds.
+                      Listening…
                     </p>
                   ) : status.state === "recording" ? (
-                    <p className="quiet meter-note">
-                      Stop recording to test the microphone.
-                    </p>
+                    <p className="quiet meter-note">Stop recording first.</p>
                   ) : status.state === "transcribing" ? (
-                    <p className="quiet meter-note">
-                      Wait for transcription to finish before testing.
-                    </p>
+                    <p className="quiet meter-note">Wait for transcription.</p>
                   ) : null}
                 </div>
               </section>
@@ -631,7 +633,7 @@ export function App() {
               <section className="settings-section">
                 <div className="settings-group shortcut-settings">
                   <ShortcutPicker
-                    name="Start or stop recording"
+                    name="Dictation"
                     value={info.preferences.shortcut}
                     onError={setError}
                     onChange={(shortcut) => savePreferences({ shortcut })}
@@ -685,8 +687,7 @@ export function App() {
                   onDelete={() =>
                     setConfirm({
                       title: `Delete ${selected}?`,
-                      description:
-                        "This vocabulary and its terms will be removed.",
+                      description: "Its terms will be deleted.",
                       label: "Delete vocabulary",
                       run: async () => {
                         updateVocabulary(
@@ -717,7 +718,7 @@ export function App() {
                 onClear={() =>
                   setConfirm({
                     title: "Clear logs?",
-                    description: "Current and rotated logs will be removed.",
+                    description: "All logs will be deleted.",
                     label: "Clear logs",
                     run: async () => {
                       await api.clearLogs();
@@ -737,6 +738,11 @@ export function App() {
           profile={editor.profile}
           profiles={settings.profiles}
           apiKeys={settings.api_keys}
+          localModels={localModels}
+          onManageModels={() => {
+            setEditor(null);
+            void navigate("local-models");
+          }}
           onSave={(update) =>
             store.mutate((revision) =>
               api.upsertProfile({ ...update, revision }),

@@ -5,11 +5,7 @@ import { providerName } from "./ProfileEditor";
 const modelName = (id?: string) =>
   id === "parakeet-tdt-v3" ? "Parakeet TDT v3" : "Parakeet Unified English";
 const modeName = (mode?: string) =>
-  mode === "live"
-    ? "Live insertion"
-    : mode === "none"
-      ? "No streaming"
-      : "Process while recording";
+  mode === "live" ? "Live" : mode === "none" ? "Batch" : "Streaming";
 
 export function Profiles({
   profiles,
@@ -69,11 +65,11 @@ export function Profiles({
                     ) : profile.provider === "openai" ? (
                       <span>
                         {profile.streaming_mode === "process"
-                          ? "Upload while recording"
-                          : "Record then upload"}
+                          ? "Streaming"
+                          : "Batch"}
                       </span>
                     ) : (
-                      <span>Complete recording</span>
+                      <span>Batch</span>
                     )}
                   </span>
                 </span>
@@ -92,17 +88,11 @@ export function Profiles({
         </div>
       ) : (
         <div className="settings-group profile-empty">
-          <p>Add a profile to start dictating.</p>
           <button className="primary" onClick={onCreate}>
             <Plus size={16} aria-hidden="true" />
             Add profile
           </button>
         </div>
-      )}
-      {!!profiles.length && !active && (
-        <p className="quiet section-note">
-          Select a profile to start dictating.
-        </p>
       )}
     </section>
   );

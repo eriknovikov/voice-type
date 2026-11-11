@@ -19,6 +19,7 @@ const model = (
   id: "parakeet-unified-en",
   name: "Parakeet Unified English",
   bytes: 731_357_568,
+  ram_bytes: 1_181_116_006,
   downloaded_bytes: downloadedBytes,
   progress: (downloadedBytes / 731_357_568) * 100,
   languages: "English",
@@ -55,6 +56,11 @@ const renderModel = (
   );
 
 describe("local model download controls", () => {
+  it("shows the resident memory estimate", () => {
+    renderModel(model("ready", 731_357_568));
+    expect(screen.getByText("~1.1 GiB RAM when loaded")).toBeTruthy();
+  });
+
   it("starts an uninstalled model download", () => {
     const onInstall = vi.fn();
     renderModel(model("not_installed"), { onInstall });
@@ -92,7 +98,7 @@ describe("local model download controls", () => {
     const onCancel = vi.fn();
     renderModel(model("failed", 100_000_000), { onRetry, onCancel });
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    fireEvent.click(screen.getByRole("button", { name: "Cancel download" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onRetry).toHaveBeenCalledWith("parakeet-unified-en");
     expect(onCancel).toHaveBeenCalledWith("parakeet-unified-en");
   });

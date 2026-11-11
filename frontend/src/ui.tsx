@@ -35,6 +35,54 @@ export function SegmentedControl({
   );
 }
 
+export function RadioGroup({
+  label,
+  value,
+  options,
+  onChange,
+  disabled = false,
+}: {
+  label: string;
+  value: string;
+  options: {
+    value: string;
+    label: string;
+    recommended?: boolean;
+    detail?: string;
+  }[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}) {
+  const name = useId();
+  return (
+    <fieldset className="radio-group" disabled={disabled}>
+      <legend className="sr-only">{label}</legend>
+      {options.map((option) => (
+        <label key={option.value} className="radio-option">
+          <input
+            type="radio"
+            name={name}
+            value={option.value}
+            checked={value === option.value}
+            onChange={() => onChange(option.value)}
+          />
+          <span className="radio-option-text">
+            <span>
+              {option.label}
+              {option.recommended && (
+                <span className="radio-option-note"> (recommended)</span>
+              )}
+            </span>
+            {option.detail && (
+              <span className="radio-option-detail">{option.detail}</span>
+            )}
+          </span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 export function ConfirmDialog({
   title,
   description,

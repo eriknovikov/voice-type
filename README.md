@@ -21,9 +21,9 @@ IBus, and a graphical session with D-Bus. Cloud profiles also need an unlocked
 Secret Service-compatible keyring. On GNOME, the
 AppIndicator/KStatusNotifierItem extension makes the tray visible.
 
-Open **Voice Type** from the launcher. Add an OpenAI, OpenRouter, or on-device
+Open **Voice Type** from the launcher. Add an OpenAI, OpenRouter, or local
 profile, choose your microphone, and set your shortcut. Cloud profiles need an
-API key saved in **API Keys** first. On-device profiles use one of the two
+API key saved in **API Keys** first. Local profiles use one of the two
 verified Parakeet models managed in **Local Models**; weights are downloaded on
 demand and are not included in the application installer. A local failure never
 uploads audio or switches to a cloud provider.
@@ -159,7 +159,7 @@ RMS/peak level, so missing audio can be distinguished from an empty provider
 response without logging speech. Local insertion failures retain private WAV/transcript files
 for manual recovery; they are never replayed automatically.
 
-The on-device catalog offers **Parakeet Unified English** (English, buffered
+The local catalog offers **Parakeet Unified English** (English, buffered
 streaming in the pinned engine) and **Parakeet TDT v3** (25 European languages,
 batch only). Downloads are
 pinned to immutable Hugging Face revisions and verified by exact size and
