@@ -9,17 +9,48 @@ control port, or management socket.
 
 ## Install
 
-Download a Linux x64 or ARM64 application release:
+Voice Type supports Ubuntu 24.04+, Debian 13+, Fedora 40+ and Arch Linux
+(x86_64). Release binaries are built on Ubuntu 24.04, so older distributions
+lack the required glibc 2.38 or newer and are rejected by the package manager. Runtime
+requirements are GTK4, WebKitGTK 6.0, PulseAudio or PipeWire's PulseAudio server,
+IBus, and a graphical session with D-Bus. Cloud profiles also need an unlocked
+Secret Service-compatible keyring. On GNOME, the
+AppIndicator/KStatusNotifierItem extension makes the tray visible.
+
+### Packages
+
+Download the file for your system from the
+[latest release](https://github.com/eriknovikov/voice-type/releases/latest), then
+install it. The package manager resolves GTK4, WebKitGTK 6.0, IBus and the audio
+stack from the distribution repositories.
+
+| System | File | Install |
+| --- | --- | --- |
+| Ubuntu, Debian, Mint, Pop!_OS | `voice-type_VERSION_amd64.deb` | `sudo apt install ./FILE` |
+| Fedora | `voice-type-VERSION-1.x86_64.rpm` | `sudo dnf install ./FILE` |
+| Arch Linux | `voice-type-VERSION-1-x86_64.pkg.tar.zst` | `sudo pacman -U ./FILE` |
+
+On ARM64, use the `arm64` Debian package or the `aarch64` RPM. Arch Linux
+officially supports x86_64 only; on Arch Linux ARM use the archive installer
+below. Packages install system-wide; the archive installer installs per-user.
+Choose one method per machine.
+
+### One command
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/install.sh | sh
 ```
 
-The installer requires `curl`, `tar`, `sha256sum`, `flock` and `timeout`. Runtime
-requirements are GTK4, WebKitGTK 6.0, PulseAudio or PipeWire's PulseAudio server,
-IBus, and a graphical session with D-Bus. Cloud profiles also need an unlocked
-Secret Service-compatible keyring. On GNOME, the
-AppIndicator/KStatusNotifierItem extension makes the tray visible.
+The installer detects `apt`, `dnf` or `pacman`, downloads the matching package,
+verifies its checksum against the release, and installs it with `sudo`. Without
+root, `sudo`, or a supported package manager it installs per-user from the
+release archive (`~/.local/bin/voice-type`, the launcher entry, icon, and
+documentation under `~/.local/share`).
+
+Use `install.sh --user` to force a per-user installation, `--version v6.x.y` to
+choose a release, and `--uninstall` to remove either installation type. Upgrades
+reinstall the new release file; automatic updates require hosted repositories,
+which are not available yet.
 
 Open **Voice Type** from the launcher. Add an OpenAI, OpenRouter, or local
 profile, choose your microphone, and set your shortcut. Cloud profiles need an
@@ -28,11 +59,12 @@ verified Parakeet models managed in **Local Models**; weights are downloaded on
 demand and are not included in the application installer. A local failure never
 uploads audio or switches to a cloud provider.
 
-The installer defaults to `~/.local/bin/voice-type`. It verifies release checksums
-and refuses pre-v6 daemon archives. An upgrade requests a normal quit and waits
-for engine ownership; unfinished dictation or pending edits prevent replacement.
-Older daemon processes must be stopped manually. Start at login is enabled by
-default on first launch. Existing preferences are retained.
+The installer verifies release checksums and refuses pre-v6 daemon archives. An
+upgrade requests a normal quit and waits for engine ownership; unfinished
+dictation or pending edits prevent replacement. Older daemon processes must be
+stopped manually. Start at login is enabled by default on first launch. Existing
+preferences are retained. Removing a package keeps configuration, vocabulary,
+backups, logs and retained audio.
 
 ## FAQ
 
@@ -105,6 +137,23 @@ make build
 make check
 ./install.sh --local
 ```
+
+Distribution packages are built with [nfpm](https://nfpm.goreleaser.com/):
+
+```sh
+go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0
+make packages
+./scripts/verify-packages.sh
+```
+
+`make packages` writes `.deb`, `.rpm` and, on x86_64, Arch Linux packages to
+`build/packages`. `verify-packages.sh` installs them in clean Ubuntu, Debian and
+Fedora containers (plus Arch on x86_64) and checks package contents, declared
+dependencies, and application startup. It needs Docker or Podman. The declared
+glibc floor is read from the built binary, so a package built on a host newer
+than a target distribution is correctly rejected there; release packages are
+built on Ubuntu 24.04. `PACKAGE_VERIFY_SKIP_RUN=1` skips only the startup check
+and still verifies contents and dependency installation.
 
 The root Go module contains the application and dictation engine; `frontend/`
 contains the React UI. `cmd/voice-type` is the only executable entry point.
@@ -289,7 +338,9 @@ Use a private `HOME`, `XDG_DATA_HOME`, and `XDG_RUNTIME_DIR`; the test writes a
 unique service name, verifies save/read/replace/delete, and removes its entry.
 
 Pushes to `main` changing `VERSION` publish native Linux x64 and ARM64 app
-archives. See the release workflow for dependencies and artifact verification.
+archives, `.deb` and `.rpm` packages for both architectures, and an x86_64 Arch
+Linux package. See the release workflow for dependencies and artifact
+verification.
 
 ## Contributing
 

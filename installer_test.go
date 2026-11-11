@@ -163,6 +163,104 @@ func TestInstallerRefusesUnsafeReplacement(t *testing.T) {
 	}
 }
 
+func writeInstallerTool(t *testing.T, source, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(source, "tools", name), []byte(body), 0755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func packageFixture(t *testing.T, corrupt bool) (string, string, string) {
+	t.Helper()
+	source, _ := installerFixture(t)
+	release := t.TempDir()
+	t.Setenv("TEST_RELEASE", release)
+	t.Setenv("VOICE_TYPE_INSTALLED_BIN", filepath.Join(source, "build/voice-type"))
+	args := filepath.Join(t.TempDir(), "package-args")
+	t.Setenv("TEST_PACKAGE_ARGS", args)
+	writeInstallerTool(t, source, "curl", `#!/bin/sh
+cp "$TEST_RELEASE/$(basename "$2")" "$4"
+`)
+	writeInstallerTool(t, source, "sudo", "#!/bin/sh\nexec \"$@\"\n")
+	writeInstallerTool(t, source, "apt-get", `#!/bin/sh
+printf '%s\n' "$*" >> "$TEST_PACKAGE_ARGS"
+exit 0
+`)
+	arch := "arm64"
+	if output, err := exec.Command("uname", "-m").Output(); err == nil && strings.TrimSpace(string(output)) == "x86_64" {
+		arch = "amd64"
+	}
+	name := "voice-type_6.0.0_" + arch + ".deb"
+	data := []byte("fake-package")
+	if corrupt {
+		data = []byte("corrupt-package")
+	}
+	if err := os.WriteFile(filepath.Join(release, name), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	checksum := fmt.Sprintf("%x  %s\n", sha256.Sum256([]byte("fake-package")), name)
+	if err := os.WriteFile(filepath.Join(release, "checksums.txt"), []byte(checksum), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return source, args, name
+}
+
+func TestInstallerInstallsDistributionPackage(t *testing.T) {
+	source, args, name := packageFixture(t, false)
+	output, err := runInstaller(t, source, "--version", "v6.0.0")
+	if err != nil {
+		t.Fatalf("install: %v %s", err, output)
+	}
+	recorded, err := os.ReadFile(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := string(recorded)
+	if !strings.Contains(commands, "update") {
+		t.Fatalf("package indexes were not refreshed: %s", commands)
+	}
+	if !strings.Contains(commands, "install -y") || !strings.Contains(commands, name) {
+		t.Fatalf("distribution package was not installed: %s", commands)
+	}
+	if !strings.Contains(output, "system-wide") {
+		t.Fatalf("missing system-wide result: %s", output)
+	}
+}
+
+func TestInstallerRejectsCorruptDistributionPackage(t *testing.T) {
+	source, args, _ := packageFixture(t, true)
+	output, err := runInstaller(t, source, "--version", "v6.0.0")
+	if err == nil {
+		t.Fatalf("corrupt package accepted: %s", output)
+	}
+	if recorded, readErr := os.ReadFile(args); readErr == nil && strings.Contains(string(recorded), "install -y") {
+		t.Fatalf("package manager ran after a checksum failure: %s", recorded)
+	}
+}
+
+func TestInstallerUninstallsDistributionPackage(t *testing.T) {
+	source, _ := installerFixture(t)
+	args := filepath.Join(t.TempDir(), "package-args")
+	t.Setenv("TEST_PACKAGE_ARGS", args)
+	writeInstallerTool(t, source, "sudo", "#!/bin/sh\nexec \"$@\"\n")
+	writeInstallerTool(t, source, "dpkg-query", "#!/bin/sh\nprintf '%s\\n' 'install ok installed'\n")
+	writeInstallerTool(t, source, "apt-get", `#!/bin/sh
+printf '%s\n' "$*" >> "$TEST_PACKAGE_ARGS"
+exit 0
+`)
+	output, err := runInstaller(t, source, "--uninstall")
+	if err != nil {
+		t.Fatalf("uninstall: %v %s", err, output)
+	}
+	recorded, err := os.ReadFile(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(recorded), "remove -y voice-type") {
+		t.Fatalf("distribution package was not removed: %s", recorded)
+	}
+}
+
 func TestDownloadedApplicationIntegrity(t *testing.T) {
 	for _, kind := range []string{"valid", "checksum", "layout", "version", "daemon-release"} {
 		t.Run(kind, func(t *testing.T) {
@@ -214,7 +312,7 @@ cp "$TEST_RELEASE/$(basename "$2")" "$4"
 			case "daemon-release":
 				tag = "v5.7.0"
 			}
-			output, err := runInstaller(t, source, "--version", tag)
+			output, err := runInstaller(t, source, "--user", "--version", tag)
 			if kind == "valid" {
 				if err != nil {
 					t.Fatalf("valid archive: %v %s", err, output)

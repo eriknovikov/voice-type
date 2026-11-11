@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Voice Type
+GenericName=Voice Dictation
+Comment=Speech to text at your cursor
+Exec=voice-type
+TryExec=voice-type
+Icon=io.github.eriknovikov.voice-type
+Terminal=false
+Categories=AudioVideo;Audio;
+StartupNotify=true
