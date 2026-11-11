@@ -12,7 +12,7 @@ PACKAGERS := deb rpm
 ifeq ($(PACKAGE_GOARCH),amd64)
 PACKAGERS += archlinux
 endif
-NFPM_VERSION := v2.48.0
+NFPM_VERSION := v2.46.3
 NFPM ?= nfpm
 
 .PHONY: all build frontend native-engine check native-check install clean dev packages verify-packages

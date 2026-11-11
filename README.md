@@ -141,7 +141,7 @@ make check
 Distribution packages are built with [nfpm](https://nfpm.goreleaser.com/):
 
 ```sh
-go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0
+go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.46.3
 make packages
 ./scripts/verify-packages.sh
 ```
