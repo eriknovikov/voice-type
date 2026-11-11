@@ -1,0 +1,70 @@
+# Distribution package metadata. nfpm is a build-time tool; it packages the
+# tree produced by `make build`. VERSION and GOARCH are read from the
+# environment by `make packages` and the release workflow.
+name: voice-type
+arch: ${GOARCH}
+platform: linux
+version: ${VERSION}
+section: sound
+priority: optional
+maintainer: Erik Novikov <eriknkv24@gmail.com>
+description: |-
+  System-wide speech to text for Linux.
+  Press a shortcut, speak, and the text appears at your cursor through IBus.
+vendor: Erik Novikov
+homepage: https://github.com/eriknovikov/voice-type
+license: Apache-2.0
+
+contents:
+  - src: build/voice-type
+    dst: /usr/bin/voice-type
+  - src: packaging/voice-type.desktop
+    dst: /usr/share/applications/io.github.eriknovikov.voice-type.desktop
+  - src: icon.png
+    dst: /usr/share/icons/hicolor/512x512/apps/io.github.eriknovikov.voice-type.png
+  - src: build/LICENSE
+    dst: /usr/share/doc/voice-type/copyright
+  - src: build/THIRD-PARTY-LICENSES.md
+    dst: /usr/share/doc/voice-type/THIRD-PARTY-LICENSES.md
+
+# The package manager resolves these from the distribution repositories, so a
+# user only needs a working desktop and an Internet connection.
+depends:
+  # GLIBC_MIN is read from the built binary by `make packages`.
+  - libc6 (>= ${GLIBC_MIN})
+  - libstdc++6
+  - libgtk-4-1
+  - libwebkitgtk-6.0-4
+  - libsoup-3.0-0
+  # WebKitGTK may link the Vulkan loader depending on how the distribution
+  # built it; the loader is present on normal GPU desktops.
+  - libvulkan1
+  - ibus
+
+recommends:
+  - gnome-keyring
+  - pipewire-pulse
+
+overrides:
+  rpm:
+    depends:
+      - glibc >= ${GLIBC_MIN}
+      - libstdc++
+      - gtk4
+      - webkitgtk6.0
+      - libsoup3
+      - vulkan-loader
+      - ibus
+    recommends:
+      - gnome-keyring
+      - pipewire-pulse
+  archlinux:
+    depends:
+      - gtk4
+      - webkitgtk-6.0
+      - libsoup3
+      - vulkan-icd-loader
+      - ibus
+    recommends:
+      - gnome-keyring
+      - pipewire-pulse

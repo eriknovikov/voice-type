@@ -1,82 +1,43 @@
 # Security
 
-## Permissions
+Report vulnerabilities privately through the repository's GitHub security
+advisory flow. Do not include API keys, recorded speech or transcripts in issues.
 
-### Microphone Access
+Voice Type runs as your desktop user. It records from PulseAudio/PipeWire.
+Cloud profiles send audio to the selected OpenAI or OpenRouter provider over an
+encrypted connection; Local profiles process audio locally. There is no
+silent fallback from local processing to a cloud provider.
 
-- **Purpose**: Capture speech for transcription by the selected provider.
-- **When active**: The microphone is read only during an explicit recording
-  session started by the user.
-- **Data flow**: Captured PCM audio is encoded as WAV and sent to OpenAI or
-  OpenRouter, as selected in the config. Active vocabulary accompanies the audio.
-- **Local retention**: Audio from failed transcription attempts is retained
-  privately under `$TMPDIR/voice-type/` so it is not silently lost.
+Text insertion uses IBus, restores the previous input engine, and rejects
+protected/password fields. It does not use clipboard pasting, simulated typing,
+`/dev/uinput`, or a privileged helper. Avoid changing focused applications during
+transcription when you do not want text delivered to the new focus.
 
-### `/dev/uinput` Access
+There is no TCP control listener or management socket. Wails handles application
+commands over the session bus; settings calls remain inside the app. The command
+set is a fixed whitelist, never shell code. A private OS-held engine lock prevents
+concurrent engines, including across separate session buses sharing a runtime
+directory. GNOME integration changes only Voice Type's owned shortcut entries.
 
-- **Purpose**: Emit virtual keyboard events for the finalized transcript.
-- **How it works**: The Go `uinput` library creates one persistent virtual
-  keyboard; voice-type sends events directly to `/dev/uinput`, not through
-  dotool.
-- **Scope**: Events go to whichever application has focus, including terminals,
-  native Wayland applications, and XWayland applications.
-- **Permission**: The process needs write access to `/dev/uinput`, normally via
-  membership in the `input` group.
+OpenAI and OpenRouter API keys are stored in the Linux Secret Service, one per
+provider. The active config and current recovery backups contain profile settings
+but not migrated API keys. Existing inline keys migrate after successful
+credential-store writes. Preserved damaged files and other older copies can still
+contain plaintext keys. Keys are masked in routine UI responses and exposed only
+by explicit Copy actions. Environment keys are not imported. Configuration writes
+are atomic and synced; revisions prevent stale UI writes. If no compatible
+credential store is available, cloud profiles fail explicitly instead of falling
+back to plaintext.
 
-### Network Access
+Diagnostic logs are bounded and exclude transcripts, audio, API keys and raw
+provider responses. Normal audio is held in memory. Failed transcription or
+rejected vocabulary echoes can retain WAV files in a private `voice-type`
+directory under the system temporary directory; remove these yourself when no
+longer needed. Uninstall preserves user data and retained audio.
 
-- **Purpose**: Upload WAV audio for speech-to-text transcription.
-- **Connection**: HTTPS to OpenAI or OpenRouter, using the selected provider's
-  API key. No automatic provider fallback sends audio to another service.
-- **Credentials**: `OPENAI_API_KEY` applies only to OpenAI. `OPENROUTER_API_KEY`
-  applies only to OpenRouter. A nonblank matching environment key replaces the
-  config's `api_key`. Keys are never used to infer the provider.
-- **No telemetry**: Voice-type does not collect usage analytics or send unrelated
-  data.
-
-### Filesystem Access
-
-- **Configuration**: The daemon reads `~/.voice-type-config.jsonc` and never
-  writes it. The installer creates or explicitly replaces the config with mode
-  `600`. Interactive credential entry disables terminal echo.
-- **Failed audio**: May write private WAV files under `$TMPDIR/voice-type/` after
-  transcription failures.
-- **Logs**: Status and error logs go to stderr and may include transcript
-  previews. Protect redirected stderr as speech content. Without a terminal,
-  request metrics also go to `~/.voice-type-logs.jsonl` with mode `600`.
-  Metrics contain provider/model IDs, attempts, timing, and status, but no keys,
-  audio, transcripts, vocabulary, or provider error bodies. They rotate at 5 MiB.
-
-## Security Model
-
-- **Localhost only**: The HTTP server binds to `127.0.0.1` and is not exposed on
-  the network. Requests whose `Host` header is not `127.0.0.1`, `localhost`, or
-  `::1` are rejected, so a web page cannot reach the daemon through DNS
-  rebinding.
-- **No authentication**: The API is designed for a single-user desktop and must
-  remain localhost-only.
-- **User control**: Recording starts and stops only from the user's hotkey/API
-  action, subject to the hard duration cap.
-- **Focused target**: Direct typing can insert text, activate shortcuts, or act
-  on commands in any application that gains focus during output.
-- **Clipboard borrowing**: Output pastes rather than types, so voice-type reads
-  the CLIPBOARD selection, replaces it with the transcript, sends Ctrl+Shift+V,
-  and writes the previous contents back. While that is in flight the previous
-  clipboard contents (which may be a password or other secret) are held in the
-  daemon's memory, and the transcript is briefly readable by any application
-  that can read the clipboard. PRIMARY is never touched. When the previous
-  contents cannot be restored faithfully, the clipboard is left alone and the
-  transcript is typed through `/dev/uinput` instead.
-- **Unicode input**: Non-ASCII text uses Linux `Ctrl+Shift+U` composition and
-  ends with Enter; behavior depends on the focused application's input-method
-  support.
-
-## What Voice Type Does Not Do
-
-- Does not record audio when no session is active.
-- Does not run Chrome or a browser speech-recognition pipeline.
-- Does not invoke dotool. It does invoke `wl-copy` and `wl-paste` for the
-  clipboard step described above.
-- Does not add desktop notifications or cache browser data.
-- Does not send telemetry or usage statistics to a remote collector. Request
-  metrics remain local.
+Release archives contain a native CGO application and require GTK4/WebKitGTK
+runtime libraries. The installer verifies SHA-256 checksums from the selected
+GitHub release, the archive layout, and the executable version before replacing
+an installation. Checksums provide integrity relative to the release; they are
+not an independent publisher signature. Upgrades use guarded shutdown and refuse
+to overwrite an engine that is still running.

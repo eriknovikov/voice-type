@@ -2,11 +2,9 @@ name: Release
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - v5/VERSION
-      - .github/workflows/release.yml
+    branches: [main]
+    paths: [VERSION, .github/workflows/release.yml]
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}
@@ -16,189 +14,149 @@ permissions:
   contents: read
 
 jobs:
-  check-version:
-    runs-on: ubuntu-latest
+  version:
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
-      should_release: ${{ steps.check.outputs.should_release }}
+      release: ${{ steps.version.outputs.release }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
-
-      - name: Read version from VERSION
-        id: version
+      - id: version
         run: |
-          VERSION=$(tr -d '\r\n' < v5/VERSION)
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
-            echo "Invalid VERSION: $VERSION" >&2
-            exit 1
-          fi
-          if (( ${VERSION%%.*} < 5 )); then
-            echo "Refusing to publish a pre-v5 release from the v5 workflow" >&2
-            exit 1
-          fi
+          VERSION=$(tr -d '\r\n' < VERSION)
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]
+          (( ${VERSION%%.*} >= 6 ))
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Version: $VERSION"
-
-      - name: Check if tag already exists
-        id: check
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
-            TAGGED_SHA=$(git rev-list -n 1 "v${VERSION}")
-            if [ "$TAGGED_SHA" = "$GITHUB_SHA" ]; then
-              echo "should_release=true" >> "$GITHUB_OUTPUT"
-              echo "Tag v${VERSION} already targets this commit; resuming the release"
-            else
-              echo "should_release=false" >> "$GITHUB_OUTPUT"
-              echo "Tag v${VERSION} already belongs to $TAGGED_SHA, skipping"
-            fi
+          if git rev-parse "v$VERSION" >/dev/null 2>&1 && [ "$(git rev-list -n 1 "v$VERSION")" != "$GITHUB_SHA" ]; then
+            echo 'release=false' >> "$GITHUB_OUTPUT"
           else
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
-            echo "Tag v${VERSION} is new, releasing"
+            echo 'release=true' >> "$GITHUB_OUTPUT"
           fi
 
-  validate:
-    needs: check-version
-    if: needs.check-version.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: v5
+  build:
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+            goarch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    # Keep the transcribe engine CPU-only so packaged artifacts do not change
+    # when a runner image happens to add Vulkan development files.
+    env:
+      VOICE_TYPE_VULKAN: "0"
     steps:
-      - name: Checkout
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-
-      - name: Setup Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Native dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake libgtk-4-dev libwebkitgtk-6.0-dev libx11-dev libxkbcommon-dev pkg-config ibus dbus-x11 xvfb gnome-settings-daemon-common shellcheck
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version-file: v5/go.mod
-
-      - name: Check formatting
+          go-version-file: go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: make check build
+      - name: Mock providers and isolated IBus
+        run: VOICE_TYPE_TEST_IBUS_DAEMON=/usr/bin/ibus-daemon go test -race ./...
+        env:
+          PKG_CONFIG_PATH: ${{ github.workspace }}/build/transcribe/pkgconfig
+      - name: Native application and tray
+        run: xvfb-run -a make native-check
+        env:
+          GDK_BACKEND: x11
+          # WebKit's bubblewrap sandbox cannot create a user namespace on the
+          # hosted runner; the packaged application keeps its normal sandbox.
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1"
+      - name: Install packaging tool
         run: |
-          UNFORMATTED=$(gofmt -l .)
-          if [ -n "$UNFORMATTED" ]; then
-            echo "Not gofmt'd:"
-            echo "$UNFORMATTED"
-            exit 1
-          fi
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Test
-        run: go test ./...
-
-      - name: Check installer scripts
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.46.3
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Build distribution packages
+        run: make packages
+      - name: Verify and package application
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          GOARCH: ${{ matrix.goarch }}
         run: |
-          sh -n install.sh
-          sh -n uninstall.sh
-          sh -n ../install.sh
-          sh -n ../uninstall.sh
-          shellcheck -s sh install.sh uninstall.sh ../install.sh ../uninstall.sh
+          test "$(build/voice-type --version)" = "$VERSION"
+          INFO=$(go version -m build/voice-type)
+          printf '%s\n' "$INFO" | grep -F "main.version=$VERSION"
+          printf '%s\n' "$INFO" | grep -F "GOARCH=$GOARCH"
+          printf '%s\n' "$INFO" | grep -F 'CGO_ENABLED=1'
+          printf '%s\n' "$INFO" | grep -F "vcs.revision=$GITHUB_SHA"
+          printf '%s\n' "$INFO" | grep -F 'vcs.modified=false'
+          mkdir -p "$RUNNER_TEMP/payload" "$RUNNER_TEMP/release"
+          cp build/voice-type build/THIRD-PARTY-LICENSES.md icon.png LICENSE "$RUNNER_TEMP/payload/"
+          tar -czf "$RUNNER_TEMP/release/voice-type-linux-$ARCH.tar.gz" -C "$RUNNER_TEMP/payload" LICENSE THIRD-PARTY-LICENSES.md icon.png voice-type
+          tar -tzf "$RUNNER_TEMP/release/voice-type-linux-$ARCH.tar.gz"
+      - name: Install packages in clean distributions
+        run: ./scripts/verify-packages.sh
+      - name: Collect release assets
+        run: cp build/packages/* "$RUNNER_TEMP/release/"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: voice-type-${{ matrix.arch }}
+          path: ${{ runner.temp }}/release/*
+          if-no-files-found: error
 
-  release:
-    needs: [check-version, validate]
-    if: needs.check-version.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
+  publish:
+    needs: [version, build]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
-    defaults:
-      run:
-        working-directory: v5
     steps:
-      - name: Checkout
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-
-      - name: Setup Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          go-version-file: v5/go.mod
-
-      # One job keeps the checked source, binaries, checksums, tag, and release
-      # on the same workflow SHA without transferring assets between runners.
-      - name: Build and verify release assets
-        env:
-          CGO_ENABLED: "0"
-          VERSION: ${{ needs.check-version.outputs.version }}
-        run: |
-          BUILD_ROOT="${RUNNER_TEMP}/voice-type-release"
-          mkdir -p "$BUILD_ROOT"
-
-          for SPEC in x64:amd64 arm64:arm64; do
-            ARCH=${SPEC%%:*}
-            GOARCH=${SPEC##*:}
-            DIR="voice-type-${ARCH}"
-
-            mkdir -p "$BUILD_ROOT/$DIR"
-            GOOS=linux GOARCH="$GOARCH" go build \
-              -ldflags="-s -w -X main.version=${VERSION}" \
-              -o "$BUILD_ROOT/$DIR/voice-type" ./cmd/voice-type
-            file "$BUILD_ROOT/$DIR/voice-type"
-
-            BUILD_INFO=$(go version -m "$BUILD_ROOT/$DIR/voice-type")
-            printf '%s\n' "$BUILD_INFO"
-            printf '%s\n' "$BUILD_INFO" | grep -F "main.version=${VERSION}"
-            printf '%s\n' "$BUILD_INFO" | grep -F "GOARCH=${GOARCH}"
-            printf '%s\n' "$BUILD_INFO" | grep -F "CGO_ENABLED=0"
-            printf '%s\n' "$BUILD_INFO" | grep -F "vcs.revision=${GITHUB_SHA}"
-            printf '%s\n' "$BUILD_INFO" | grep -F "vcs.modified=false"
-            if [ "$GOARCH" = "amd64" ]; then
-              test "$("$BUILD_ROOT/$DIR/voice-type" version)" = "$VERSION"
-            fi
-          done
-
-          for ARCH in x64 arm64; do
-            DIR="voice-type-${ARCH}"
-            ARCHIVE="voice-type-v5-linux-${ARCH}.tar.gz"
-            tar -czf "$ARCHIVE" -C "$BUILD_ROOT" "$DIR/"
-            tar -tzf "$ARCHIVE" | grep -qx "$DIR/voice-type"
-          done
-
-          printf '# Checksums for voice-type binaries\n' > checksums.txt
-          sha256sum voice-type-v5-linux-x64.tar.gz >> checksums.txt
-          sha256sum voice-type-v5-linux-arm64.tar.gz >> checksums.txt
-          sha256sum -c checksums.txt
-          test "$(grep -c voice-type-v5-linux checksums.txt)" -eq 2
-
+          pattern: voice-type-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/release
       - name: Publish verified assets
+        working-directory: ${{ runner.temp }}/release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.check-version.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          TAG="v${VERSION}"
+          test "$(find . -maxdepth 1 -name '*.tar.gz' | wc -l)" -eq 2
+          test "$(find . -maxdepth 1 -name '*.deb' | wc -l)" -eq 2
+          test "$(find . -maxdepth 1 -name '*.rpm' | wc -l)" -eq 2
+          test "$(find . -maxdepth 1 -name '*.pkg.tar.zst' | wc -l)" -eq 1
+          FILES=$(find . -maxdepth 1 -type f \
+            \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) \
+            -printf '%f\n' | sort)
+          printf '%s\n' "$FILES"
+          # shellcheck disable=SC2086
+          sha256sum $FILES > checksums.txt
+          sha256sum -c checksums.txt
+          TAG="v$VERSION"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            CREATE_FLAGS=(--target "$GITHUB_SHA" --generate-notes --title "$TAG" --draft)
-            if [[ "$VERSION" == *-* ]]; then
-              CREATE_FLAGS+=(--prerelease)
-            fi
-            gh release create "$TAG" "${CREATE_FLAGS[@]}"
+            FLAGS=(--target "$GITHUB_SHA" --generate-notes --title "$TAG" --draft)
+            if [[ "$VERSION" == *-* ]]; then FLAGS+=(--prerelease); fi
+            gh release create "$TAG" "${FLAGS[@]}"
           fi
-
           IS_DRAFT=$(gh release view "$TAG" --json isDraft --jq '.isDraft')
           if [ "$IS_DRAFT" = true ]; then
-            TARGET=$(gh release view "$TAG" --json targetCommitish --jq '.targetCommitish')
-            test "$TARGET" = "$GITHUB_SHA"
-
-            gh release upload "$TAG" \
-              voice-type-v5-linux-x64.tar.gz \
-              voice-type-v5-linux-arm64.tar.gz \
-              checksums.txt \
-              --clobber
+            test "$(gh release view "$TAG" --json targetCommitish --jq '.targetCommitish')" = "$GITHUB_SHA"
+            # shellcheck disable=SC2086
+            gh release upload "$TAG" $FILES checksums.txt --clobber
           fi
-
           ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name')
-          test "$(printf '%s\n' "$ASSETS" | wc -l)" -eq 3
-          for EXPECTED in \
-            voice-type-v5-linux-x64.tar.gz \
-            voice-type-v5-linux-arm64.tar.gz \
-            checksums.txt; do
-            printf '%s\n' "$ASSETS" | grep -qx "$EXPECTED"
+          test "$(printf '%s\n' "$ASSETS" | wc -l)" -eq $(($(printf '%s\n' "$FILES" | wc -l) + 1))
+          printf '%s\n' "$FILES" | while read -r NAME; do
+            printf '%s\n' "$ASSETS" | grep -qx "$NAME"
           done
-
+          printf '%s\n' "$ASSETS" | grep -qx checksums.txt
           if [ "$IS_DRAFT" = true ]; then
             if [[ "$VERSION" == *-* ]]; then
               gh release edit "$TAG" --draft=false --prerelease
@@ -206,7 +164,4 @@ jobs:
               gh release edit "$TAG" --draft=false --prerelease=false --latest
             fi
           fi
-
-          TAGGED_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" \
-            --jq '.object.sha')
-          test "$TAGGED_SHA" = "$GITHUB_SHA"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.sha')" = "$GITHUB_SHA"

@@ -1,0 +1,338 @@
+package voicetype
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"sync"
+	"time"
+
+	"github.com/jfreymuth/pulse"
+	"github.com/jfreymuth/pulse/proto"
+)
+
+// Recorder owns the PulseAudio connection. The client is created once at application
+// start (measured ~3 ms) and reused; only the record stream is per-session
+// (~13 ms setup, ~87 ms to the first sample on a cold device).
+//
+// Two locks on purpose: streamMu guards the stream lifecycle, bufMu guards the
+// sample buffer that the pulse library's own goroutine writes into. Sharing one
+// lock would make Start() block its own write callback.
+type Recorder struct {
+	client *pulse.Client
+
+	streamMu sync.Mutex
+	stream   *pulse.RecordStream
+
+	bufMu         sync.Mutex
+	samples       []int16
+	chunkSink     func([]int16)
+	sessionBuffer *sessionAudioBuffer
+	bufferFailure func(error)
+	sourceID      string
+	fellBack      bool
+	level         float64
+	meterOnly     bool
+	meterWindow   []int16
+	meterPosition int
+	meterCount    int
+	meterSum      float64
+	meterSquares  float64
+	meterAt       time.Time
+}
+
+type audioRecorder interface {
+	Start() error
+	Stop() ([]int16, error)
+	Close()
+}
+
+func NewRecorder() (*Recorder, error) {
+	client, err := pulse.NewClient(
+		pulse.ClientApplicationName("voice-type"),
+		pulse.ClientTimeout(time.Second),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("connect to PulseAudio: %w", err)
+	}
+	return &Recorder{client: client}, nil
+}
+
+func (r *Recorder) Close() {
+	r.streamMu.Lock()
+	if r.stream != nil {
+		r.stream.Stop()
+		r.stream.Close()
+		r.stream = nil
+	}
+	r.fellBack = false
+	r.streamMu.Unlock()
+	r.bufMu.Lock()
+	r.samples = nil
+	r.chunkSink = nil
+	r.sessionBuffer, r.bufferFailure = nil, nil
+	r.meterWindow = nil
+	r.bufMu.Unlock()
+
+	if r.client != nil {
+		r.client.Close()
+		r.client = nil
+	}
+}
+
+// Start opens a fresh 16 kHz mono stream and begins appending samples.
+func (r *Recorder) Start() error {
+	r.streamMu.Lock()
+	defer r.streamMu.Unlock()
+
+	if r.stream != nil {
+		return fmt.Errorf("already recording")
+	}
+	r.fellBack = false
+
+	r.bufMu.Lock()
+	r.samples = r.samples[:0]
+	r.level = 0
+	r.meterWindow = nil
+	r.meterPosition = 0
+	r.meterCount = 0
+	r.meterSum = 0
+	r.meterSquares = 0
+	r.meterAt = time.Time{}
+	r.bufMu.Unlock()
+
+	if r.client == nil {
+		client, err := pulse.NewClient(pulse.ClientApplicationName("voice-type"), pulse.ClientTimeout(time.Second))
+		if err != nil {
+			return fmt.Errorf("connect to audio server: %w", err)
+		}
+		r.client = client
+	}
+	var source *pulse.Source
+	var err error
+	if r.sourceID != "" {
+		source, err = r.client.SourceByID(r.sourceID)
+		if errors.Is(err, proto.ErrNoSuchEntity) {
+			if _, saveErr := persistMissingMicrophone(r.sourceID); saveErr != nil {
+				return fmt.Errorf("save system default microphone: %w", saveErr)
+			}
+			r.sourceID = ""
+			r.fellBack = true
+			source, err = r.client.DefaultSource()
+		}
+	} else {
+		source, err = r.client.DefaultSource()
+	}
+	if err != nil {
+		return fmt.Errorf("resolve default source: %w", err)
+	}
+
+	stream, err := r.client.NewRecord(
+		pulse.Int16Writer(r.acceptSamples),
+		pulse.RecordMono,
+		pulse.RecordSampleRate(wavSampleRate),
+		pulse.RecordLatency(0.02),
+		pulse.RecordMediaName("voice-type dictation"),
+		pulse.RecordSource(source),
+	)
+	if err != nil {
+		return fmt.Errorf("open record stream: %w", err)
+	}
+
+	r.stream = stream
+	stream.Start()
+	logf("AUDIO", "recording from %s (%s)", source.Name(), source.ID())
+	return nil
+}
+
+// Stop ends capture and returns everything recorded during the session.
+func (r *Recorder) Stop() ([]int16, error) {
+	r.streamMu.Lock()
+	stream := r.stream
+	r.stream = nil
+	r.streamMu.Unlock()
+
+	var streamErr error
+	if stream != nil {
+		stream.Stop()
+		streamErr = stream.Error()
+		stream.Close()
+	}
+
+	r.bufMu.Lock()
+	r.chunkSink = nil
+	defer r.bufMu.Unlock()
+	var out []int16
+	if r.sessionBuffer != nil {
+		out = r.sessionBuffer.freeze()
+		r.sessionBuffer, r.bufferFailure = nil, nil
+	} else {
+		// Transfer ownership instead of copying the full recording. Starting the
+		// next recording allocates a fresh slice, so this result cannot change.
+		out = r.samples
+	}
+	r.samples = nil
+	if streamErr != nil {
+		streamErr = fmt.Errorf("record stream: %w", streamErr)
+	}
+	return out, streamErr
+}
+
+type AudioSource struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func ListAudioSources() ([]AudioSource, error) {
+	r, err := NewRecorder()
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	sources, err := r.client.ListSources()
+	if err != nil {
+		return nil, err
+	}
+	out := []AudioSource{}
+	for _, source := range sources {
+		out = append(out, AudioSource{source.ID(), source.Name()})
+	}
+	return out, nil
+}
+func (r *Recorder) SetSource(id string) {
+	r.streamMu.Lock()
+	defer r.streamMu.Unlock()
+	r.sourceID = id
+}
+
+// SetChunkSink receives copied audio chunks outside the recorder's sample
+// buffer lock. The sink takes ownership of the slice it receives; the recorder
+// never reads or reuses that copy. The sink must return promptly; the full
+// recording is retained independently even when a streaming consumer cannot
+// keep up.
+// Cloud capture and upload share one session-owned buffer. A local stream
+// continues to use SetChunkSink and the recorder's existing full recording.
+func (r *Recorder) SetSessionBuffer(buffer *sessionAudioBuffer, failure func(error)) {
+	r.bufMu.Lock()
+	r.sessionBuffer, r.bufferFailure = buffer, failure
+	if buffer != nil {
+		r.samples = nil
+	}
+	r.bufMu.Unlock()
+}
+
+func (r *Recorder) SetChunkSink(sink func([]int16)) {
+	r.bufMu.Lock()
+	r.chunkSink = sink
+	r.bufMu.Unlock()
+}
+
+func (r *Recorder) sourceFellBack() bool {
+	r.streamMu.Lock()
+	defer r.streamMu.Unlock()
+	return r.fellBack
+}
+
+const microphoneFallbackNotice = "Microphone unavailable. Using System default."
+
+// A successful enumeration is necessary before deciding a device disappeared.
+func reconcileMicrophone(id string, sources []AudioSource) (bool, error) {
+	if id == "" {
+		return false, nil
+	}
+	for _, source := range sources {
+		if source.ID == id {
+			return false, nil
+		}
+	}
+	return persistMissingMicrophone(id)
+}
+
+func persistMissingMicrophone(id string) (bool, error) {
+	for range 3 {
+		settings, err := ReadSettings()
+		if err != nil {
+			return false, err
+		}
+		if settings.Microphone != id || id == "" {
+			return false, nil
+		}
+		fallback := ""
+		if _, err = SaveSettings(SettingsUpdate{Revision: settings.Revision, Microphone: &fallback}); err == nil {
+			return true, nil
+		}
+		latest, readErr := ReadSettings()
+		if readErr != nil || latest.Revision == settings.Revision {
+			return false, err
+		}
+	}
+	return false, errors.New("microphone settings changed repeatedly; refresh devices and try again")
+}
+
+// Level is a non-consuming 100 ms RMS reading. Audio arrives independently of
+// display ticks: no fresh packet is not the same thing as recorded silence.
+func (r *Recorder) Level() float64 {
+	r.bufMu.Lock()
+	defer r.bufMu.Unlock()
+	if time.Since(r.meterAt) > 200*time.Millisecond {
+		return 0
+	}
+	return r.level
+}
+
+// TakeLevel remains compatible with earlier management clients.
+func (r *Recorder) TakeLevel() float64 { return r.Level() }
+
+func (r *Recorder) acceptSamples(samples []int16) (int, error) {
+	r.bufMu.Lock()
+	if r.meterOnly {
+		if len(samples) == 0 {
+			r.bufMu.Unlock()
+			return 0, nil
+		}
+		if r.meterWindow == nil {
+			r.meterWindow = make([]int16, wavSampleRate/10)
+		}
+		for _, sample := range samples {
+			old := float64(r.meterWindow[r.meterPosition])
+			value := float64(sample)
+			r.meterSum += value - old
+			r.meterSquares += value*value - old*old
+			r.meterWindow[r.meterPosition] = sample
+			r.meterPosition = (r.meterPosition + 1) % len(r.meterWindow)
+			if r.meterCount < len(r.meterWindow) {
+				r.meterCount++
+			}
+		}
+		count := float64(r.meterCount)
+		mean := r.meterSum / count
+		// Remove DC offset so a biased microphone cannot look like continuous sound.
+		variance := math.Max(0, r.meterSquares/count-mean*mean)
+		r.level = math.Sqrt(variance) / 32768
+		r.meterAt = time.Now()
+		r.bufMu.Unlock()
+	} else {
+		if buffer := r.sessionBuffer; buffer != nil {
+			err := buffer.append(samples)
+			failure := r.bufferFailure
+			r.bufMu.Unlock()
+			if err != nil && failure != nil {
+				failure(err)
+			}
+			// The engine coordinates Stop; do not also ask Pulse to stop itself on
+			// another goroutine after an upload failure.
+			return len(samples), nil
+		}
+		r.samples = append(r.samples, samples...)
+		sink := r.chunkSink
+		var copyOfSamples []int16
+		if sink != nil && len(samples) > 0 {
+			copyOfSamples = append([]int16(nil), samples...)
+		}
+		r.bufMu.Unlock()
+		if sink != nil && copyOfSamples != nil {
+			sink(copyOfSamples)
+		}
+	}
+	return len(samples), nil
+}
