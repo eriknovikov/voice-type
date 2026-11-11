@@ -41,7 +41,7 @@ jobs:
           WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1"
       - name: Install packaging tool
         run: |
-          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.46.3
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Build distribution packages
         run: make packages
