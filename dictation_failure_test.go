@@ -23,6 +23,7 @@ func TestDictationFailureStaysVisibleUntilNextAttempt(t *testing.T) {
 			t.Setenv("XDG_STATE_HOME", t.TempDir())
 			t.Setenv("OPENAI_API_KEY", "")
 			t.Setenv("OPENROUTER_API_KEY", "")
+			useCredentialStore(t, &memoryCredentials{values: map[string]string{}})
 			config := `{"provider":"openai","api_key":"fixture"}`
 			if kind == "configuration_error" {
 				config = `{"provider":"openai"}`
