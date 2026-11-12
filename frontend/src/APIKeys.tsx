@@ -37,24 +37,28 @@ export function APIKeys({
             onError={onError}
           />
         ))}
-      </div>
-      <div className="settings-group">
-        <label htmlFor="credential-storage">Storage</label>
-        <Dropdown
-          id="credential-storage"
-          label="Credential storage"
-          value={storage}
-          options={[
-            { value: "keyring", label: "System keyring" },
-            { value: "file", label: "Local file" },
-          ]}
-          onChange={changeStorage}
-        />
+        <div className="setting-row api-key-storage">
+          <label className="setting-label" htmlFor="credential-storage">
+            Storage
+          </label>
+          <div className="setting-control">
+            <Dropdown
+              id="credential-storage"
+              label="Credential storage"
+              value={storage}
+              options={[
+                { value: "keyring", label: "System keyring" },
+                { value: "file", label: "Local file" },
+              ]}
+              onChange={changeStorage}
+            />
+          </div>
+        </div>
       </div>
       <p className="quiet section-note">
         {storage === "file"
-          ? "Saved keys are copied here; new keys are stored unencrypted, base64-encoded, in ~/.local/share/voice-type."
-          : "Saved keys are copied to the system keyring; a keyring failure falls back to a private local file."}
+          ? "Stored unencrypted in ~/.local/share/voice-type."
+          : "Stored in your system keyring."}
       </p>
     </section>
   );
