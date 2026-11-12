@@ -15,6 +15,7 @@ func TestParseCommands(t *testing.T) {
 		{[]string{"--toggle"}, CommandToggle}, {[]string{"--quit"}, CommandQuit},
 		{[]string{"--remove-shortcuts"}, CommandRemoveShortcuts},
 		{[]string{"--help"}, CommandHelp}, {[]string{"--version"}, CommandVersion},
+		{[]string{"doctor"}, CommandDoctor}, {[]string{"update"}, CommandUpdate},
 	} {
 		got, err := ParseCommand(test.args)
 		if err != nil || got != test.want {

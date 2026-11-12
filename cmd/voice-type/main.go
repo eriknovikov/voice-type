@@ -28,6 +28,9 @@ func main() {
 	if command == vt.CommandDoctor {
 		os.Exit(vt.RunDoctor(version, os.Stdout))
 	}
+	if command == vt.CommandUpdate {
+		os.Exit(vt.RunUpdate(version, os.Stdout, os.Stderr))
+	}
 	if command == vt.CommandRemoveShortcuts {
 		if err := vt.RemoveGNOMEShortcuts(); err != nil {
 			log.Fatal(err)

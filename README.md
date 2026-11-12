@@ -194,11 +194,17 @@ can also be run directly.
 | `voice-type --quit` | Quit through the same save and recording safeguards as the tray |
 | `voice-type --version` | Print the installed version |
 | `voice-type doctor` | Print audio, insertion, model and storage diagnostics |
+| `voice-type update` | Install the latest release, or report that it is up to date |
 
 Commands reach the existing Wails instance over session D-Bus. Forwarding is
 one-way: successful delivery does not mean transcription has finished. Commands
 are rejected during transcription rather than queued. Missing setup or recovered
 settings open settings instead of starting an automatic recording.
+
+`voice-type update` checks the latest stable release and runs the same installer
+used for a fresh install: it prefers the distribution package and falls back to
+the per-user archive when no package manager or `sudo` is available.
+Development builds refuse to update.
 
 GNOME uses Voice Type's own custom shortcut entry and preserves all other
 shortcuts. Escape disables a shortcut during capture. Other Wayland desktops
