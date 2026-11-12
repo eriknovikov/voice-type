@@ -17,3 +17,7 @@ Keep `version` in `cmd/voice-type`: releases stamp `-X main.version` from the ro
 
 Do not push or publish unless the user requests it.
 
+Internal, local-only documentation starts at `agents/general.md`. It is
+gitignored and may not exist in other checkouts; never link to it from
+user-facing files.
+

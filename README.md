@@ -250,8 +250,8 @@ and upload. Queue exhaustion, network failures and provider errors stop capture,
 clean up, and return to idle with a failure indication. There is no automatic
 cloud reconnect or fallback. Credentials, mode, hints and vocabulary are
 snapshotted at recording start; changes apply to the next recording.
-The protocol follows the [OpenAI Realtime transcription guide](https://developers.openai.com/api/docs/guides/realtime-transcription);
-[`deferred.md`](deferred.md) records the optional future live-transcription model.
+The protocol follows the [OpenAI Realtime transcription guide](https://developers.openai.com/api/docs/guides/realtime-transcription).
+An optional future live-transcription model is not implemented.
 
 Optional `timing` fields in completion logs record microphone startup separately
 from connection setup and startup-backlog drain, followed by Stop,
@@ -360,5 +360,5 @@ PKG_CONFIG_PATH="$PWD/build/transcribe/pkgconfig" \
 Set `VOICE_TYPE_TEST_LOCAL_MODEL=parakeet-tdt-v3` to check the multilingual
 batch model. This check requires nonempty batch output and, for Unified,
 append-only commits and exact final/committed agreement. It does not establish
-installed-app microphone or target-field acceptance. See `implementation-plan.md`
-and `progress.md` for the real-use acceptance work.
+installed-app microphone or target-field acceptance. Real-use acceptance is
+tracked separately.
