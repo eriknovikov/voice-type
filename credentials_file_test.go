@@ -60,7 +60,7 @@ func TestMinimalDoctorAndCommand(t *testing.T) {
 	if code := RunDoctor("test", &out); code != 0 {
 		t.Fatalf("doctor exit %d", code)
 	}
-	if !bytes.Contains(out.Bytes(), []byte("version: test")) || !bytes.Contains(out.Bytes(), []byte("credentials:")) {
+	if !bytes.Contains(out.Bytes(), []byte("Voice Type diagnostics vtest")) {
 		t.Fatalf("doctor output: %s", out.String())
 	}
 }

@@ -125,6 +125,11 @@ need an unlocked Secret Service keyring.
 The focused app must accept IBus input; check Logs for the reason. A single
 recording is capped at ten minutes.
 
+### How do I share diagnostics?
+Open **General → Diagnostics**, run the checks, then use **Copy report**. It
+includes versions, paths, device names and the last failure, but no keys,
+transcripts or audio. The same report is available with `voice-type doctor`.
+
 ## Build from source
 
 Install Go 1.26+, Node 22.12+ or Node 24, C and C++ compilers, CMake 3.16+,
@@ -188,6 +193,7 @@ can also be run directly.
 | `voice-type --toggle` | Toggle recording in the existing app, or start the app first |
 | `voice-type --quit` | Quit through the same save and recording safeguards as the tray |
 | `voice-type --version` | Print the installed version |
+| `voice-type doctor` | Print audio, insertion, model and storage diagnostics |
 
 Commands reach the existing Wails instance over session D-Bus. Forwarding is
 one-way: successful delivery does not mean transcription has finished. Commands

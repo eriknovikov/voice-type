@@ -395,6 +395,16 @@ export function FAQ() {
             </p>
           </details>
           <details className="faq-item">
+            <summary>How do I share diagnostics?</summary>
+            <p>
+              Open <strong>General → Diagnostics</strong>, run the checks, then
+              use <strong>Copy report</strong>. It includes versions, paths,
+              device names and the last failure, but no keys, transcripts or
+              audio. The same report is available with{" "}
+              <code>voice-type doctor</code>.
+            </p>
+          </details>
+          <details className="faq-item">
             <summary>Where are the logs?</summary>
             <p>
               Open <strong>Logs</strong> in the app or read{" "}
