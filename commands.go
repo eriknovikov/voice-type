@@ -17,8 +17,9 @@ const (
 	CommandRemoveShortcuts Command = "remove-shortcuts"
 	CommandHelp            Command = "help"
 	CommandVersion         Command = "version"
+	CommandDoctor          Command = "doctor"
 )
-const CommandUsage = "usage: voice-type [--background|--toggle|--quit|--version|--help]"
+const CommandUsage = "usage: voice-type [--background|--toggle|--quit|--version|--help] | voice-type doctor"
 
 func ParseCommand(args []string) (Command, error) {
 	if len(args) == 0 {
@@ -38,6 +39,8 @@ func ParseCommand(args []string) (Command, error) {
 			return CommandRemoveShortcuts, nil
 		case "--help", "-h":
 			return CommandHelp, nil
+		case "doctor":
+			return CommandDoctor, nil
 		}
 	}
 	return "", errors.New("unknown or conflicting application commands")

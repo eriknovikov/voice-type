@@ -85,8 +85,10 @@ uploads, and has no cloud fallback.
 Create one at
 [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
 (needs a funded account), or at [openrouter.ai/keys](https://openrouter.ai/keys)
-(needs credits). One key per provider, shared by its profiles, stays in the
-system keyring and is masked.
+(needs credits). One key per provider, shared by its profiles, is masked in the
+UI and stored in the system keyring. **API Keys → Storage** can switch to a
+local base64-encoded file under `$XDG_DATA_HOME/voice-type`, and a keyring write
+failure falls back there automatically.
 
 ### Which local model should I use?
 **Parakeet Unified English**: English only, about 731 MB download, about 1.1 GiB

@@ -91,6 +91,12 @@ func (b *Bridge) SaveAPIKey(provider, key string) (Settings, error) {
 	b.engine.RefreshSettings()
 	return ReadSettings()
 }
+func (b *Bridge) SetCredentialStorage(mode string) (Settings, error) {
+	if err := setCredentialStorage(mode); err != nil {
+		return Settings{}, err
+	}
+	return ReadSettings()
+}
 func (b *Bridge) DeleteAPIKey(provider string) (Settings, error) {
 	if err := DeleteAPIKey(provider); err != nil {
 		return Settings{}, err

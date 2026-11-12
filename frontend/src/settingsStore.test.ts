@@ -9,6 +9,7 @@ const initial: Settings = {
   vocabulary: [{ name: "general", terms: [] }],
   workspace: "",
   api_keys: {},
+  credential_storage: "keyring",
 };
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
