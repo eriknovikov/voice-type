@@ -126,6 +126,7 @@ jobs:
         working-directory: ${{ runner.temp }}/release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           test "$(find . -maxdepth 1 -name '*.tar.gz' | wc -l)" -eq 2
