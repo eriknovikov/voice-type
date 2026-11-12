@@ -95,7 +95,7 @@ func Run(version string, command Command) error {
 				return
 			}
 			command, err := ParseCommand(data.Args[1:])
-			if err == nil && command != CommandRemoveShortcuts && command != CommandHelp && command != CommandVersion && command != CommandDoctor {
+			if err == nil && command != CommandRemoveShortcuts && command != CommandHelp && command != CommandVersion && command != CommandDoctor && command != CommandUpdate {
 				router.submit(command)
 			}
 		}},
