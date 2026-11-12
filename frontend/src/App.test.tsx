@@ -110,6 +110,7 @@ const base: Settings = {
     },
   ],
   active_profile: "personal",
+  credential_storage: "keyring",
   api_keys: {
     openai: {
       masked_key: "sk-p••••1234",
