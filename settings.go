@@ -15,14 +15,15 @@ import (
 // Settings contains masked profile and provider-key metadata. Full credentials
 // require an explicit copy action and never travel with routine settings reads.
 type Settings struct {
-	Revision      string                   `json:"revision"`
-	Microphone    string                   `json:"microphone"`
-	Vocabulary    []VocabularyList         `json:"vocabulary"`
-	Workspace     string                   `json:"workspace"`
-	Profiles      []ProfileSummary         `json:"profiles"`
-	ActiveProfile string                   `json:"active_profile"`
-	APIKeys       map[string]APIKeySummary `json:"api_keys"`
-	Notice        string                   `json:"notice"`
+	Revision          string                   `json:"revision"`
+	Microphone        string                   `json:"microphone"`
+	Vocabulary        []VocabularyList         `json:"vocabulary"`
+	Workspace         string                   `json:"workspace"`
+	Profiles          []ProfileSummary         `json:"profiles"`
+	ActiveProfile     string                   `json:"active_profile"`
+	APIKeys           map[string]APIKeySummary `json:"api_keys"`
+	CredentialStorage string                   `json:"credential_storage"`
+	Notice            string                   `json:"notice"`
 }
 type ProfileSummary struct {
 	ID                   string        `json:"id"`
@@ -370,7 +371,7 @@ func readSettings() (Settings, error) {
 	if err != nil {
 		return Settings{}, err
 	}
-	out := Settings{Revision: configRevision(data), Microphone: cfg.Microphone, Workspace: workspaceLoad(), Vocabulary: []VocabularyList{}, Profiles: []ProfileSummary{}, ActiveProfile: cfg.ActiveProfile, APIKeys: providerKeySummaries(), Notice: ConfigNotice()}
+	out := Settings{Revision: configRevision(data), Microphone: cfg.Microphone, Workspace: workspaceLoad(), Vocabulary: []VocabularyList{}, Profiles: []ProfileSummary{}, ActiveProfile: cfg.ActiveProfile, APIKeys: providerKeySummaries(), CredentialStorage: currentCredentialStorage(), Notice: ConfigNotice()}
 	for _, list := range cfg.Vocabulary {
 		out.Vocabulary = append(out.Vocabulary, VocabularyList{Name: list.Name, Terms: cleanTerms(list.Terms)})
 	}

@@ -33,7 +33,7 @@ func (systemCredentialStore) Delete(provider string) error {
 
 var (
 	credentialsMu  sync.Mutex
-	providerKeys   credentialStore = systemCredentialStore{}
+	providerKeys   credentialStore = preferredCredentialStore{}
 	cloudProviders                 = []string{providerOpenAI, providerOpenRouter}
 )
 

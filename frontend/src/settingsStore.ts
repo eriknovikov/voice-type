@@ -139,7 +139,11 @@ export class SettingsStore {
   mutateAPIKeys = (operation: () => Promise<Settings>) =>
     this.enqueue(async () => {
       const result = await operation();
-      if (this.saved) this.saved = { ...this.saved, api_keys: result.api_keys };
+      if (this.saved) this.saved = {
+        ...this.saved,
+        api_keys: result.api_keys,
+        credential_storage: result.credential_storage,
+      };
       this.publish();
     });
   dispose = () => clearTimeout(this.timer);

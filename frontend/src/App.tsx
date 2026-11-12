@@ -550,6 +550,7 @@ export function App() {
             {tab === "api-keys" && (
               <APIKeys
                 keys={settings.api_keys}
+                storage={settings.credential_storage}
                 busy={busy}
                 mutate={store.mutateAPIKeys}
                 onError={setError}
