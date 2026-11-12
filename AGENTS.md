@@ -22,4 +22,5 @@ kept out of git through the repository-local exclude file configured as
 `core.excludesFile` (for example `.git/info/agents-exclude`), not `.gitignore`,
 so codebase-memory-mcp and OpenCode file discovery still index and show it; it
 may not exist in other checkouts, so never link to it from user-facing files.
+Set it up with `printf 'agents/\n' > .git/info/agents-exclude && git config core.excludesFile "$PWD/.git/info/agents-exclude"`.
 
