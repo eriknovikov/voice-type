@@ -692,7 +692,8 @@ header {
 .api-key-row {
   padding: 16px;
 }
-.api-key-row + .api-key-row {
+.api-key-row + .api-key-row,
+.api-key-row + .setting-row {
   border-top: 1px solid var(--line);
 }
 .api-key-heading,
