@@ -2,14 +2,6 @@ node_modules
 dist
 build/*
 !build/config.yml
-bun.lock
-TODO.md
-releases
-.cursor
 .env
 .env.*
-/benchmark*.wav
-tools
-/assets/
-/memories/
 /agents/
