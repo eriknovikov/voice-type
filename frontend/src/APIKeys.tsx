@@ -1,21 +1,29 @@
 import { Check, Copy, Eye, EyeOff, KeyRound, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, type APIKeySummary, type Settings } from "./api";
+import { Dropdown } from "./Dropdown";
 import { providerName } from "./ProfileEditor";
 import { ConfirmDialog } from "./ui";
 
 const providers = ["openai", "openrouter"] as const;
 export function APIKeys({
   keys,
+  storage,
   busy,
   mutate,
   onError,
 }: {
   keys: Record<string, APIKeySummary>;
+  storage: string;
   busy: boolean;
   mutate: (operation: () => Promise<Settings>) => Promise<void>;
   onError: (message: string) => void;
 }) {
+  const changeStorage = (mode: string) => {
+    void mutate(() => api.setCredentialStorage(mode)).catch((cause) =>
+      onError(cause instanceof Error ? cause.message : String(cause)),
+    );
+  };
   return (
     <section className="settings-section">
       <div className="settings-group api-key-list">
@@ -30,7 +38,24 @@ export function APIKeys({
           />
         ))}
       </div>
-      <p className="quiet section-note">Stored in your system keyring.</p>
+      <div className="settings-group">
+        <label htmlFor="credential-storage">Storage</label>
+        <Dropdown
+          id="credential-storage"
+          label="Credential storage"
+          value={storage}
+          options={[
+            { value: "keyring", label: "System keyring" },
+            { value: "file", label: "Local file" },
+          ]}
+          onChange={changeStorage}
+        />
+      </div>
+      <p className="quiet section-note">
+        {storage === "file"
+          ? "Saved keys are copied here; new keys are stored unencrypted, base64-encoded, in ~/.local/share/voice-type."
+          : "Saved keys are copied to the system keyring; a keyring failure falls back to a private local file."}
+      </p>
     </section>
   );
 }

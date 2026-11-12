@@ -26,6 +26,7 @@ export interface Settings {
   vocabulary: VocabularyList[];
   workspace: string;
   api_keys: Record<string, APIKeySummary>;
+  credential_storage: string;
   notice?: string;
 }
 export interface SettingsUpdate {
@@ -155,6 +156,8 @@ export const api = {
     call<Settings>("SaveAPIKey", provider, key),
   deleteAPIKey: (provider: string) =>
     call<Settings>("DeleteAPIKey", provider),
+  setCredentialStorage: (mode: string) =>
+    call<Settings>("SetCredentialStorage", mode),
   copyAPIKey: (provider: string) =>
     call<void>("CopyAPIKey", provider),
   workspace: (name: string) => call<void>("SelectWorkspace", name),
