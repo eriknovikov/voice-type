@@ -92,6 +92,16 @@ export interface AudioSource {
   id: string;
   name: string;
 }
+export interface DiagnosticCheck {
+  label: string;
+  status: "ok" | "warn" | "fail" | "info";
+  detail: string;
+}
+export interface DiagnosticsReport {
+  version: string;
+  generated_at: string;
+  checks: DiagnosticCheck[];
+}
 export interface LogRecord {
   timestamp?: string;
   event: string;
@@ -160,6 +170,8 @@ export const api = {
     call<Settings>("SetCredentialStorage", mode),
   copyAPIKey: (provider: string) =>
     call<void>("CopyAPIKey", provider),
+  diagnostics: () => call<DiagnosticsReport>("Diagnostics"),
+  copyDiagnostics: () => call<void>("CopyDiagnostics"),
   workspace: (name: string) => call<void>("SelectWorkspace", name),
   status: () => call<Status>("Status"),
   microphones: () => call<AudioSource[]>("Microphones"),

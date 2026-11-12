@@ -41,6 +41,7 @@ import { SettingsStore } from "./settingsStore";
 import { LocalModels } from "./LocalModels";
 import { APIKeys } from "./APIKeys";
 import { FAQ } from "./FAQ";
+import { Diagnostics } from "./Diagnostics";
 
 type Tab =
   | "settings"
@@ -104,6 +105,7 @@ export function App() {
     profile: ProfileSummary | null;
   } | null>(null);
   const [dismissedNotice, setDismissedNotice] = useState("");
+  const [diagnosticsRequest, setDiagnosticsRequest] = useState(0);
   const prefsTail = useRef<Promise<unknown>>(Promise.resolve());
   const profileGuard = useRef<(() => Promise<boolean>) | null>(null);
   const windowActionVersion = useRef(0);
@@ -448,19 +450,30 @@ export function App() {
         {visibleError && (
           <div className="alert error" role="alert">
             <span>{visibleError}</span>
-            {info?.preferences_error && !error && !saveError ? (
-              <button onClick={() => void run(() => savePreferences({}))}>
-                Retry
-              </button>
-            ) : error ? (
+            <span className="alert-actions">
               <button
-                className="icon-button"
-                aria-label="Dismiss error"
-                onClick={() => setError("")}
+                className="text-button"
+                onClick={() => {
+                  setTab("settings");
+                  setDiagnosticsRequest((value) => value + 1);
+                }}
               >
-                <X size={15} aria-hidden="true" />
+                Diagnostics
               </button>
-            ) : null}
+              {info?.preferences_error && !error && !saveError ? (
+                <button onClick={() => void run(() => savePreferences({}))}>
+                  Retry
+                </button>
+              ) : error ? (
+                <button
+                  className="icon-button"
+                  aria-label="Dismiss error"
+                  onClick={() => setError("")}
+                >
+                  <X size={15} aria-hidden="true" />
+                </button>
+              ) : null}
+            </span>
           </div>
         )}
         {notice && notice !== dismissedNotice && (
@@ -533,6 +546,10 @@ export function App() {
                     )}
                   </section>
                 )}
+                <Diagnostics
+                  onError={setError}
+                  autoRun={diagnosticsRequest}
+                />
               </>
             )}
             {tab === "local-models" && (

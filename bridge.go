@@ -121,6 +121,22 @@ func (b *Bridge) CopyAPIKey(provider string) error {
 	}
 	return nil
 }
+
+// Diagnostics returns the same snapshot as `voice-type doctor` for General.
+func (b *Bridge) Diagnostics() DiagnosticsReport { return runDiagnostics(b.version) }
+
+// CopyDiagnostics puts the plain-text report on the clipboard.
+func (b *Bridge) CopyDiagnostics() error {
+	report := runDiagnostics(b.version)
+	copyText := b.copyText
+	if copyText == nil {
+		copyText = b.app.Clipboard.SetText
+	}
+	if !copyText(report.Text()) {
+		return errors.New("could not copy the diagnostics report")
+	}
+	return nil
+}
 func (b *Bridge) Status() Status                      { return b.engine.Status() }
 func (b *Bridge) Microphones() ([]AudioSource, error) { return b.engine.Microphones() }
 func (b *Bridge) LocalModels() ([]LocalModel, error)  { return b.engine.LocalModels() }
