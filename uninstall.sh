@@ -1,9 +1,10 @@
 #!/bin/sh
-# One command removes Voice Type: the distribution package, the per-user
-# installation, the desktop integration (launcher, icon, docs, autostart entry
-# and the GNOME shortcut), the keyring entries it owns and, unless --keep-data
-# is given, every file the application wrote (settings, vocabulary, backups,
-# logs, credential fallback, local models and retained audio).
+# One command removes Voice Type: the system package, the desktop integration
+# (launcher, icon, docs, autostart entry and the GNOME shortcut), the keyring
+# entries it owns and, unless --keep-data is given, every file the application
+# wrote (settings, vocabulary, backups, logs, credential fallback, local models
+# and retained audio). Copies left by an older per-user installation are
+# removed as well, so no second Voice Type can survive the uninstall.
 #
 # Safe to pipe into a shell, which is how the README documents it:
 #
@@ -13,6 +14,8 @@
 set -eu
 umask 022
 
+# Legacy per-user location used by earlier releases; only ever removed, never
+# installed to.
 BIN_DIR=${VOICE_TYPE_BIN_DIR:-"$HOME/.local/bin"}
 DATA_DIR=${XDG_DATA_HOME:-"$HOME/.local/share"}
 CONFIG_DIR=${XDG_CONFIG_HOME:-"$HOME/.config"}
@@ -32,7 +35,7 @@ APP_CONFIG_DIR="$CONFIG_DIR/voice-type"
 CONFIG_FILE="$HOME/.voice-type-config.jsonc"
 LOG_FILE="$HOME/.voice-type-logs.jsonl"
 DIAGNOSTICS_DIR="${TMPDIR:-/tmp}/voice-type"
-# Installer tests point this at a fixture instead of the host's /usr/bin.
+# Installer tests point these at fixtures instead of the host paths.
 INSTALLED_BIN=${VOICE_TYPE_INSTALLED_BIN:-/usr/bin/voice-type}
 # Releases before 6 installed to /usr/local and are not owned by any package.
 LEGACY_SYSTEM_BIN=${VOICE_TYPE_LEGACY_BIN:-/usr/local/bin/voice-type}
@@ -130,7 +133,7 @@ remove_files() {
 # 1. Quit the application and drop the desktop integration state it owns. This
 #    has to happen while the binary still exists: the package may be next.
 BINARY=
-for candidate in "$BIN_DIR/voice-type" "$INSTALLED_BIN"; do
+for candidate in "$INSTALLED_BIN" "$BIN_DIR/voice-type"; do
     if [ -x "$candidate" ]; then
         BINARY=$candidate
         break
@@ -144,6 +147,7 @@ voice_type_running() {
     for proc in /proc/[0-9]*/exe; do
         exe=$(readlink "$proc" 2>/dev/null || true)
         case "$exe" in
+            "$INSTALLED_BIN"|"$INSTALLED_BIN (deleted)"|\
             "$BIN_DIR/voice-type"|"$BIN_DIR/voice-type-app"|"$BIN_DIR/voice-type (deleted)"|"$BIN_DIR/voice-type-app (deleted)"|\
             "$LEGACY_SYSTEM_BIN"|"$LEGACY_SYSTEM_BIN (deleted)")
                 return 0 ;;
@@ -178,8 +182,8 @@ if PACKAGE=$(package_kind); then
     fi
 fi
 
-# 3. Remove the per-user installation and the desktop integration. The legacy
-#    names predate the current application ID.
+# 3. Remove legacy per-user copies and the desktop integration. Those names
+#    predate the current application ID.
 remove_files "$BIN_DIR/voice-type" "$BIN_DIR/voice-type-app" \
     "$DESKTOP_FILE" "$LEGACY_DESKTOP_FILE" "$ICON_FILE" "$LEGACY_ICON_FILE" \
     "$SCALABLE_ICON" "$AUTOSTART_FILE"

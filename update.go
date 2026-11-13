@@ -203,24 +203,16 @@ func numericVersion(version string) ([3]int, bool) {
 	return parsed, true
 }
 
-// quitRunningVoiceType asks an installed instance to shut down before the
-// package is replaced. A missing instance is not an error.
+// quitRunningVoiceType asks the installed instance to shut down before the
+// package is replaced. A missing instance is not an error. Only the system-wide
+// path is considered: the application never installs per user.
 func quitRunningVoiceType() {
-	candidates := []string{"/usr/bin/voice-type"}
-	if home, err := os.UserHomeDir(); err == nil {
-		candidates = append(candidates, filepath.Join(home, ".local", "bin", "voice-type"))
-	}
-	if found, err := exec.LookPath("voice-type"); err == nil {
-		candidates = append([]string{found}, candidates...)
-	}
-	for _, candidate := range candidates {
-		if _, err := os.Stat(candidate); err != nil {
-			continue
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		command := exec.CommandContext(ctx, candidate, "--quit")
-		_ = command.Run()
-		cancel()
+	const installed = "/usr/bin/voice-type"
+	if _, err := os.Stat(installed); err != nil {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, installed, "--quit")
+	_ = command.Run()
 }

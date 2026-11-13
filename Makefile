@@ -67,7 +67,7 @@ native-check: build
 	python3 scripts/smoke.py
 
 install:
-	./install.sh --local
+	./install.sh
 
 clean:
 	@if [ -d build ]; then find build -mindepth 1 -maxdepth 1 ! -name config.yml -exec rm -rf {} +; fi

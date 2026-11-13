@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"golang.org/x/sys/unix"
 )
 
 func installerFixture(t *testing.T) (string, string) {
@@ -100,75 +98,136 @@ func seedUninstallData(t *testing.T) []string {
 	return paths
 }
 
-func TestInstallerCleanUpgradeThenUninstallRemovesEverything(t *testing.T) {
-	source, bin := installerFixture(t)
-	calls := filepath.Join(t.TempDir(), "calls")
-	t.Setenv("TEST_CALLS", calls)
-	dataPaths := seedUninstallData(t)
-	for iteration := range 2 {
-		if iteration == 1 {
-			if err := os.WriteFile(filepath.Join(bin, "voice-type-app"), []byte("old-companion"), 0755); err != nil {
-				t.Fatal(err)
-			}
-			autostart := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "autostart/voice-type.desktop")
-			if err := os.MkdirAll(filepath.Dir(autostart), 0755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(autostart, []byte("old-executable"), 0644); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if output, err := runInstaller(t, source, "--local"); err != nil {
-			t.Fatalf("install: %v %s", err, output)
-		}
-		executable := filepath.Join(bin, "voice-type")
-		escapedExecutable := strings.ReplaceAll(executable, "$", `\$`)
-		if info, err := os.Stat(executable); err != nil || info.Mode().Perm() != 0755 {
-			t.Fatal("missing executable", err)
-		}
-		entry, err := os.ReadFile(filepath.Join(os.Getenv("XDG_DATA_HOME"), "applications/io.github.eriknovikov.voice-type.desktop"))
-		if err != nil || !strings.Contains(string(entry), `Exec="`+escapedExecutable+`"`) {
-			t.Fatalf("launcher: %s %v", entry, err)
-		}
-		if _, err := os.Stat(filepath.Join(bin, "voice-type-app")); !os.IsNotExist(err) {
-			t.Fatal("old executable survived")
-		}
-		for _, license := range []string{"LICENSE", "THIRD-PARTY-LICENSES.md"} {
-			if _, err := os.Stat(filepath.Join(os.Getenv("XDG_DATA_HOME"), "doc/voice-type", license)); err != nil {
-				t.Fatalf("installed license %s is missing: %v", license, err)
-			}
-		}
-		if iteration == 1 {
-			entry, err := os.ReadFile(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "autostart/voice-type.desktop"))
-			if err != nil || !strings.Contains(string(entry), `Exec="`+escapedExecutable+`" --background`) {
-				t.Fatalf("autostart: %s %v", entry, err)
-			}
-		}
-	}
-	if output, err := runUninstaller(t, source); err != nil {
-		t.Fatalf("uninstall: %v %s", err, output)
-	}
-	for _, path := range []string{
+func seedLegacyInstall(t *testing.T, source string) {
+	t.Helper()
+	bin := os.Getenv("VOICE_TYPE_BIN_DIR")
+	data := os.Getenv("XDG_DATA_HOME")
+	files := []string{
 		filepath.Join(bin, "voice-type"),
 		filepath.Join(bin, "voice-type-app"),
-		filepath.Join(os.Getenv("XDG_DATA_HOME"), "applications/io.github.eriknovikov.voice-type.desktop"),
-		filepath.Join(os.Getenv("XDG_DATA_HOME"), "icons/hicolor/512x512/apps/io.github.eriknovikov.voice-type.png"),
-		filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "autostart/voice-type.desktop"),
-	} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("installation file remained: %s %v", path, err)
+		filepath.Join(data, "applications/io.github.eriknovikov.voice-type.desktop"),
+		filepath.Join(data, "applications/voice-type.desktop"),
+		filepath.Join(data, "icons/hicolor/512x512/apps/io.github.eriknovikov.voice-type.png"),
+		filepath.Join(data, "doc/voice-type/LICENSE"),
+	}
+	for _, path := range files {
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("legacy"), 0755); err != nil {
+			t.Fatal(err)
 		}
 	}
-	for _, directory := range []string{
-		filepath.Join(os.Getenv("XDG_DATA_HOME"), "doc/voice-type"),
-		filepath.Join(os.Getenv("XDG_DATA_HOME"), "voice-type"),
-		filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "voice-type"),
-		filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "voice-type"),
-		filepath.Join(os.Getenv("XDG_STATE_HOME"), "voice-type"),
-		filepath.Join(os.Getenv("TMPDIR"), "voice-type"),
-	} {
-		if _, err := os.Stat(directory); !os.IsNotExist(err) {
-			t.Fatalf("application directory remained: %s %v", directory, err)
+	legacySystem := os.Getenv("VOICE_TYPE_LEGACY_BIN")
+	if err := os.MkdirAll(filepath.Dir(legacySystem), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacySystem, []byte("legacy"), 0755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func legacyInstallPaths() []string {
+	data := os.Getenv("XDG_DATA_HOME")
+	return []string{
+		filepath.Join(os.Getenv("VOICE_TYPE_BIN_DIR"), "voice-type"),
+		filepath.Join(os.Getenv("VOICE_TYPE_BIN_DIR"), "voice-type-app"),
+		os.Getenv("VOICE_TYPE_LEGACY_BIN"),
+		filepath.Join(data, "applications/io.github.eriknovikov.voice-type.desktop"),
+		filepath.Join(data, "applications/voice-type.desktop"),
+		filepath.Join(data, "icons/hicolor/512x512/apps/io.github.eriknovikov.voice-type.png"),
+		filepath.Join(data, "doc/voice-type"),
+	}
+}
+
+func TestInstallerRemovesLegacyInstallation(t *testing.T) {
+	source, _, _ := packageFixture(t, false)
+	seedLegacyInstall(t, source)
+	output, err := runInstaller(t, source, "--version", "v6.0.0")
+	if err != nil {
+		t.Fatalf("install: %v %s", err, output)
+	}
+	for _, path := range legacyInstallPaths() {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("legacy installation remained: %s %v", path, err)
+		}
+	}
+	if !strings.Contains(output, "system-wide") {
+		t.Fatalf("missing system-wide result: %s", output)
+	}
+}
+
+func TestInstallerRejectsPerUserModes(t *testing.T) {
+	source, _ := installerFixture(t)
+	for _, mode := range []string{"--user", "--local"} {
+		output, err := runInstaller(t, source, mode)
+		if err == nil {
+			t.Fatalf("%s accepted: %s", mode, output)
+		}
+		if !strings.Contains(output, "system-wide only") {
+			t.Fatalf("missing system-wide refusal for %s: %s", mode, output)
+		}
+	}
+}
+
+func TestInstallerRequiresRootOrSudo(t *testing.T) {
+	source, _, _ := packageFixture(t, false)
+	args := os.Getenv("TEST_PACKAGE_ARGS")
+	writeInstallerTool(t, source, "id", "#!/bin/sh\necho 1000\n")
+	writeInstallerTool(t, source, "uname", "#!/bin/sh\nexec /usr/bin/uname \"$@\"\n")
+	os.Remove(filepath.Join(source, "tools", "sudo"))
+	t.Setenv("PATH", filepath.Join(source, "tools"))
+	output, err := runInstaller(t, source, "--version", "v6.0.0")
+	if err == nil {
+		t.Fatalf("install without root accepted: %s", output)
+	}
+	if !strings.Contains(output, "requires root or sudo") {
+		t.Fatalf("missing root requirement: %s", output)
+	}
+	if recorded, readErr := os.ReadFile(args); readErr == nil && strings.Contains(string(recorded), "install -y") {
+		t.Fatalf("package manager ran without root: %s", recorded)
+	}
+}
+
+func TestInstallerRefusesShutdownRequest(t *testing.T) {
+	source, _, _ := packageFixture(t, false)
+	t.Setenv("TEST_REFUSE_QUIT", "1")
+	output, err := runInstaller(t, source, "--version", "v6.0.0")
+	if err == nil {
+		t.Fatalf("refused shutdown accepted: %s", output)
+	}
+	if !strings.Contains(output, "Could not request shutdown") {
+		t.Fatalf("missing shutdown refusal: %s", output)
+	}
+	if recorded, readErr := os.ReadFile(os.Getenv("TEST_PACKAGE_ARGS")); readErr == nil && strings.Contains(string(recorded), "install -y") {
+		t.Fatalf("package manager ran while the application was running: %s", recorded)
+	}
+}
+
+func TestInstallerRejectsLegacyUninstallFlag(t *testing.T) {
+	source, _ := installerFixture(t)
+	output, err := runInstaller(t, source, "--uninstall")
+	if err == nil {
+		t.Fatalf("legacy uninstall flag accepted: %s", output)
+	}
+	if !strings.Contains(output, "Usage: install.sh") {
+		t.Fatalf("missing usage for rejected flag: %s", output)
+	}
+}
+
+func TestUninstallerRemovesInstallationAndData(t *testing.T) {
+	source, _, _ := packageFixture(t, false)
+	calls := filepath.Join(t.TempDir(), "calls")
+	t.Setenv("TEST_CALLS", calls)
+	seedLegacyInstall(t, source)
+	dataPaths := seedUninstallData(t)
+	output, err := runUninstaller(t, source)
+	if err != nil {
+		t.Fatalf("uninstall: %v %s", err, output)
+	}
+	for _, path := range legacyInstallPaths() {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("installation file remained: %s %v", path, err)
 		}
 	}
 	for _, path := range dataPaths {
@@ -188,20 +247,15 @@ func TestInstallerCleanUpgradeThenUninstallRemovesEverything(t *testing.T) {
 }
 
 func TestUninstallerKeepsDataOnRequest(t *testing.T) {
-	source, bin := installerFixture(t)
+	source, _, _ := packageFixture(t, false)
+	seedLegacyInstall(t, source)
 	dataPaths := seedUninstallData(t)
-	if output, err := runInstaller(t, source, "--local"); err != nil {
-		t.Fatalf("install: %v %s", err, output)
-	}
 	if output, err := runUninstaller(t, source, "--keep-data"); err != nil {
 		t.Fatalf("uninstall: %v %s", err, output)
 	}
-	if _, err := os.Stat(filepath.Join(bin, "voice-type")); !os.IsNotExist(err) {
-		t.Fatal("binary remained")
-	}
-	for _, license := range []string{"LICENSE", "THIRD-PARTY-LICENSES.md"} {
-		if _, err := os.Stat(filepath.Join(os.Getenv("XDG_DATA_HOME"), "doc/voice-type", license)); !os.IsNotExist(err) {
-			t.Fatalf("installed license %s remained after uninstall", license)
+	for _, path := range legacyInstallPaths() {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("installation file remained: %s %v", path, err)
 		}
 	}
 	for _, path := range dataPaths {
@@ -209,51 +263,6 @@ func TestUninstallerKeepsDataOnRequest(t *testing.T) {
 		if err != nil || string(data) != "private-data" {
 			t.Fatalf("user data changed: %s %v", path, err)
 		}
-	}
-}
-
-func TestInstallerRejectsLegacyUninstallFlag(t *testing.T) {
-	source, _ := installerFixture(t)
-	output, err := runInstaller(t, source, "--uninstall")
-	if err == nil {
-		t.Fatalf("legacy uninstall flag accepted: %s", output)
-	}
-	if !strings.Contains(output, "Usage: install.sh") {
-		t.Fatalf("missing usage for rejected flag: %s", output)
-	}
-}
-
-func TestInstallerRefusesUnsafeReplacement(t *testing.T) {
-	for _, kind := range []string{"old-daemon", "quit-refused", "engine-busy"} {
-		t.Run(kind, func(t *testing.T) {
-			source, bin := installerFixture(t)
-			installed := filepath.Join(bin, "voice-type")
-			if err := os.WriteFile(installed, []byte("original-binary"), 0755); err != nil {
-				t.Fatal(err)
-			}
-			switch kind {
-			case "old-daemon":
-				t.Setenv("TEST_APP_VERSION", "5.7.0")
-			case "quit-refused":
-				t.Setenv("TEST_REFUSE_QUIT", "1")
-			case "engine-busy":
-				lock, err := acquireEngineLock()
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer lock.Close()
-				if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if output, err := runInstaller(t, source, "--local"); err == nil {
-				t.Fatalf("unsafe upgrade accepted: %s", output)
-			}
-			data, err := os.ReadFile(installed)
-			if err != nil || string(data) != "original-binary" {
-				t.Fatal("running installation overwritten", err)
-			}
-		})
 	}
 }
 
@@ -353,72 +362,5 @@ exit 0
 	}
 	if !strings.Contains(string(recorded), "remove -y voice-type") {
 		t.Fatalf("distribution package was not removed: %s", recorded)
-	}
-}
-
-func TestDownloadedApplicationIntegrity(t *testing.T) {
-	for _, kind := range []string{"valid", "checksum", "layout", "version", "daemon-release"} {
-		t.Run(kind, func(t *testing.T) {
-			source, bin := installerFixture(t)
-			release := t.TempDir()
-			t.Setenv("TEST_RELEASE", release)
-			// Match the installer curl call, without contacting the network.
-			curl := `#!/bin/sh
-cp "$TEST_RELEASE/$(basename "$2")" "$4"
-`
-			if err := os.WriteFile(filepath.Join(source, "tools/curl"), []byte(curl), 0755); err != nil {
-				t.Fatal(err)
-			}
-			payload := filepath.Join(source, "build")
-			for _, name := range []string{"icon.png", "LICENSE", "THIRD-PARTY-LICENSES.md"} {
-				if err := os.WriteFile(filepath.Join(payload, name), []byte(name), 0644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			members := []string{"voice-type", "icon.png", "LICENSE", "THIRD-PARTY-LICENSES.md"}
-			if kind == "layout" {
-				members = append(members, "unexpected")
-				os.WriteFile(filepath.Join(payload, "unexpected"), nil, 0644)
-			}
-			arch := "arm64"
-			if output, err := exec.Command("uname", "-m").Output(); err == nil && strings.TrimSpace(string(output)) == "x86_64" {
-				arch = "x64"
-			}
-			archiveName := "voice-type-linux-" + arch + ".tar.gz"
-			archive := filepath.Join(release, archiveName)
-			args := append([]string{"-czf", archive, "-C", payload}, members...)
-			if output, err := exec.Command("tar", args...).CombinedOutput(); err != nil {
-				t.Fatalf("archive: %v %s", err, output)
-			}
-			data, err := os.ReadFile(archive)
-			if err != nil {
-				t.Fatal(err)
-			}
-			checksum := fmt.Sprintf("%x  %s\n", sha256.Sum256(data), archiveName)
-			if err := os.WriteFile(filepath.Join(release, "checksums.txt"), []byte(checksum), 0644); err != nil {
-				t.Fatal(err)
-			}
-			tag := "v6.0.0"
-			switch kind {
-			case "checksum":
-				os.WriteFile(archive, []byte("corrupt-download"), 0644)
-			case "version":
-				t.Setenv("TEST_APP_VERSION", "6.1.0")
-			case "daemon-release":
-				tag = "v5.7.0"
-			}
-			output, err := runInstaller(t, source, "--user", "--version", tag)
-			if kind == "valid" {
-				if err != nil {
-					t.Fatalf("valid archive: %v %s", err, output)
-				}
-			} else if err == nil {
-				t.Fatalf("invalid release accepted: %s", output)
-			}
-			_, statErr := os.Stat(filepath.Join(bin, "voice-type"))
-			if (kind == "valid") != (statErr == nil) {
-				t.Fatal("unexpected installation state", statErr)
-			}
-		})
 	}
 }
