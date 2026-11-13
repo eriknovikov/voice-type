@@ -35,10 +35,11 @@ func installerFixture(t *testing.T) (string, string) {
 		}
 	}
 	fixture := `#!/bin/sh
+record() { [ -z "${TEST_CALLS:-}" ] || printf '%s\n' "$1" >> "$TEST_CALLS"; }
 case "$1" in
 --version) echo "${TEST_APP_VERSION:-6.0.0}" ;;
---quit) [ "${TEST_REFUSE_QUIT:-0}" = 0 ] ;;
---remove-shortcuts) : ;;
+--quit) [ "${TEST_REFUSE_QUIT:-0}" = 0 ] || exit 1; record quit ;;
+--remove-shortcuts) record remove-shortcuts ;;
 *) exit 2 ;;
 esac
 `
@@ -52,6 +53,8 @@ esac
 		}
 	}
 	t.Setenv("PATH", filepath.Join(source, "tools")+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("VOICE_TYPE_NO_KEYRING", "1")
 	return source, bin
 }
 func runInstaller(t *testing.T, source string, args ...string) (string, error) {
@@ -60,17 +63,41 @@ func runInstaller(t *testing.T, source string, args ...string) (string, error) {
 	output, err := command.CombinedOutput()
 	return string(output), err
 }
-func TestInstallerCleanUpgradeUninstallPreservesData(t *testing.T) {
-	source, bin := installerFixture(t)
-	dataPaths := []string{configFilePath(), runLogFilePath(), workspaceFilePath(), preferencesPath(), filepath.Join(os.Getenv("XDG_DATA_HOME"), "voice-type/backups/config.jsonc")}
-	for _, path := range dataPaths {
+func runUninstaller(t *testing.T, source string, args ...string) (string, error) {
+	t.Helper()
+	command := exec.Command(filepath.Join(source, "uninstall.sh"), args...)
+	output, err := command.CombinedOutput()
+	return string(output), err
+}
+func uninstallFixturePaths() []string {
+	return []string{
+		configFilePath(), runLogFilePath(), workspaceFilePath(), preferencesPath(),
+		filepath.Join(os.Getenv("XDG_DATA_HOME"), "voice-type/backups/config.jsonc"),
+		filepath.Join(os.Getenv("XDG_DATA_HOME"), "voice-type/models/model.bin"),
+		filepath.Join(os.Getenv("XDG_DATA_HOME"), "voice-type/openai.key"),
+		filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "voice-type/credentials-storage"),
+	}
+}
+
+func seedUninstallData(t *testing.T) []string {
+	t.Helper()
+	paths := uninstallFixturePaths()
+	for _, path := range paths {
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, []byte("private-data-to-preserve"), 0600); err != nil {
+		if err := os.WriteFile(path, []byte("private-data"), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
+	return paths
+}
+
+func TestInstallerCleanUpgradeThenUninstallRemovesEverything(t *testing.T) {
+	source, bin := installerFixture(t)
+	calls := filepath.Join(t.TempDir(), "calls")
+	t.Setenv("TEST_CALLS", calls)
+	dataPaths := seedUninstallData(t)
 	for iteration := range 2 {
 		if iteration == 1 {
 			if err := os.WriteFile(filepath.Join(bin, "voice-type-app"), []byte("old-companion"), 0755); err != nil {
@@ -111,7 +138,55 @@ func TestInstallerCleanUpgradeUninstallPreservesData(t *testing.T) {
 			}
 		}
 	}
-	if output, err := runInstaller(t, source, "--uninstall"); err != nil {
+	if output, err := runUninstaller(t, source); err != nil {
+		t.Fatalf("uninstall: %v %s", err, output)
+	}
+	for _, path := range []string{
+		filepath.Join(bin, "voice-type"),
+		filepath.Join(bin, "voice-type-app"),
+		filepath.Join(os.Getenv("XDG_DATA_HOME"), "applications/io.github.eriknovikov.voice-type.desktop"),
+		filepath.Join(os.Getenv("XDG_DATA_HOME"), "icons/hicolor/512x512/apps/io.github.eriknovikov.voice-type.png"),
+		filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "autostart/voice-type.desktop"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("installation file remained: %s %v", path, err)
+		}
+	}
+	for _, directory := range []string{
+		filepath.Join(os.Getenv("XDG_DATA_HOME"), "doc/voice-type"),
+		filepath.Join(os.Getenv("XDG_DATA_HOME"), "voice-type"),
+		filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "voice-type"),
+		filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "voice-type"),
+		filepath.Join(os.Getenv("XDG_STATE_HOME"), "voice-type"),
+		filepath.Join(os.Getenv("TMPDIR"), "voice-type"),
+	} {
+		if _, err := os.Stat(directory); !os.IsNotExist(err) {
+			t.Fatalf("application directory remained: %s %v", directory, err)
+		}
+	}
+	for _, path := range dataPaths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("user data remained after uninstall: %s %v", path, err)
+		}
+	}
+	recorded, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"quit", "remove-shortcuts"} {
+		if !strings.Contains(string(recorded), expected) {
+			t.Fatalf("uninstall skipped %s: %s", expected, recorded)
+		}
+	}
+}
+
+func TestUninstallerKeepsDataOnRequest(t *testing.T) {
+	source, bin := installerFixture(t)
+	dataPaths := seedUninstallData(t)
+	if output, err := runInstaller(t, source, "--local"); err != nil {
+		t.Fatalf("install: %v %s", err, output)
+	}
+	if output, err := runUninstaller(t, source, "--keep-data"); err != nil {
 		t.Fatalf("uninstall: %v %s", err, output)
 	}
 	if _, err := os.Stat(filepath.Join(bin, "voice-type")); !os.IsNotExist(err) {
@@ -124,11 +199,23 @@ func TestInstallerCleanUpgradeUninstallPreservesData(t *testing.T) {
 	}
 	for _, path := range dataPaths {
 		data, err := os.ReadFile(path)
-		if err != nil || string(data) != "private-data-to-preserve" {
+		if err != nil || string(data) != "private-data" {
 			t.Fatalf("user data changed: %s %v", path, err)
 		}
 	}
 }
+
+func TestInstallerRejectsLegacyUninstallFlag(t *testing.T) {
+	source, _ := installerFixture(t)
+	output, err := runInstaller(t, source, "--uninstall")
+	if err == nil {
+		t.Fatalf("legacy uninstall flag accepted: %s", output)
+	}
+	if !strings.Contains(output, "Usage: install.sh") {
+		t.Fatalf("missing usage for rejected flag: %s", output)
+	}
+}
+
 func TestInstallerRefusesUnsafeReplacement(t *testing.T) {
 	for _, kind := range []string{"old-daemon", "quit-refused", "engine-busy"} {
 		t.Run(kind, func(t *testing.T) {
@@ -238,8 +325,9 @@ func TestInstallerRejectsCorruptDistributionPackage(t *testing.T) {
 	}
 }
 
-func TestInstallerUninstallsDistributionPackage(t *testing.T) {
+func TestUninstallerRemovesDistributionPackage(t *testing.T) {
 	source, _ := installerFixture(t)
+	t.Setenv("VOICE_TYPE_INSTALLED_BIN", filepath.Join(t.TempDir(), "voice-type"))
 	args := filepath.Join(t.TempDir(), "package-args")
 	t.Setenv("TEST_PACKAGE_ARGS", args)
 	writeInstallerTool(t, source, "sudo", "#!/bin/sh\nexec \"$@\"\n")
@@ -248,7 +336,7 @@ func TestInstallerUninstallsDistributionPackage(t *testing.T) {
 printf '%s\n' "$*" >> "$TEST_PACKAGE_ARGS"
 exit 0
 `)
-	output, err := runInstaller(t, source, "--uninstall")
+	output, err := runUninstaller(t, source)
 	if err != nil {
 		t.Fatalf("uninstall: %v %s", err, output)
 	}
