@@ -118,6 +118,7 @@ type runLogRecord struct {
 	ConfiguredModel string          `json:"configured_model"`
 	FinalModel      string          `json:"final_model,omitempty"`
 	Outcome         string          `json:"outcome"`
+	Level           string          `json:"level,omitempty"`
 	Error           string          `json:"error,omitempty"`
 	Message         string          `json:"message,omitempty"`
 	StatusCode      int             `json:"status_code,omitempty"`
@@ -192,7 +193,7 @@ func (l *runLog) completeTimed(provider, configuredModel, finalModel, outcome st
 			status = sttErr.Status
 		}
 	}
-	l.write(runLogRecord{
+	record := runLogRecord{
 		Event:           "dictation.completed",
 		Timing:          timings.logTiming(),
 		Version:         l.version,
@@ -207,7 +208,19 @@ func (l *runLog) completeTimed(provider, configuredModel, finalModel, outcome st
 		AttemptCount:    len(attempts),
 		FallbackUsed:    false,
 		Attempts:        attempts,
-	})
+	}
+	if outcome == "no_speech" {
+		record.Level = "warn"
+		record.Error = ""
+		record.Message = noSpeechWarning
+		if errors.Is(err, errNoSpeech) {
+			record.Message = err.Error()
+		}
+		if len(attempts) > 0 {
+			record.StatusCode = attempts[len(attempts)-1].StatusCode
+		}
+	}
+	l.write(record)
 }
 
 func (l *runLog) close(outcome string) {
@@ -269,6 +282,9 @@ func requestOutcome(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "cancelled"
 	}
+	if errors.Is(err, errNoSpeech) {
+		return "no_speech"
+	}
 	var cloudErr *cloudStreamError
 	if errors.As(err, &cloudErr) {
 		return "cloud_stream_error"
@@ -289,6 +305,10 @@ func requestOutcome(err error) string {
 	return "error"
 }
 
+func (record runLogRecord) isWarning() bool {
+	return record.Level == "warn" || record.Outcome == "no_speech"
+}
+
 // records returns at most two bounded log segments, newest entries first.
 // It is retained for diagnostics and tests that need the complete history;
 // the UI uses page instead.
@@ -307,7 +327,7 @@ func (l *runLog) records() ([]runLogRecord, error) {
 }
 
 func validateLogOutcome(outcome string) error {
-	if outcome != "all" && outcome != "errors" && outcome != "ok" {
+	if outcome != "all" && outcome != "errors" && outcome != "warnings" && outcome != "ok" {
 		return errors.New("choose a valid log outcome")
 	}
 	return nil
@@ -316,7 +336,9 @@ func validateLogOutcome(outcome string) error {
 func logRecordMatches(record runLogRecord, outcome string) bool {
 	switch outcome {
 	case "errors":
-		return record.Outcome != "ok"
+		return record.Outcome != "ok" && !record.isWarning()
+	case "warnings":
+		return record.isWarning()
 	case "ok":
 		return record.Outcome == "ok"
 	default:

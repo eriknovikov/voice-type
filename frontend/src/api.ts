@@ -73,6 +73,8 @@ export interface Status {
   level: number;
   notice?: string;
   notice_version?: number;
+  warning?: string;
+  warning_version?: number;
 }
 export interface Preferences {
   shortcut: string;
@@ -109,6 +111,7 @@ export interface LogRecord {
   provider: string;
   configured_model: string;
   outcome: string;
+  level?: "info" | "warn" | "error";
   error?: string;
   total_ms: number;
   audio_ms: number;
@@ -144,10 +147,7 @@ export interface LogPage {
   unchanged?: boolean;
 }
 const call = <T>(method: string, ...args: unknown[]): Promise<T> =>
-  Call.ByName(
-    `github.com/eriknovikov/voice-type.Bridge.${method}`,
-    ...args,
-  );
+  Call.ByName(`github.com/eriknovikov/voice-type.Bridge.${method}`, ...args);
 export const api = {
   beginShortcutCapture: () => call<void>("BeginShortcutCapture"),
   endShortcutCapture: () => call<void>("EndShortcutCapture"),
@@ -164,12 +164,10 @@ export const api = {
     call<Settings>("SelectProfile", revision, id),
   saveAPIKey: (provider: string, key: string) =>
     call<Settings>("SaveAPIKey", provider, key),
-  deleteAPIKey: (provider: string) =>
-    call<Settings>("DeleteAPIKey", provider),
+  deleteAPIKey: (provider: string) => call<Settings>("DeleteAPIKey", provider),
   setCredentialStorage: (mode: string) =>
     call<Settings>("SetCredentialStorage", mode),
-  copyAPIKey: (provider: string) =>
-    call<void>("CopyAPIKey", provider),
+  copyAPIKey: (provider: string) => call<void>("CopyAPIKey", provider),
   diagnostics: () => call<DiagnosticsReport>("Diagnostics"),
   copyDiagnostics: () => call<void>("CopyDiagnostics"),
   workspace: (name: string) => call<void>("SelectWorkspace", name),

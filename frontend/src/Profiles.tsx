@@ -60,7 +60,8 @@ export function Profiles({
                     <span>{providerName(profile.provider)}</span>
                     {profile.provider === "local" ? (
                       <span>
-                        {modelName(profile.model_id)} · {modeName(profile.streaming_mode)}
+                        {modelName(profile.model_id)} ·{" "}
+                        {modeName(profile.streaming_mode)}
                       </span>
                     ) : profile.provider === "openai" ? (
                       <span>
@@ -88,6 +89,10 @@ export function Profiles({
         </div>
       ) : (
         <div className="settings-group profile-empty">
+          <h3>Welcome to Voice Type</h3>
+          <p className="quiet">
+            Add your first profile to choose how you’d like to transcribe.
+          </p>
           <button className="primary" onClick={onCreate}>
             <Plus size={16} aria-hidden="true" />
             Add profile

@@ -44,7 +44,7 @@ func trayIcon(state string) []byte {
 	}
 	if state == "recording" {
 		c = color.RGBA{116, 195, 170, 255}
-	} else if state == "transcribing" || state == "checking" {
+	} else if state == "transcribing" || state == "checking" || state == "warning" {
 		c = color.RGBA{237, 188, 105, 255}
 	}
 	// Use the launcher-like five-bar mark with rounded capsule ends.
@@ -179,7 +179,7 @@ func Run(version string, command Command) error {
 		window.OnWindowEvent(events.Common.WindowHide, func(*application.WindowEvent) { b.setWindowVisible(false) })
 		window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
 			e.Cancel()
-			go b.RequestHide()
+			go b.RequestQuit()
 		})
 		return window
 	}
@@ -208,6 +208,8 @@ func Run(version string, command Command) error {
 	updateMenu := func(state string) {
 		statusLabel, action := "Idle", "Record"
 		switch state {
+		case "warning":
+			statusLabel = "No speech detected"
 		case "checking":
 			statusLabel, action = "Preparing", "Cancel"
 		case "recording":
@@ -260,6 +262,9 @@ func trayState(status Status) string {
 	}
 	if status.State == "idle" && status.Error != "" {
 		return "setup needed"
+	}
+	if status.State == "idle" && status.Warning != "" {
+		return "warning"
 	}
 	return status.State
 }

@@ -17,10 +17,11 @@ func (r *failureRecorder) Start() error           { return r.startErr }
 func (r *failureRecorder) Stop() ([]int16, error) { return r.samples, r.stopErr }
 func (r *failureRecorder) Close()                 {}
 func TestDictationFailureStaysVisibleUntilNextAttempt(t *testing.T) {
-	for _, kind := range []string{"configuration_error", "capture_start", "capture_stop", "no_audio", "auth_error", "empty_transcript"} {
+	for _, kind := range []string{"configuration_error", "capture_start", "capture_stop", "capture_stop_empty", "auth_error", "provider_error", "missing_transcript"} {
 		t.Run(kind, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			t.Setenv("TMPDIR", t.TempDir())
 			t.Setenv("OPENAI_API_KEY", "")
 			t.Setenv("OPENROUTER_API_KEY", "")
 			useCredentialStore(t, &memoryCredentials{values: map[string]string{}})
@@ -35,10 +36,11 @@ func TestDictationFailureStaysVisibleUntilNextAttempt(t *testing.T) {
 			switch kind {
 			case "capture_start":
 				rec.startErr = errors.New("capture failed")
-			case "capture_stop":
+			case "capture_stop", "capture_stop_empty":
 				rec.stopErr = errors.New("capture failed")
-			case "no_audio":
-				rec.samples = nil
+				if kind == "capture_stop_empty" {
+					rec.samples = nil
+				}
 			}
 			cfg, _ := configReadStrict()
 			settings, _ := cfg.resolveSTT("")
@@ -49,6 +51,15 @@ func TestDictationFailureStaysVisibleUntilNextAttempt(t *testing.T) {
 				if kind == "auth_error" {
 					w.WriteHeader(401)
 					w.Write([]byte(`{"error":{"message":"fixture"}}`))
+					return
+				}
+				if kind == "provider_error" {
+					w.WriteHeader(http.StatusBadRequest)
+					w.Write([]byte(`{"error":{"message":"fixture"}}`))
+					return
+				}
+				if kind == "missing_transcript" {
+					w.Write([]byte(`{}`))
 					return
 				}
 				w.Write([]byte(`{"text":""}`))
@@ -67,6 +78,9 @@ func TestDictationFailureStaysVisibleUntilNextAttempt(t *testing.T) {
 			}
 			if !d.Status().LastAttemptFailed {
 				t.Fatal("desktop cannot observe failure")
+			}
+			if d.Status().Warning != "" || trayState(d.Status()) != "error" {
+				t.Fatal("real failure was downgraded to a warning")
 			}
 			records, err := d.runLog.records()
 			if err != nil || len(records) == 0 {

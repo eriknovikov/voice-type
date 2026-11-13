@@ -252,7 +252,7 @@ func (s *cloudStreamSession) send(startupSamples int) {
 		}
 		if closed {
 			if !nonempty {
-				s.fail("no audio captured")
+				s.failWithError(errNoSpeech)
 				return
 			}
 			resampleBuf = resampler.FlushInto(resampleBuf[:0])

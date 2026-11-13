@@ -195,7 +195,7 @@ func TestQuickWordStopDuringStartupBeforeWebSocketOpens(t *testing.T) {
 	}
 }
 
-func TestEmptyCloudCompletionReportsCapturedSignal(t *testing.T) {
+func TestEmptyCloudCompletionWarnsAndLogsCapturedSignal(t *testing.T) {
 	setupEngineTest(t)
 	view := readSettingsTest(t)
 	if err := SaveAPIKey(providerOpenAI, "test-key"); err != nil {
@@ -231,14 +231,14 @@ func TestEmptyCloudCompletionReportsCapturedSignal(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = service.Toggle()
-	if err == nil || !strings.Contains(err.Error(), "completed transcription but returned no text") {
+	if err != nil || service.Status().Warning != noSpeechWarning || service.Status().LastAttemptFailed {
 		t.Fatalf("misreported empty final response: %v", err)
 	}
 	records, err := service.Logs("all", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records.Records) != 1 || records.Records[0].Outcome != "empty_transcript" || !strings.Contains(records.Records[0].Error, "RMS") || !strings.Contains(records.Records[0].Error, "peak") {
+	if len(records.Records) != 1 || records.Records[0].Outcome != "no_speech" || records.Records[0].Level != "warn" || records.Records[0].Error != "" || !strings.Contains(records.Records[0].Message, "RMS") || !strings.Contains(records.Records[0].Message, "peak") {
 		t.Fatal("empty-result signal diagnostics missing")
 	}
 }

@@ -88,8 +88,14 @@ func TestProfileSessionIsolation(t *testing.T) {
 				} else {
 					close(release)
 				}
-				if err := <-stopped; err == nil {
-					t.Fatal("empty provider response should fail")
+				if err := <-stopped; err != nil {
+					t.Fatalf("empty provider response should warn, not fail: %v", err)
+				}
+				if service.Status().LastAttemptFailed {
+					t.Fatal("empty response marked the in-flight session as failed")
+				}
+				if action != "delete" && service.Status().Warning != noSpeechWarning {
+					t.Fatal("empty response warning missing")
 				}
 				if action == "delete" {
 					if service.Status().Error == "" {

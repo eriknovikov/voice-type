@@ -1,14 +1,10 @@
 // @vitest-environment jsdom
 import React from "react";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocalModels } from "./LocalModels";
 import type { LocalModel } from "./api";
+import type { LocalModelActions } from "./LocalModelDownload";
 
 afterEach(cleanup);
 
@@ -41,21 +37,62 @@ const renderModel = (
     onCancel: (id: string) => void;
     onRemove: (id: string) => void;
   }> = {},
+  pendingAction: keyof LocalModelActions | null = null,
 ) =>
   render(
     <LocalModels
-      models={[value]}
-      busy={false}
-      onInstall={callbacks.onInstall ?? vi.fn()}
-      onResume={callbacks.onResume ?? vi.fn()}
-      onRetry={callbacks.onRetry ?? vi.fn()}
-      onPause={callbacks.onPause ?? vi.fn()}
-      onCancel={callbacks.onCancel ?? vi.fn()}
-      onRemove={callbacks.onRemove ?? vi.fn()}
+      downloads={{
+        models: [value],
+        busy: !!pendingAction,
+        pendingID: pendingAction ? value.id : null,
+        pendingAction,
+        errors: {},
+        loadError: "",
+        actions: {
+          onInstall: callbacks.onInstall ?? vi.fn(),
+          onResume: callbacks.onResume ?? vi.fn(),
+          onRetry: callbacks.onRetry ?? vi.fn(),
+          onPause: callbacks.onPause ?? vi.fn(),
+          onCancel: callbacks.onCancel ?? vi.fn(),
+          onRemove: callbacks.onRemove ?? vi.fn(),
+        },
+      }}
     />,
   );
 
 describe("local model download controls", () => {
+  it.each<LocalModel["state"]>([
+    "not_installed",
+    "downloading",
+    "pausing",
+    "paused",
+    "failed",
+    "verifying",
+    "cancelling",
+    "ready",
+  ])("keeps the progress track and action slots mounted in %s", (state) => {
+    const { container } = renderModel(model(state, 100_000_000));
+    expect(screen.getByRole("progressbar")).toBeTruthy();
+    expect(container.querySelector(".model-download-bottom")).toBeTruthy();
+    expect(container.querySelector(".model-download-actions")).toBeTruthy();
+  });
+
+  it("labels a pending pause accurately and prevents duplicate actions", () => {
+    renderModel(model("downloading", 100_000_000), {}, "onPause");
+    expect(screen.getByRole("status").textContent).toBe("Pausing…");
+    expect(
+      (screen.getByRole("button", { name: "Pausing…" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Cancel download",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(screen.queryByText("Starting download…")).toBeNull();
+  });
   it("shows the resident memory estimate", () => {
     renderModel(model("ready", 731_357_568));
     expect(screen.getByText("~1.1 GiB RAM when loaded")).toBeTruthy();
@@ -73,12 +110,14 @@ describe("local model download controls", () => {
     const onCancel = vi.fn();
     renderModel(model("downloading", 100_000_000), { onPause, onCancel });
     expect(
-      (screen.getByRole("progressbar", {
-        name: "Parakeet Unified English download progress",
-      }) as HTMLProgressElement).value,
+      (
+        screen.getByRole("progressbar", {
+          name: "Parakeet Unified English download progress",
+        }) as HTMLProgressElement
+      ).value,
     ).toBeCloseTo((100_000_000 / 731_357_568) * 100);
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel download" }));
     expect(onPause).toHaveBeenCalledWith("parakeet-unified-en");
     expect(onCancel).toHaveBeenCalledWith("parakeet-unified-en");
   });
@@ -88,7 +127,7 @@ describe("local model download controls", () => {
     const onCancel = vi.fn();
     renderModel(model("paused", 100_000_000), { onResume, onCancel });
     fireEvent.click(screen.getByRole("button", { name: "Resume" }));
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel download" }));
     expect(onResume).toHaveBeenCalledWith("parakeet-unified-en");
     expect(onCancel).toHaveBeenCalledWith("parakeet-unified-en");
   });
@@ -98,7 +137,7 @@ describe("local model download controls", () => {
     const onCancel = vi.fn();
     renderModel(model("failed", 100_000_000), { onRetry, onCancel });
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel download" }));
     expect(onRetry).toHaveBeenCalledWith("parakeet-unified-en");
     expect(onCancel).toHaveBeenCalledWith("parakeet-unified-en");
   });
