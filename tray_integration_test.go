@@ -77,6 +77,8 @@ func TestNativeTray(t *testing.T) {
 	}
 	t.Setenv("GSETTINGS_BACKEND", "keyfile")
 	t.Setenv("XDG_CURRENT_DESKTOP", "GNOME")
+	// The uninstaller also clears keyring entries; never touch the real keyring.
+	t.Setenv("VOICE_TYPE_NO_KEYRING", "1")
 	// Seed another app before launch and verify the real process preserves it.
 	gradia := "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/be.alexandervanhee.gradia/"
 	registered := "['" + gradia + "']"
@@ -338,8 +340,8 @@ func TestNativeTray(t *testing.T) {
 	t.Setenv("PATH", filepath.Join(source, "tools")+string(os.PathListSeparator)+os.Getenv("PATH"))
 	binDir := filepath.Join(home, "bin")
 	t.Setenv("VOICE_TYPE_BIN_DIR", binDir)
-	beforeConfig, err := os.ReadFile(filepath.Join(home, ".voice-type-config.jsonc"))
-	if err != nil {
+	configFile := filepath.Join(home, ".voice-type-config.jsonc")
+	if _, err := os.Stat(configFile); err != nil {
 		t.Fatal(err)
 	}
 	for iteration := range 2 {
@@ -371,9 +373,11 @@ func TestNativeTray(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(binDir, "voice-type")); !os.IsNotExist(err) {
 		t.Fatal("binary survived uninstall")
 	}
-	afterConfig, err := os.ReadFile(filepath.Join(home, ".voice-type-config.jsonc"))
-	if err != nil || !bytes.Equal(beforeConfig, afterConfig) {
-		t.Fatal("native upgrade/uninstall changed configuration", err)
+	if _, err := os.Stat(configFile); !os.IsNotExist(err) {
+		t.Fatal("uninstall kept the configuration file", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "data", "voice-type")); !os.IsNotExist(err) {
+		t.Fatal("uninstall kept the application data", err)
 	}
 	for _, check := range []struct{ schema, key, want string }{
 		{mediaKeysSchema, "custom-keybindings", registered + "\n"},
