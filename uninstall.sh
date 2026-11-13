@@ -138,13 +138,24 @@ if [ -n "$BINARY" ]; then
     request_quit "$BINARY"
     remove_shortcuts "$BINARY"
 fi
-for proc in /proc/[0-9]*/exe; do
-    exe=$(readlink "$proc" 2>/dev/null || true)
-    case "$exe" in
-        "$BIN_DIR/voice-type"|"$BIN_DIR/voice-type-app"|"$BIN_DIR/voice-type (deleted)"|"$BIN_DIR/voice-type-app (deleted)")
-            fail 'Voice Type is still running; close it and retry.' ;;
-    esac
+voice_type_running() {
+    for proc in /proc/[0-9]*/exe; do
+        exe=$(readlink "$proc" 2>/dev/null || true)
+        case "$exe" in
+            "$BIN_DIR/voice-type"|"$BIN_DIR/voice-type-app"|"$BIN_DIR/voice-type (deleted)"|"$BIN_DIR/voice-type-app (deleted)")
+                return 0 ;;
+        esac
+    done
+    return 1
+}
+# The quit request is asynchronous. Give the process a moment to exit before
+# deciding that removing its files would be unsafe.
+i=0
+while voice_type_running && [ "$i" -lt 50 ]; do
+    sleep 0.1
+    i=$((i + 1))
 done
+voice_type_running && fail 'Voice Type is still running; close it and retry.'
 forget_credentials
 
 # 2. Remove the distribution package when one is installed.
