@@ -43,7 +43,7 @@ func TestEngineLifecycleAndIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	if status := service.Status(); status.State != "idle" || status.Error == "" {
+	if status := service.Status(); status.State != "idle" || status.Error != "" {
 		t.Fatalf("setup status: %+v", status)
 	}
 	if _, err := os.Stat(filepath.Join(engineRuntimeDir(), "desktop.sock")); !os.IsNotExist(err) {
@@ -59,7 +59,7 @@ func TestEngineLifecycleAndIsolation(t *testing.T) {
 	}
 	defer listener.Close()
 	if err := service.Toggle(); err == nil {
-		t.Fatal("missing credentials must block direct capture")
+		t.Fatal("missing setup must block direct capture")
 	}
 	settings, err := ReadSettings()
 	if err != nil {

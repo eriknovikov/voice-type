@@ -1,4 +1,4 @@
-import { Check, ChevronRight, FileText, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronRight, FileText, X } from "lucide-react";
 import type { LogPage, LogRecord } from "./api";
 import { providerName } from "./ProfileEditor";
 import { SegmentedControl } from "./ui";
@@ -19,6 +19,7 @@ const titles: Record<string, string> = {
   preferences: "Preferences changed",
 };
 function eventTitle(row: LogRecord) {
+  if (row.outcome === "no_speech") return "No speech detected";
   if (row.event.startsWith("dictation.") || row.event === "dictation")
     return row.outcome === "ok" ? "Dictation completed" : "Dictation failed";
   return (
@@ -30,7 +31,8 @@ export function LogViewer({
   page,
   outcome,
   onOutcome,
-  onOffset,
+  onLoadMore,
+  loadingMore,
   onExport,
   onClear,
   busy,
@@ -38,7 +40,8 @@ export function LogViewer({
   page: LogPage | null;
   outcome: string;
   onOutcome: (value: string) => void;
-  onOffset: (offset: number) => void;
+  onLoadMore: () => void;
+  loadingMore: boolean;
   onExport: () => void;
   onClear: () => void;
   busy: boolean;
@@ -46,8 +49,6 @@ export function LogViewer({
   const displayed = page?.records ?? [];
   const total = page?.total ?? 0;
   const retained = page?.retained ?? 0;
-  const offset = page?.offset ?? 0;
-  const limit = page?.limit ?? 200;
   const occurrences = new Map<string, number>();
   return (
     <>
@@ -59,6 +60,7 @@ export function LogViewer({
           options={[
             { value: "all", label: "All" },
             { value: "errors", label: "Errors" },
+            { value: "warnings", label: "Warnings" },
             { value: "ok", label: "Success" },
           ]}
         />
@@ -71,25 +73,6 @@ export function LogViewer({
           </button>
         </div>
       </div>
-      {total > 0 && (
-        <div className="log-pager">
-          <button
-            disabled={busy || offset <= 0}
-            onClick={() => onOffset(offset - limit)}
-          >
-            Newer
-          </button>
-          <span role="status">
-            {offset + 1}–{offset + displayed.length} of {total}
-          </span>
-          <button
-            disabled={busy || offset + limit >= total}
-            onClick={() => onOffset(offset + limit)}
-          >
-            Older
-          </button>
-        </div>
-      )}
       <section className="log-list" aria-label="Log entries">
         {displayed.length ? (
           displayed.map((row) => {
@@ -109,6 +92,7 @@ export function LogViewer({
             const date = row.timestamp ? new Date(row.timestamp) : null;
             const dictation =
               row.event.startsWith("dictation.") || row.event === "dictation";
+            const warning = row.level === "warn" || row.outcome === "no_speech";
             return (
               <details key={`${identity}:${occurrence}`} className="log-entry">
                 <summary>
@@ -118,10 +102,12 @@ export function LogViewer({
                     aria-hidden="true"
                   />
                   <span
-                    className={`log-icon ${row.outcome === "ok" ? "ok" : "failed"}`}
+                    className={`log-icon ${warning ? "warning" : row.outcome === "ok" ? "ok" : "failed"}`}
                     aria-hidden="true"
                   >
-                    {row.outcome === "ok" ? (
+                    {warning ? (
+                      <AlertTriangle size={16} />
+                    ) : row.outcome === "ok" ? (
                       <Check size={16} />
                     ) : (
                       <X size={16} />
@@ -192,6 +178,18 @@ export function LogViewer({
           </div>
         )}
       </section>
+      {total > 0 && (
+        <div className="log-footer">
+          <span role="status">
+            Showing {count.format(displayed.length)} of {count.format(total)}
+          </span>
+          {displayed.length < total && (
+            <button disabled={busy || loadingMore} onClick={onLoadMore}>
+              {loadingMore ? "Loading…" : "Load more"}
+            </button>
+          )}
+        </div>
+      )}
     </>
   );
 }

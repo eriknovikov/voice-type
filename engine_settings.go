@@ -13,6 +13,8 @@ type Status struct {
 	Level             float64 `json:"level"`
 	Notice            string  `json:"notice"`
 	NoticeVersion     uint64  `json:"notice_version"`
+	Warning           string  `json:"warning,omitempty"`
+	WarningVersion    uint64  `json:"warning_version"`
 }
 
 // startEngine acquires ownership before reading settings or opening logs.
@@ -40,7 +42,9 @@ func startEngine(version string) (*engine, error) {
 	}
 	settings, err := cfg.resolveSTT(workspaceLoad())
 	if err != nil {
-		if configErr == nil {
+		// A new installation has no profile yet. Setup is not a load failure;
+		// startSession still requires a profile before opening the microphone.
+		if configErr == nil && !errors.Is(err, errNoProfiles) {
 			configErr = err
 		}
 		settings = sttSettings{Provider: cfg.Provider, Model: providerModel(cfg.Provider)}
@@ -58,8 +62,10 @@ func startEngine(version string) (*engine, error) {
 	if configErr != nil {
 		d.configError = configErr.Error()
 		d.runLog.diagnostic("configuration.failed", "error", "Configuration could not be loaded.")
-	} else if err := settings.validateCredentials(); err != nil {
-		d.configError = err.Error()
+	} else if !errors.Is(err, errNoProfiles) {
+		if err := settings.validateCredentials(); err != nil {
+			d.configError = err.Error()
+		}
 	}
 	return d, nil
 }
@@ -72,7 +78,16 @@ func (d *engine) Status() Status {
 	if d.testRecorder != nil {
 		level = d.testRecorder.Level()
 	}
-	return Status{LastAttemptFailed: d.lastAttemptFailed, State: d.state.String(), Error: d.configError, Level: level, Notice: d.notice, NoticeVersion: d.noticeVersion}
+	return Status{
+		LastAttemptFailed: d.lastAttemptFailed,
+		State:             d.state.String(),
+		Error:             d.configError,
+		Level:             level,
+		Notice:            d.notice,
+		NoticeVersion:     d.noticeVersion,
+		Warning:           d.currentWarning(time.Now()),
+		WarningVersion:    d.warningVersion,
+	}
 }
 func (d *engine) SaveSettings(update SettingsUpdate) (Settings, error) {
 	value, err := SaveSettings(update)
@@ -93,7 +108,7 @@ func (d *engine) RefreshSettings() {
 	evict := false
 	d.mu.Lock()
 	if d.state == stateIdle && !d.shuttingDown {
-		if err := d.reloadConfig(); err != nil {
+		if err := d.reloadConfig(); err != nil && !errors.Is(err, errNoProfiles) {
 			d.configError = err.Error()
 		} else {
 			d.configError = ""

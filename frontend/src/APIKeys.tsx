@@ -113,17 +113,84 @@ function APIKeyRow({
   };
 
   return (
-    <div className="api-key-row">
+    <div className={`api-key-row${editing ? " editing" : ""}`}>
       <div className="api-key-heading">
         <span className="api-key-provider">
           <KeyRound size={16} aria-hidden="true" />
           <strong>{providerName(provider)}</strong>
         </span>
-        {summary?.saved && !editing && (
-          <span className="profile-key">{summary.masked_key}</span>
+        <span
+          className={`api-key-status${!editing && error ? " field-error" : !editing && summary?.saved ? " profile-key" : ""}`}
+          role={!editing && error ? "alert" : undefined}
+          tabIndex={!editing && error ? 0 : undefined}
+        >
+          {editing
+            ? summary?.saved
+              ? "Replacing key…"
+              : "Adding key…"
+            : error ||
+              (summary?.saved ? summary.masked_key || "Saved" : "Not added")}
+        </span>
+        {!editing && (
+          <div
+            className="api-key-actions"
+            role="group"
+            aria-label={`${providerName(provider)} key actions`}
+          >
+            {summary?.saved && (
+              <>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={`Copy ${providerName(provider)} API key`}
+                  title={copied ? "Copied" : "Copy key"}
+                  disabled={busy}
+                  onClick={async () => {
+                    try {
+                      await api.copyAPIKey(provider);
+                      setCopied(true);
+                      clearTimeout(copiedTimer.current);
+                      copiedTimer.current = setTimeout(
+                        () => setCopied(false),
+                        1600,
+                      );
+                    } catch (cause) {
+                      onError(
+                        cause instanceof Error ? cause.message : String(cause),
+                      );
+                    }
+                  }}
+                >
+                  {copied ? (
+                    <Check size={16} aria-hidden="true" />
+                  ) : (
+                    <Copy size={16} aria-hidden="true" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="icon-button danger-text"
+                  aria-label={`Delete ${providerName(provider)} API key`}
+                  title="Delete key"
+                  disabled={busy}
+                  onClick={() => setDeleting(true)}
+                >
+                  <Trash2 size={16} aria-hidden="true" />
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              className="api-key-primary"
+              onClick={() => setEditing(true)}
+              disabled={busy}
+            >
+              {summary?.saved ? "Replace" : "Add"}
+            </button>
+          </div>
         )}
       </div>
-      {editing ? (
+      {editing && (
         <>
           <div className="key-editor">
             <input
@@ -137,6 +204,7 @@ function APIKeyRow({
               disabled={saving}
               placeholder="Paste API key…"
               aria-invalid={!!error}
+              aria-describedby={error ? `${provider}-api-key-error` : undefined}
               onChange={(event) => {
                 setValue(event.target.value);
                 setError("");
@@ -169,11 +237,14 @@ function APIKeyRow({
               )}
             </button>
           </div>
-          {error && (
-            <p className="field-error" role="alert">
-              {error}
-            </p>
-          )}
+          <p
+            id={`${provider}-api-key-error`}
+            className="api-key-editor-error field-error"
+            role={error ? "alert" : undefined}
+            tabIndex={error ? 0 : undefined}
+          >
+            {error}
+          </p>
           <div className="api-key-actions">
             <button
               type="button"
@@ -197,58 +268,6 @@ function APIKeyRow({
             </button>
           </div>
         </>
-      ) : (
-        <div className="api-key-actions">
-          {summary?.saved && (
-            <>
-              <button
-                type="button"
-                className="icon-button"
-                aria-label={`Copy ${providerName(provider)} API key`}
-                title={copied ? "Copied" : "Copy key"}
-                disabled={busy}
-                onClick={async () => {
-                  try {
-                    await api.copyAPIKey(provider);
-                    setCopied(true);
-                    clearTimeout(copiedTimer.current);
-                    copiedTimer.current = setTimeout(() => setCopied(false), 1600);
-                  } catch (cause) {
-                    onError(cause instanceof Error ? cause.message : String(cause));
-                  }
-                }}
-              >
-                {copied ? (
-                  <Check size={16} aria-hidden="true" />
-                ) : (
-                  <Copy size={16} aria-hidden="true" />
-                )}
-              </button>
-              <button
-                type="button"
-                className="icon-button danger-text"
-                aria-label={`Delete ${providerName(provider)} API key`}
-                title="Delete key"
-                disabled={busy}
-                onClick={() => setDeleting(true)}
-              >
-                <Trash2 size={16} aria-hidden="true" />
-              </button>
-            </>
-          )}
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            disabled={busy}
-          >
-            {summary?.saved ? "Replace" : "Add"}
-          </button>
-        </div>
-      )}
-      {error && !editing && (
-        <p className="field-error" role="alert">
-          {error}
-        </p>
       )}
       {deleting && (
         <ConfirmDialog

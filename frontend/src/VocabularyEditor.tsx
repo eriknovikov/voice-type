@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Plus, Trash2, Check, Pencil, BookOpen } from "lucide-react";
+import { Plus, Trash2, Check, Pencil } from "lucide-react";
 import type { VocabularyList } from "./api";
 import { Dropdown } from "./Dropdown";
 import { ActionsMenu } from "./ui";
@@ -54,58 +54,38 @@ export function VocabularyEditor({
   }, [renaming]);
   return (
     <div className="vocabulary-layout">
-      <div className="vocabulary-nav">
-        <div className="vocabulary-nav-heading">
-          <div className="vocabulary-mobile-selector">
-            <Dropdown
-              label="Vocabulary to edit"
-              value={selected}
-              disabled={busy}
-              onChange={onSelect}
-              options={lists.map((item) => ({
+      <p className="quiet vocabulary-intro">
+        Help recognition with names, acronyms and technical terms.
+      </p>
+      <div className="vocabulary-toolbar">
+        <div className="vocabulary-selector">
+          <Dropdown
+            label="Vocabulary to edit"
+            value={selected}
+            disabled={busy}
+            onChange={onSelect}
+            options={lists.map((item) => {
+              const count = item.terms.filter((term) => term.trim()).length;
+              return {
                 value: item.name,
                 label: item.name === "general" ? "General" : item.name,
-              }))}
-            />
-          </div>
-          <button
-            ref={createButton}
-            className="icon-button"
-            aria-label="New vocabulary"
-            title="New vocabulary"
-            disabled={busy}
-            onClick={() => {
-              setName("");
-              setError("");
-              setCreating(true);
-            }}
-          >
-            <Plus size={16} aria-hidden="true" />
-          </button>
+                description: `${count} ${count === 1 ? "term" : "terms"}${item.name !== "general" && item.name === active ? " · In use" : ""}`,
+              };
+            })}
+          />
         </div>
-        <div
-          className="vocabulary-list"
-          role="navigation"
-          aria-label="Vocabularies"
+        <button
+          ref={createButton}
+          disabled={busy}
+          onClick={() => {
+            setName("");
+            setError("");
+            setCreating(true);
+          }}
         >
-          {lists.map((item) => (
-            <button
-              key={item.original_name ?? item.name}
-              className={selected === item.name ? "selected" : ""}
-              aria-current={selected === item.name ? "true" : undefined}
-              title={item.name === "general" ? "General" : item.name}
-              disabled={busy}
-              onClick={() => onSelect(item.name)}
-            >
-              <BookOpen size={15} aria-hidden="true" />
-              <span>{item.name === "general" ? "General" : item.name}</span>
-              <small>{item.terms.filter((term) => term.trim()).length}</small>
-              {item.name !== "general" && item.name === active && (
-                <Check size={14} aria-label="In use" />
-              )}
-            </button>
-          ))}
-        </div>
+          <Plus size={16} aria-hidden="true" />
+          New vocabulary
+        </button>
       </div>
       <section className="vocabulary-detail" aria-label="Vocabulary editor">
         {list ? (
@@ -203,7 +183,9 @@ export function VocabularyEditor({
                   </p>
                 )}
                 <p>
-                  {termCount} {termCount === 1 ? "term" : "terms"}
+                  {selected === "general"
+                    ? "Included with every vocabulary."
+                    : "Used together with General terms."}
                 </p>
               </div>
               <div className="actions">
@@ -231,17 +213,28 @@ export function VocabularyEditor({
                 )}
               </div>
             </div>
-            <label htmlFor="vocabulary-terms">Terms</label>
+            <div className="vocabulary-terms-label">
+              <label htmlFor="vocabulary-terms">Terms</label>
+              <span>
+                {termCount} {termCount === 1 ? "term" : "terms"}
+              </span>
+            </div>
             <textarea
               id="vocabulary-terms"
               name="vocabulary-terms"
               className="vocabulary-terms"
+              rows={8}
+              placeholder={"Voice Type\nParakeet\nOpenRouter"}
+              aria-describedby="vocabulary-terms-help"
               disabled={busy}
               value={list.terms.join("\n")}
               onChange={(event) => onTerms(event.target.value.split(/\r?\n/))}
               spellCheck={false}
               autoComplete="off"
             />
+            <p id="vocabulary-terms-help" className="quiet vocabulary-help">
+              One term per line. Changes save automatically.
+            </p>
           </>
         ) : (
           <div className="empty">

@@ -1,6 +1,7 @@
 # Voice Type
 
-System-wide speech to text app. Press a hotkey, speak, press it again, then what you said lands instantly where your cursor is. Free, fast, accurate, private, and cool. 
+System-wide speech to text app. Press a hotkey, speak, press it again, then what you said lands instantly where your cursor is. Free, fast, accurate, private, and cool.
+
 
 ## Install
 
@@ -9,9 +10,6 @@ curl -fsSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/install
 ```
 
 
-Voice Type installs system-wide only. There is no per-user installation, so
-exactly one binary and one launcher can exist on a machine.
-
 <details>
 <summary>What does it do?</summary>
 It installs everything for you : the distro package at `/usr/bin/voice-type`, a launcher entry, an icon and
@@ -19,11 +17,13 @@ docs, with GTK4, WebKitGTK 6.0 and IBus as dependencies. `sudo` is needed for in
 
 </details>
 
+## Requirements
 
+Linux (x86_64/ARM64), GTK4, WebKitGTK 6.0, IBus, and PulseAudio or PipeWire-Pulse. The installer resolves package dependencies. Use an API key for cloud transcription or download a model for local transcription.
 
 ## Contributing
 
-If you encounter any problems, open up an issue or drop a PR. If so, please attach your system diagnostics (Go to App -> General -> Diagnostics, or run `voice-type doctor` in the terminal). 
+Found a problem? Open an issue or send a PR. For bug reports, open **General → Open diagnostics → Copy to clipboard** and attach the report, or run `voice-type doctor` in a terminal.
 
 ## Disclaimer
 

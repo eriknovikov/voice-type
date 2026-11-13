@@ -5,6 +5,7 @@ import React, {
   useSyncExternalStore,
 } from "react";
 import {
+  AlertTriangle,
   BookOpen,
   FileText,
   Mic,
@@ -14,6 +15,7 @@ import {
   Download,
   KeyRound,
   CircleHelp,
+  Minus,
   X,
 } from "lucide-react";
 import { Events } from "@wailsio/runtime";
@@ -22,8 +24,6 @@ import {
   type Status,
   type DesktopInfo,
   type AudioSource,
-  type LocalModel,
-  type LogPage,
   type Preferences,
   type ProfileSummary,
   type VocabularyList,
@@ -36,9 +36,11 @@ import { VocabularyEditor } from "./VocabularyEditor";
 import { ProfileEditor } from "./ProfileEditor";
 import { Profiles } from "./Profiles";
 import { LogViewer } from "./LogViewer";
+import { useLogs } from "./useLogs";
 import { ConfirmDialog } from "./ui";
 import { SettingsStore } from "./settingsStore";
 import { LocalModels } from "./LocalModels";
+import { useLocalModels } from "./useLocalModels";
 import { APIKeys } from "./APIKeys";
 import { FAQ } from "./FAQ";
 import { Diagnostics } from "./Diagnostics";
@@ -92,20 +94,22 @@ export function App() {
     level: 0,
   });
   const [sources, setSources] = useState<AudioSource[]>([]);
-  const [localModels, setLocalModels] = useState<LocalModel[]>([]);
   const [error, setError] = useState("");
+  const [operationError, setOperationError] = useState("");
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState("general");
   const [visible, setVisible] = useState(false);
-  const [logPage, setLogPage] = useState<LogPage | null>(null);
-  const [logOffset, setLogOffset] = useState(0);
-  const [logReload, setLogReload] = useState(0);
   const [outcome, setOutcome] = useState("all");
+  const logs = useLogs(visible && tab === "logs", outcome, setError);
   const [editor, setEditor] = useState<{
     profile: ProfileSummary | null;
   } | null>(null);
+  const modelDownloads = useLocalModels(
+    visible && (tab === "local-models" || editor !== null),
+  );
   const [dismissedNotice, setDismissedNotice] = useState("");
-  const [diagnosticsRequest, setDiagnosticsRequest] = useState(0);
+  const [dismissedWarning, setDismissedWarning] = useState<number | null>(null);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const prefsTail = useRef<Promise<unknown>>(Promise.resolve());
   const profileGuard = useRef<(() => Promise<boolean>) | null>(null);
   const windowActionVersion = useRef(0);
@@ -150,12 +154,8 @@ export function App() {
   };
   useEffect(() => {
     void store.load().catch((e) => setError(errorText(e)));
-    void api
-      .localModels()
-      .then(setLocalModels)
-      .catch(() => {});
     const offError = Events.On("operation-error", (event) =>
-      setError(String(eventValue(event.data))),
+      setOperationError(String(eventValue(event.data))),
     );
     const offWorkspace = Events.On("workspace-changed", (event) =>
       store.updateWorkspace(String(eventValue(event.data))),
@@ -228,11 +228,18 @@ export function App() {
       try {
         const [next, freshInfo] = await Promise.all([api.status(), api.info()]);
         if (alive) {
+          if (
+            next.warning ||
+            ["checking", "recording", "transcribing"].includes(next.state)
+          )
+            setOperationError("");
           setStatus((previous) =>
             previous.state === next.state &&
             previous.error === next.error &&
             previous.notice === next.notice &&
-            previous.notice_version === next.notice_version
+            previous.notice_version === next.notice_version &&
+            previous.warning === next.warning &&
+            previous.warning_version === next.warning_version
               ? previous
               : next,
           );
@@ -273,53 +280,6 @@ export function App() {
       if (tab === "audio") void api.stopTest().catch(() => {});
     };
   }, [tab]);
-  useEffect(() => {
-    if (tab !== "logs") {
-      setLogPage(null);
-      return;
-    }
-    if (!visible) return;
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try {
-        const page = await api.logs(outcome, logOffset);
-        if (alive && !page.unchanged) setLogPage(page);
-      } catch (e) {
-        if (alive) setError(errorText(e));
-      }
-      if (alive) timer = setTimeout(poll, 2000);
-    };
-    void poll();
-    return () => {
-      alive = false;
-      clearTimeout(timer);
-    };
-  }, [tab, visible, outcome, logOffset, logReload]);
-  useEffect(() => {
-    if (tab !== "local-models" || !visible) return;
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try {
-        const models = await api.localModels();
-        if (alive)
-          setLocalModels((previous) =>
-            JSON.stringify(previous) === JSON.stringify(models)
-              ? previous
-              : models,
-          );
-      } catch (e) {
-        if (alive) setError(errorText(e));
-      }
-      if (alive) timer = setTimeout(poll, 700);
-    };
-    void poll();
-    return () => {
-      alive = false;
-      clearTimeout(timer);
-    };
-  }, [tab, visible]);
   const navigate = (next: Tab) =>
     void run(async () => {
       await store.flush();
@@ -329,10 +289,6 @@ export function App() {
     });
   const openProfileEditor = (profile: ProfileSummary | null) => {
     setEditor({ profile });
-    void api
-      .localModels()
-      .then(setLocalModels)
-      .catch(() => {});
   };
   const updateVocabulary = (lists: VocabularyList[], debounce = false) =>
     store.patch({ vocabulary: lists }, debounce);
@@ -369,7 +325,17 @@ export function App() {
     ...new Set([settings?.notice, status.notice, info?.notice].filter(Boolean)),
   ].join(" ");
   const visibleError =
-    error || saveError || info?.preferences_error || status.error;
+    error ||
+    operationError ||
+    saveError ||
+    info?.preferences_error ||
+    status.error;
+  const visibleWarning =
+    status.state === "idle" &&
+    dismissedWarning !== (status.warning_version ?? 0)
+      ? status.warning
+      : "";
+  const visibleNotice = notice && notice !== dismissedNotice ? notice : "";
   return (
     <div className="app">
       <a className="skip-link" href="#main-content">
@@ -430,64 +396,41 @@ export function App() {
                   ? "Idle"
                   : status.state === "checking"
                     ? "Preparing"
-                  : status.state === "testing"
-                    ? "Testing"
-                    : status.state.charAt(0).toUpperCase() +
-                      status.state.slice(1)}
+                    : status.state === "testing"
+                      ? "Testing"
+                      : status.state.charAt(0).toUpperCase() +
+                        status.state.slice(1)}
             </span>
-            <button
-              className="window-close icon-button"
-              aria-label="Close window"
-              title="Hide to background"
-              onClick={() =>
-                void api.requestHide().catch((e) => setError(errorText(e)))
-              }
+            <div
+              className="window-controls"
+              role="group"
+              aria-label="Window controls"
             >
-              <X size={18} aria-hidden="true" />
-            </button>
+              <button
+                type="button"
+                className="window-minimize icon-button"
+                aria-label="Minimize window"
+                title="Keep Voice Type running in the background"
+                onClick={() =>
+                  void api.requestHide().catch((e) => setError(errorText(e)))
+                }
+              >
+                <Minus size={18} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className="window-close icon-button"
+                aria-label="Quit Voice Type"
+                title="Quit Voice Type"
+                onClick={() =>
+                  void api.quit().catch((e) => setError(errorText(e)))
+                }
+              >
+                <X size={18} aria-hidden="true" />
+              </button>
+            </div>
           </div>
         </header>
-        {visibleError && (
-          <div className="alert error" role="alert">
-            <span>{visibleError}</span>
-            <span className="alert-actions">
-              <button
-                className="text-button"
-                onClick={() => {
-                  setTab("settings");
-                  setDiagnosticsRequest((value) => value + 1);
-                }}
-              >
-                Diagnostics
-              </button>
-              {info?.preferences_error && !error && !saveError ? (
-                <button onClick={() => void run(() => savePreferences({}))}>
-                  Retry
-                </button>
-              ) : error ? (
-                <button
-                  className="icon-button"
-                  aria-label="Dismiss error"
-                  onClick={() => setError("")}
-                >
-                  <X size={15} aria-hidden="true" />
-                </button>
-              ) : null}
-            </span>
-          </div>
-        )}
-        {notice && notice !== dismissedNotice && (
-          <div className="alert notice" role="status">
-            <span>{notice}</span>
-            <button
-              className="icon-button"
-              aria-label="Dismiss notice"
-              onClick={() => setDismissedNotice(notice)}
-            >
-              <X size={15} aria-hidden="true" />
-            </button>
-          </div>
-        )}
         {!settings ? (
           <div className="empty">
             <h2>{error ? "Settings unavailable" : "Loading…"}</h2>
@@ -546,23 +489,24 @@ export function App() {
                     )}
                   </section>
                 )}
-                <Diagnostics
-                  onError={setError}
-                  autoRun={diagnosticsRequest}
-                />
+                <section className="settings-section">
+                  <div className="settings-group setting-row diagnostics-setting">
+                    <div>
+                      <h2>Diagnostics</h2>
+                      <p className="quiet section-note">
+                        Check your system or copy a report to share when asking
+                        for help.
+                      </p>
+                    </div>
+                    <button onClick={() => setDiagnosticsOpen(true)}>
+                      Open diagnostics
+                    </button>
+                  </div>
+                </section>
               </>
             )}
             {tab === "local-models" && (
-              <LocalModels
-                models={localModels}
-                busy={busy}
-                onInstall={(id) => void run(() => api.installLocalModel(id))}
-                onResume={(id) => void run(() => api.resumeLocalModel(id))}
-                onRetry={(id) => void run(() => api.retryLocalModel(id))}
-                onPause={(id) => void run(() => api.pauseLocalModel(id))}
-                onCancel={(id) => void run(() => api.cancelLocalModel(id))}
-                onRemove={(id) => void run(() => api.removeLocalModel(id))}
-              />
+              <LocalModels downloads={modelDownloads} />
             )}
             {tab === "api-keys" && (
               <APIKeys
@@ -727,14 +671,11 @@ export function App() {
             }
             {tab === "logs" && (
               <LogViewer
-                page={logPage}
+                page={logs.page}
                 outcome={outcome}
-                onOutcome={(value) => {
-                  setOutcome(value);
-                  setLogOffset(0);
-                  setLogPage(null);
-                }}
-                onOffset={(offset) => setLogOffset(Math.max(0, offset))}
+                onOutcome={setOutcome}
+                onLoadMore={logs.loadMore}
+                loadingMore={logs.loadingMore}
                 busy={busy}
                 onExport={() => void run(() => api.exportLogs(outcome))}
                 onClear={() =>
@@ -744,9 +685,7 @@ export function App() {
                     label: "Clear logs",
                     run: async () => {
                       await api.clearLogs();
-                      setLogOffset(0);
-                      setLogPage(null);
-                      setLogReload((value) => value + 1);
+                      logs.reset();
                     },
                   })
                 }
@@ -755,17 +694,92 @@ export function App() {
             {tab === "faq" && <FAQ />}
           </div>
         )}
+        <div
+          className="status-area"
+          data-state={
+            visibleError
+              ? "error"
+              : visibleWarning
+                ? "warning"
+                : visibleNotice
+                  ? "notice"
+                  : "empty"
+          }
+        >
+          {visibleError ? (
+            <div className="alert error" role="alert">
+              <span className="feedback-text" tabIndex={0}>
+                {visibleError}
+              </span>
+              <span className="alert-actions">
+                <button
+                  className="text-button"
+                  onClick={() => setDiagnosticsOpen(true)}
+                >
+                  Diagnostics
+                </button>
+                {info?.preferences_error &&
+                !error &&
+                !operationError &&
+                !saveError ? (
+                  <button onClick={() => void run(() => savePreferences({}))}>
+                    Retry
+                  </button>
+                ) : error || operationError ? (
+                  <button
+                    className="icon-button"
+                    aria-label="Dismiss error"
+                    onClick={() => {
+                      if (error) setError("");
+                      else setOperationError("");
+                    }}
+                  >
+                    <X size={15} aria-hidden="true" />
+                  </button>
+                ) : null}
+              </span>
+            </div>
+          ) : visibleWarning ? (
+            <div
+              className="alert warning"
+              role="status"
+              aria-label="Dictation warning"
+            >
+              <AlertTriangle size={18} aria-hidden="true" />
+              <span className="feedback-text">{visibleWarning}</span>
+              <button
+                className="icon-button"
+                aria-label="Dismiss warning"
+                onClick={() => setDismissedWarning(status.warning_version ?? 0)}
+              >
+                <X size={15} aria-hidden="true" />
+              </button>
+            </div>
+          ) : visibleNotice ? (
+            <div className="alert notice" role="status">
+              <span className="feedback-text" tabIndex={0}>
+                {visibleNotice}
+              </span>
+              <button
+                className="icon-button"
+                aria-label="Dismiss notice"
+                onClick={() => setDismissedNotice(notice)}
+              >
+                <X size={15} aria-hidden="true" />
+              </button>
+            </div>
+          ) : null}
+        </div>
       </main>
+      {diagnosticsOpen && (
+        <Diagnostics onClose={() => setDiagnosticsOpen(false)} />
+      )}
       {editor && settings && (
         <ProfileEditor
           profile={editor.profile}
           profiles={settings.profiles}
           apiKeys={settings.api_keys}
-          localModels={localModels}
-          onManageModels={() => {
-            setEditor(null);
-            void navigate("local-models");
-          }}
+          modelDownloads={modelDownloads}
           onSave={(update) =>
             store.mutate((revision) =>
               api.upsertProfile({ ...update, revision }),

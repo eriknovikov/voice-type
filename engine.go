@@ -50,6 +50,8 @@ type engine struct {
 	noticeVersion     uint64
 	recoveryVersion   uint64
 	lastAttemptFailed bool
+	warningUntil      time.Time
+	warningVersion    uint64
 	recorder          audioRecorder
 	stt               *sttClient
 	localModels       *LocalModelManager
@@ -122,6 +124,7 @@ func (d *engine) startSession() (operationErr error) {
 	}
 
 	d.lastAttemptFailed = false
+	d.warningUntil = time.Time{}
 	if err := d.reloadConfig(); err != nil {
 		d.lastAttemptFailed = true
 		d.runLog.complete(d.cfg.Provider, providerModel(d.cfg.Provider), "", "configuration_error", 0, 0, nil, err)
@@ -386,7 +389,15 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 			d.activeLocal = nil
 		}
 		d.state = stateIdle
-		if operationErr != nil && !d.shuttingDown {
+		if errors.Is(operationErr, errNoSpeech) {
+			d.lastAttemptFailed = false
+			if !d.shuttingDown {
+				d.warningUntil = time.Now().Add(dictationWarningDuration)
+				d.warningVersion++
+				logf("WARN", "%v", operationErr)
+			}
+			operationErr = nil
+		} else if operationErr != nil && !d.shuttingDown {
 			d.lastAttemptFailed = true
 		}
 		if d.sessionCancel != nil {
@@ -397,7 +408,7 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 		evictModel := false
 		selectedModel := ""
 		if !d.shuttingDown {
-			if err := d.reloadConfig(); err != nil {
+			if err := d.reloadConfig(); err != nil && !errors.Is(err, errNoProfiles) {
 				d.configError = err.Error()
 			} else {
 				d.configError = ""
@@ -431,7 +442,7 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 		cloud.mu.Lock()
 		cloudErr := cloud.result.Err
 		cloud.mu.Unlock()
-		if cloudErr != nil {
+		if cloudErr != nil && !errors.Is(cloudErr, errNoSpeech) {
 			streamResult := cloud.Finish()
 			streamFinished = true
 			timings.streamTiming = streamResult.Timing
@@ -459,9 +470,8 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 	}
 	duration := wavDurationSeconds(samples)
 	if len(samples) == 0 {
-		logf("AUDIO", "no audio captured")
-		d.runLog.complete(stt.settings.Provider, stt.settings.Model, "", "no_audio", 0, 0, nil, errors.New("no audio captured"))
-		return errors.New("no audio captured")
+		d.runLog.completeTimed(stt.settings.Provider, stt.settings.Model, "", "no_speech", 0, 0, nil, errNoSpeech, &timings)
+		return errNoSpeech
 	}
 	logf("AUDIO", "captured %.2fs (%d samples)", duration, len(samples))
 
@@ -578,6 +588,10 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 		}
 		d.runLog.completeTimed(stt.settings.Provider, requestedModel, finalModel, outcome, time.Since(t0), duration, attempts, logErr, &timings)
 	}()
+	if errors.Is(err, errNoSpeech) {
+		outcome = "no_speech"
+		return err
+	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
 			logf("STT", "cancelled during shutdown")
@@ -597,17 +611,10 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 	logf("STT", "%s/%s: %.2fs audio -> %d chars in %v (%s)",
 		stt.settings.Provider, result.ModelID, duration, len(result.Text), requestDuration.Round(time.Millisecond), result.billingSummary())
 
-	if result.Text == "" {
-		logf("STT", "empty transcript -- nothing to insert")
-		outcome = "empty_transcript"
-		if stt.local != nil {
-			return d.handleSTTError(errors.New("local model returned no text; nothing was inserted"), wavBytes(), true)
-		}
-		if localStream != nil {
-			rms, peak := recordingSignal(samples)
-			return cloudError(fmt.Sprintf("OpenAI completed transcription but returned no text for %.2fs of captured audio (RMS %.5f, peak %.5f); nothing was inserted", duration, rms, peak))
-		}
-		return errors.New("provider returned no text; nothing was inserted")
+	if strings.TrimSpace(result.Text) == "" {
+		outcome = "no_speech"
+		rms, peak := recordingSignal(samples)
+		return fmt.Errorf("%w Captured %.2fs of audio (RMS %.5f, peak %.5f).", errNoSpeech, duration, rms, peak)
 	}
 
 	prompt := stt.settings.vocabularyPrompt()

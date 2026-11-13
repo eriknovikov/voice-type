@@ -399,7 +399,7 @@ func lastDictationCheck() DiagnosticCheck {
 			copy := record
 			latest = &copy
 		}
-		if failure == nil && record.Outcome != "ok" && record.Outcome != "cancelled" {
+		if failure == nil && record.Outcome != "ok" && record.Outcome != "cancelled" && !record.isWarning() {
 			copy := record
 			failure = &copy
 		}
@@ -418,6 +418,9 @@ func lastDictationCheck() DiagnosticCheck {
 		return diagnosticCheck("Recent failure", "warn", format(failure))
 	}
 	if latest != nil {
+		if latest.isWarning() {
+			return diagnosticCheck("Last dictation", "warn", format(latest))
+		}
 		return diagnosticCheck("Last dictation", "ok", format(latest))
 	}
 	return diagnosticCheck("Last dictation", "info", "no completed dictation in the current log")

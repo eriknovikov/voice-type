@@ -124,8 +124,13 @@ func (s sttSettings) validateCredentials() error {
 	return nil
 }
 
+var errNoProfiles = errors.New("select a profile in General before recording")
+
 func (c Config) resolveSTT(workspace string) (sttSettings, error) {
 	if c.Profiles != nil {
+		if len(c.Profiles) == 0 {
+			return sttSettings{}, errNoProfiles
+		}
 		profile, ok := c.activeProfile()
 		if !ok {
 			return sttSettings{}, errors.New("select a profile in General before recording")
