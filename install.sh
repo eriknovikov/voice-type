@@ -16,6 +16,9 @@ ICON_FILE="$DATA_DIR/icons/hicolor/512x512/apps/$APP_ID.png"
 DOC_DIR="$DATA_DIR/doc/voice-type"
 # Installer tests point this at a fixture instead of the host's /usr/bin.
 INSTALLED_BIN=${VOICE_TYPE_INSTALLED_BIN:-/usr/bin/voice-type}
+# Releases before 6 installed to /usr/local, which wins on the desktop session
+# PATH and would start the old build instead of the installed one.
+LEGACY_SYSTEM_BIN=${VOICE_TYPE_LEGACY_BIN:-/usr/local/bin/voice-type}
 TEMP_DIR=
 STAGED_BIN=
 cleanup() {
@@ -82,9 +85,29 @@ resolve_tag() {
 }
 
 request_quit() {
-    if command -v voice-type >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
-        timeout 15 voice-type --quit 2>/dev/null || true
+    for candidate in "$INSTALLED_BIN" "$BIN_DIR/voice-type" "$LEGACY_SYSTEM_BIN"; do
+        if [ -x "$candidate" ] && command -v timeout >/dev/null 2>&1; then
+            timeout 15 "$candidate" --quit 2>/dev/null || true
+        fi
+    done
+}
+
+# An older system-wide build left by a pre-6 installer shadows the new binary
+# whenever a launcher resolves `voice-type` through the desktop PATH.
+remove_legacy_system_binary() {
+    [ "$LEGACY_SYSTEM_BIN" != "$INSTALLED_BIN" ] || return 0
+    { [ -e "$LEGACY_SYSTEM_BIN" ] || [ -L "$LEGACY_SYSTEM_BIN" ]; } || return 0
+    if rm -f "$LEGACY_SYSTEM_BIN" 2>/dev/null; then
+        printf '%s\n' "Removed the older Voice Type at $LEGACY_SYSTEM_BIN."
+        return 0
     fi
+    if [ "$(id -u)" -eq 0 ] || command -v sudo >/dev/null 2>&1; then
+        if as_root rm -f "$LEGACY_SYSTEM_BIN" </dev/null; then
+            printf '%s\n' "Removed the older Voice Type at $LEGACY_SYSTEM_BIN."
+            return 0
+        fi
+    fi
+    printf '%s\n' "An older Voice Type remains at $LEGACY_SYSTEM_BIN and takes precedence in the launcher; remove it with root." >&2
 }
 
 install_package() {
@@ -156,6 +179,7 @@ fi
 
 if [ "$MODE" = package ]; then
     install_package "$KIND"
+    remove_legacy_system_binary
     exit 0
 fi
 
@@ -253,6 +277,7 @@ if [ -f "$CONFIG_DIR/autostart/voice-type.desktop" ]; then
 fi
 mv -f "$STAGED_BIN" "$BIN_DIR/voice-type"
 STAGED_BIN=
+remove_legacy_system_binary
 rm -f "$BIN_DIR/voice-type-app" "$DATA_DIR/icons/hicolor/scalable/apps/voice-type.svg" "$DATA_DIR/icons/hicolor/512x512/apps/voice-type.png"
 printf 'Installed Voice Type %s. Open it from the launcher or run %s/voice-type\n' "$APP_VERSION" "$BIN_DIR"
 printf '%s\n' 'Remove it and every user file with uninstall.sh.'

@@ -34,6 +34,8 @@ LOG_FILE="$HOME/.voice-type-logs.jsonl"
 DIAGNOSTICS_DIR="${TMPDIR:-/tmp}/voice-type"
 # Installer tests point this at a fixture instead of the host's /usr/bin.
 INSTALLED_BIN=${VOICE_TYPE_INSTALLED_BIN:-/usr/bin/voice-type}
+# Releases before 6 installed to /usr/local and are not owned by any package.
+LEGACY_SYSTEM_BIN=${VOICE_TYPE_LEGACY_BIN:-/usr/local/bin/voice-type}
 CREDENTIAL_SERVICE=com.eriknovikov.voice-type
 KEEP_DATA=0
 REMOVED=0
@@ -142,7 +144,8 @@ voice_type_running() {
     for proc in /proc/[0-9]*/exe; do
         exe=$(readlink "$proc" 2>/dev/null || true)
         case "$exe" in
-            "$BIN_DIR/voice-type"|"$BIN_DIR/voice-type-app"|"$BIN_DIR/voice-type (deleted)"|"$BIN_DIR/voice-type-app (deleted)")
+            "$BIN_DIR/voice-type"|"$BIN_DIR/voice-type-app"|"$BIN_DIR/voice-type (deleted)"|"$BIN_DIR/voice-type-app (deleted)"|\
+            "$LEGACY_SYSTEM_BIN"|"$LEGACY_SYSTEM_BIN (deleted)")
                 return 0 ;;
         esac
     done
@@ -181,6 +184,17 @@ remove_files "$BIN_DIR/voice-type" "$BIN_DIR/voice-type-app" \
     "$DESKTOP_FILE" "$LEGACY_DESKTOP_FILE" "$ICON_FILE" "$LEGACY_ICON_FILE" \
     "$SCALABLE_ICON" "$AUTOSTART_FILE"
 remove_directory "$DOC_DIR"
+
+# The pre-6 system-wide installation is outside the package and outside BIN_DIR.
+if [ "$LEGACY_SYSTEM_BIN" != "$INSTALLED_BIN" ] && { [ -e "$LEGACY_SYSTEM_BIN" ] || [ -L "$LEGACY_SYSTEM_BIN" ]; }; then
+    if rm -f "$LEGACY_SYSTEM_BIN" 2>/dev/null; then
+        REMOVED=1
+    elif can_root && as_root rm -f "$LEGACY_SYSTEM_BIN" </dev/null; then
+        REMOVED=1
+    else
+        note "Could not remove the older Voice Type at $LEGACY_SYSTEM_BIN; remove it with root."
+    fi
+fi
 
 # 4. Remove every file the application wrote. `--keep-data` stops here.
 if [ "$KEEP_DATA" = 0 ]; then

@@ -53,8 +53,15 @@ esac
 		}
 	}
 	t.Setenv("PATH", filepath.Join(source, "tools")+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// A test must never see (or remove) the package manager state of the host.
+	for _, name := range []string{"dpkg-query", "rpm", "pacman"} {
+		writeInstallerTool(t, source, name, "#!/bin/sh\nexit 1\n")
+	}
 	t.Setenv("TMPDIR", t.TempDir())
 	t.Setenv("VOICE_TYPE_NO_KEYRING", "1")
+	// Keep the legacy system-wide path inside the fixture: no host binary may be
+	// quit, removed or inspected by a test.
+	t.Setenv("VOICE_TYPE_LEGACY_BIN", filepath.Join(t.TempDir(), "usr/local/bin/voice-type"))
 	return source, bin
 }
 func runInstaller(t *testing.T, source string, args ...string) (string, error) {

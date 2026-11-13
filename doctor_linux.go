@@ -30,6 +30,7 @@ func runDiagnostics(version string) DiagnosticsReport {
 	}
 	checks = append(checks, systemCheck())
 	checks = append(checks, desktopCheck())
+	checks = append(checks, installCheck())
 
 	config, configCheck, microphone := readConfigForDiagnostics()
 	checks = append(checks, configCheck)
@@ -77,6 +78,50 @@ func desktopCheck() DiagnosticCheck {
 			desktop+" · no Wayland/X11 session detected; shortcuts and text insertion may not work")
 	}
 	return diagnosticCheck("Desktop", "ok", session+" · "+desktop)
+}
+
+// installCheck reports a copy of the application that a desktop shortcut starts
+// instead of this one. The session PATH prefers /usr/local/bin, so a build left
+// there by an older installer wins over the packaged /usr/bin binary.
+func installCheck() DiagnosticCheck {
+	dirs := launchSearchDirs()
+	self, err := os.Executable()
+	if err != nil {
+		return diagnosticCheck("Installation", "info", "could not resolve the running executable")
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(self); resolveErr == nil {
+		self = resolved
+	}
+	selfInfo, selfErr := os.Stat(self)
+	for _, dir := range dirs {
+		candidate := filepath.Join(dir, "voice-type")
+		info, statErr := os.Stat(candidate)
+		if statErr != nil || info.Mode().Perm()&0o111 == 0 {
+			continue
+		}
+		if selfErr == nil && os.SameFile(selfInfo, info) {
+			return diagnosticCheck("Installation", "ok", "started from "+candidate)
+		}
+		return diagnosticCheck("Installation", "warn",
+			candidate+" starts instead of "+self+" when Voice Type is opened from the launcher; remove the older copy")
+	}
+	return diagnosticCheck("Installation", "info",
+		"no installed binary found in "+strings.Join(dirs, ", "))
+}
+
+// launchSearchDirs is the order a desktop session resolves `voice-type` in: the
+// system directories first, then the inherited PATH.
+func launchSearchDirs() []string {
+	dirs := []string{"/usr/local/bin", "/usr/bin"}
+	seen := map[string]bool{dirs[0]: true, dirs[1]: true}
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if dir == "" || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		dirs = append(dirs, dir)
+	}
+	return dirs
 }
 
 func readConfigForDiagnostics() (Config, DiagnosticCheck, string) {

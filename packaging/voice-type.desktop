@@ -3,8 +3,10 @@ Type=Application
 Name=Voice Type
 GenericName=Voice Dictation
 Comment=Speech to text at your cursor
-Exec=voice-type
-TryExec=voice-type
+# Absolute path: the package always installs here, and a bare name would resolve
+# through the session PATH, where a build left by an older installer wins.
+Exec=/usr/bin/voice-type
+TryExec=/usr/bin/voice-type
 Icon=io.github.eriknovikov.voice-type
 Terminal=false
 Categories=AudioVideo;Audio;
