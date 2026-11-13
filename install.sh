@@ -1,44 +1,35 @@
 #!/bin/sh
-# One application installer. Prefers the distribution package, which resolves
+# One application installer. Installs the distribution package, which resolves
 # GTK4, WebKitGTK 6.0, IBus and the audio stack from the distribution
-# repositories. Falls back to a per-user install from the release archive.
+# repositories. Voice Type installs system-wide only: there is no per-user mode,
+# so exactly one launcher and one binary can exist.
 set -eu
 umask 022
 REPO=eriknovikov/voice-type
-BIN_DIR=${VOICE_TYPE_BIN_DIR:-"$HOME/.local/bin"}
-DATA_DIR=${XDG_DATA_HOME:-"$HOME/.local/share"}
-CONFIG_DIR=${XDG_CONFIG_HOME:-"$HOME/.config"}
-RUNTIME_DIR=${XDG_RUNTIME_DIR:+"$XDG_RUNTIME_DIR/voice-type"}
-RUNTIME_DIR=${RUNTIME_DIR:-"${XDG_STATE_HOME:-$HOME/.local/state}/voice-type"}
 APP_ID=io.github.eriknovikov.voice-type
-DESKTOP_FILE="$DATA_DIR/applications/$APP_ID.desktop"
-ICON_FILE="$DATA_DIR/icons/hicolor/512x512/apps/$APP_ID.png"
-DOC_DIR="$DATA_DIR/doc/voice-type"
-# Installer tests point this at a fixture instead of the host's /usr/bin.
+# Installer tests point these at fixtures instead of the host paths.
 INSTALLED_BIN=${VOICE_TYPE_INSTALLED_BIN:-/usr/bin/voice-type}
-# Releases before 6 installed to /usr/local, which wins on the desktop session
-# PATH and would start the old build instead of the installed one.
 LEGACY_SYSTEM_BIN=${VOICE_TYPE_LEGACY_BIN:-/usr/local/bin/voice-type}
+# Releases could also install per user. Those copies are removed with the
+# package so no stale build can start instead of the installed one.
+LEGACY_USER_BIN_DIR=${VOICE_TYPE_BIN_DIR:-"$HOME/.local/bin"}
+LEGACY_DATA_DIR=${XDG_DATA_HOME:-"$HOME/.local/share"}
+LEGACY_DESKTOP_FILE="$LEGACY_DATA_DIR/applications/$APP_ID.desktop"
+LEGACY_OLD_DESKTOP_FILE="$LEGACY_DATA_DIR/applications/voice-type.desktop"
+LEGACY_ICON_FILE="$LEGACY_DATA_DIR/icons/hicolor/512x512/apps/$APP_ID.png"
+LEGACY_OLD_ICON_FILE="$LEGACY_DATA_DIR/icons/hicolor/512x512/apps/voice-type.png"
+LEGACY_SCALABLE_ICON="$LEGACY_DATA_DIR/icons/hicolor/scalable/apps/voice-type.svg"
+LEGACY_DOC_DIR="$LEGACY_DATA_DIR/doc/voice-type"
 TEMP_DIR=
-STAGED_BIN=
-cleanup() {
-    [ -z "$TEMP_DIR" ] || rm -rf "$TEMP_DIR"
-    [ -z "$STAGED_BIN" ] || rm -f "$STAGED_BIN"
-}
+cleanup() { [ -z "$TEMP_DIR" ] || rm -rf "$TEMP_DIR"; }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 fail() { printf '%s\n' "$*" >&2; exit 1; }
-usage() { printf '%s\n' 'Usage: install.sh [--user | --local] [--version v6.x.y]'; }
-MODE=auto
+usage() { printf '%s\n' 'Usage: install.sh [--version v6.x.y]'; }
 TAG=
-set_mode() {
-    [ "$MODE" = auto ] || { usage >&2; exit 2; }
-    MODE=$1
-}
 while [ $# -gt 0 ]; do
     case "$1" in
-        --user) set_mode user; shift ;;
-        --local) set_mode local; shift ;;
+        --user|--local) fail 'Voice Type installs system-wide only; per-user installation was removed.' ;;
         --version) [ $# -ge 2 ] || fail 'Missing release version.'; TAG=$2; shift 2 ;;
         --help|-h) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
@@ -64,13 +55,17 @@ package_kind() {
     fi
 }
 
+KIND=$(package_kind) || fail 'No supported package manager found. Voice Type installs system-wide from a deb, rpm or Arch package (apt-get, dnf or pacman on x86_64).'
+[ "$(id -u)" -eq 0 ] || command -v sudo >/dev/null 2>&1 ||
+    fail 'Installing system-wide requires root or sudo.'
+
 as_root() {
     if [ "$(id -u)" -eq 0 ]; then
         "$@"
     elif command -v sudo >/dev/null 2>&1; then
         sudo "$@"
     else
-        fail 'Installing system-wide requires root or sudo. Retry with --user for a per-user installation.'
+        fail 'Installing system-wide requires root or sudo.'
     fi
 }
 
@@ -84,36 +79,66 @@ resolve_tag() {
     case "$TAG" in *[!a-zA-Z0-9.-]*) fail 'Invalid release version.' ;; esac
 }
 
-request_quit() {
-    for candidate in "$INSTALLED_BIN" "$BIN_DIR/voice-type" "$LEGACY_SYSTEM_BIN"; do
-        if [ -x "$candidate" ] && command -v timeout >/dev/null 2>&1; then
-            timeout 15 "$candidate" --quit 2>/dev/null || true
-        fi
+# Any process running an installed copy has to be gone before the package is
+# replaced: a dictation in progress would lose its recording.
+voice_type_running() {
+    for proc in /proc/[0-9]*/exe; do
+        exe=$(readlink "$proc" 2>/dev/null || true)
+        case "$exe" in
+            "$INSTALLED_BIN"|"$INSTALLED_BIN (deleted)"|\
+            "$LEGACY_SYSTEM_BIN"|"$LEGACY_SYSTEM_BIN (deleted)"|\
+            "$LEGACY_USER_BIN_DIR/voice-type"|"$LEGACY_USER_BIN_DIR/voice-type (deleted)"|\
+            "$LEGACY_USER_BIN_DIR/voice-type-app"|"$LEGACY_USER_BIN_DIR/voice-type-app (deleted)")
+                return 0 ;;
+        esac
     done
+    return 1
 }
 
-# An older system-wide build left by a pre-6 installer shadows the new binary
-# whenever a launcher resolves `voice-type` through the desktop PATH.
-remove_legacy_system_binary() {
-    [ "$LEGACY_SYSTEM_BIN" != "$INSTALLED_BIN" ] || return 0
-    { [ -e "$LEGACY_SYSTEM_BIN" ] || [ -L "$LEGACY_SYSTEM_BIN" ]; } || return 0
-    if rm -f "$LEGACY_SYSTEM_BIN" 2>/dev/null; then
-        printf '%s\n' "Removed the older Voice Type at $LEGACY_SYSTEM_BIN."
-        return 0
+request_quit() {
+    if [ -x "$INSTALLED_BIN" ]; then
+        command -v timeout >/dev/null 2>&1 || fail 'Missing required command: timeout'
+        timeout 15 "$INSTALLED_BIN" --quit </dev/null || fail 'Could not request shutdown. Quit Voice Type and retry.'
     fi
+    i=0
+    while voice_type_running && [ "$i" -lt 50 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    if voice_type_running; then
+        fail 'Voice Type is still running; close it and retry.'
+    fi
+}
+
+# Remove a path, escalating only when the file is not writable by this user.
+remove_path() {
+    path=$1
+    { [ -e "$path" ] || [ -L "$path" ]; } || return 0
+    rm -f "$path" 2>/dev/null && return 0
     if [ "$(id -u)" -eq 0 ] || command -v sudo >/dev/null 2>&1; then
-        if as_root rm -f "$LEGACY_SYSTEM_BIN" </dev/null; then
-            printf '%s\n' "Removed the older Voice Type at $LEGACY_SYSTEM_BIN."
+        if as_root rm -f "$path" </dev/null; then
             return 0
         fi
     fi
-    printf '%s\n' "An older Voice Type remains at $LEGACY_SYSTEM_BIN and takes precedence in the launcher; remove it with root." >&2
+    printf '%s\n' "Could not remove the older installation at $path; remove it with root." >&2
+}
+
+# A pre-6 release installed to /usr/local or per user. Either copy takes
+# precedence over /usr/bin in a desktop or shell PATH, so both are removed.
+remove_legacy_installs() {
+    [ "$LEGACY_SYSTEM_BIN" = "$INSTALLED_BIN" ] || remove_path "$LEGACY_SYSTEM_BIN"
+    for path in \
+        "$LEGACY_USER_BIN_DIR/voice-type" "$LEGACY_USER_BIN_DIR/voice-type-app" \
+        "$LEGACY_DESKTOP_FILE" "$LEGACY_OLD_DESKTOP_FILE" \
+        "$LEGACY_ICON_FILE" "$LEGACY_OLD_ICON_FILE" "$LEGACY_SCALABLE_ICON"; do
+        remove_path "$path"
+    done
+    [ ! -d "$LEGACY_DOC_DIR" ] || rm -rf "$LEGACY_DOC_DIR"
 }
 
 install_package() {
-    KIND=$1
     if [ "$KIND" = arch ] && [ "$MACHINE" != x86_64 ]; then
-        fail 'Arch Linux packages are available for x86_64 only; retry with --user.'
+        fail 'Arch Linux packages are available for x86_64 only.'
     fi
     for cmd in curl sha256sum; do command -v "$cmd" >/dev/null 2>&1 || fail "Missing required command: $cmd"; done
     TEMP_DIR=$(mktemp -d)
@@ -142,7 +167,7 @@ install_package() {
         index($2, prefix) == 1 && index($2, "/") == 0 &&
         substr($2, length($2) - length(suffix) + 1) == suffix { print }
     ' "$TEMP_DIR/checksums.txt")
-    [ -n "$SELECTED" ] || fail "The $TAG release has no $KIND package for this architecture. Retry with --user."
+    [ -n "$SELECTED" ] || fail "The $TAG release has no $KIND package for this architecture."
     [ "$(printf '%s\n' "$SELECTED" | wc -l)" -eq 1 ] || fail 'Multiple matching packages in the release checksums.'
     EXPECTED=$(printf '%s\n' "$SELECTED" | awk '{ print $1 }')
     ASSET=$(printf '%s\n' "$SELECTED" | awk '{ print $2 }')
@@ -161,125 +186,12 @@ install_package() {
             as_root pacman -U --noconfirm "$TEMP_DIR/$ASSET"
             ;;
     esac
-    INSTALLED=$("$INSTALLED_BIN" --version) || fail 'Voice Type was installed but cannot start. Check the package dependency error above.'
-    [ "v$INSTALLED" = "$TAG" ] || fail "Installed Voice Type $INSTALLED does not match release $TAG."
-    printf 'Installed Voice Type %s system-wide. Open it from the launcher.\n' "$INSTALLED"
-    printf '%s\n' 'Remove the package, the desktop integration and every user file with uninstall.sh.'
 }
 
-if [ "$MODE" = auto ]; then
-    if KIND=$(package_kind) && { [ "$(id -u)" -eq 0 ] || command -v sudo >/dev/null 2>&1; }; then
-        MODE=package
-    else
-        MODE=user
-        printf '%s\n' 'No supported system package manager or root/sudo access was found; installing per-user from the release archive.'
-        printf '%s\n' 'For a system-wide installation with resolved dependencies, use the package for your distribution.'
-    fi
-fi
-
-if [ "$MODE" = package ]; then
-    install_package "$KIND"
-    remove_legacy_system_binary
-    exit 0
-fi
-
-for cmd in flock timeout; do command -v "$cmd" >/dev/null 2>&1 || fail "Missing required command: $cmd"; done
-
-for cmd in curl tar sha256sum; do command -v "$cmd" >/dev/null 2>&1 || fail "Missing required command: $cmd"; done
-
-if [ "$MODE" = local ]; then
-    SOURCE_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-    [ -f "$SOURCE_DIR/go.mod" ] || fail '--local requires a source checkout.'
-    make -C "$SOURCE_DIR" build
-    PAYLOAD=$SOURCE_DIR/build
-    SOURCE_ICON=$SOURCE_DIR/icon.png
-else
-    TEMP_DIR=$(mktemp -d)
-    resolve_tag
-    case "$(uname -m)" in x86_64) ARCH=x64 ;; aarch64|arm64) ARCH=arm64 ;; *) fail 'Unsupported architecture.' ;; esac
-    ARCHIVE="voice-type-linux-$ARCH.tar.gz"
-    BASE_URL="https://github.com/$REPO/releases/download/$TAG"
-    curl -fLsS "$BASE_URL/$ARCHIVE" -o "$TEMP_DIR/$ARCHIVE"
-    curl -fLsS "$BASE_URL/checksums.txt" -o "$TEMP_DIR/checksums.txt"
-    # Select exactly this artifact; never follow paths from a checksum file.
-    EXPECTED=$(awk -v name="$ARCHIVE" '$2 == name { print $1 }' "$TEMP_DIR/checksums.txt")
-    [ "${#EXPECTED}" -eq 64 ] || fail 'Missing or invalid application checksum.'
-    case "$EXPECTED" in *[!0-9a-fA-F]*) fail 'Invalid checksum.' ;; esac
-    printf '%s  %s\n' "$EXPECTED" "$ARCHIVE" > "$TEMP_DIR/selected-checksum"
-    (cd "$TEMP_DIR" && sha256sum -c selected-checksum)
-    tar -tzf "$TEMP_DIR/$ARCHIVE" | sort > "$TEMP_DIR/entries"
-    printf '%s\n' LICENSE THIRD-PARTY-LICENSES.md icon.png voice-type | sort > "$TEMP_DIR/expected-entries"
-    cmp -s "$TEMP_DIR/entries" "$TEMP_DIR/expected-entries" || fail 'Unexpected application archive layout.'
-    mkdir "$TEMP_DIR/payload"
-    tar -xzf "$TEMP_DIR/$ARCHIVE" --no-same-owner -C "$TEMP_DIR/payload"
-    PAYLOAD=$TEMP_DIR/payload
-    SOURCE_ICON=$PAYLOAD/icon.png
-fi
-for asset in "$PAYLOAD/voice-type" "$SOURCE_ICON" "$PAYLOAD/LICENSE" "$PAYLOAD/THIRD-PARTY-LICENSES.md"; do
-    if [ ! -f "$asset" ] || [ -L "$asset" ]; then fail 'Missing application binary or icon.'; fi
-done
-APP_VERSION=$("$PAYLOAD/voice-type" --version) || fail 'Cannot run application. Install GTK4 and WebKitGTK 6.0 runtime libraries.'
-case "$APP_VERSION" in [6-9].*|[1-9][0-9]*.*) ;; *) fail 'Refusing to install a daemon-only binary.' ;; esac
-[ -z "$TAG" ] || [ "v$APP_VERSION" = "$TAG" ] || fail 'Downloaded application version does not match the release.'
-CONTROL_BIN=$PAYLOAD/voice-type
-
-# Request the normal guarded shutdown. A refused/unfinished save or recording
-# must prevent replacement; forwarding alone does not acknowledge completion.
-timeout 15 "$CONTROL_BIN" --quit || fail 'Could not request shutdown. Quit Voice Type and retry.'
-[ ! -L "$RUNTIME_DIR" ] || fail 'Unsafe runtime directory.'
-(umask 077; mkdir -p "$RUNTIME_DIR")
-if [ "$(stat -c %u "$RUNTIME_DIR")" != "$(id -u)" ] || [ "$(stat -c %a "$RUNTIME_DIR")" != 700 ]; then fail 'Runtime directory must be private and owned by you.'; fi
-[ ! -L "$RUNTIME_DIR/engine.lock" ] || fail 'Unsafe engine lock.'
-(umask 077; touch "$RUNTIME_DIR/engine.lock")
-if [ ! -f "$RUNTIME_DIR/engine.lock" ] || [ "$(stat -c %u "$RUNTIME_DIR/engine.lock")" != "$(id -u)" ] || [ "$(stat -c %a "$RUNTIME_DIR/engine.lock")" != 600 ]; then fail 'Engine lock must be a private regular file owned by you.'; fi
-exec 9>> "$RUNTIME_DIR/engine.lock"
-flock -w 15 9 || fail 'Voice Type is still running. Finish dictation or save/discard pending edits, then retry.'
-# Old installations predating the engine lock must also be closed manually.
-for proc in /proc/[0-9]*/exe; do
-    exe=$(readlink "$proc" 2>/dev/null || true)
-    case "$exe" in "$BIN_DIR/voice-type"|"$BIN_DIR/voice-type-app"|"$BIN_DIR/voice-type (deleted)"|"$BIN_DIR/voice-type-app (deleted)") fail 'An older Voice Type process is still running; close it before retrying.' ;; esac
- done
-
-if [ -L "$DATA_DIR/doc" ] || [ -L "$DOC_DIR" ]; then fail 'Unsafe Voice Type documentation directory.'; fi
-mkdir -p "$BIN_DIR" "$(dirname "$DESKTOP_FILE")" "$(dirname "$ICON_FILE")" "$DOC_DIR"
-install -m 644 "$PAYLOAD/LICENSE" "$DOC_DIR/LICENSE"
-install -m 644 "$PAYLOAD/THIRD-PARTY-LICENSES.md" "$DOC_DIR/THIRD-PARTY-LICENSES.md"
-STAGED_BIN=$(mktemp "$BIN_DIR/.voice-type.XXXXXX")
-install -m 755 "$PAYLOAD/voice-type" "$STAGED_BIN"
-install -m 644 "$SOURCE_ICON" "$ICON_FILE"
-# Desktop Entry escaping, not shell escaping. Reject line-breaking paths.
-case "$BIN_DIR" in *'
-'*|*"$(printf '\r')"*) fail 'Invalid application installation path.' ;; esac
-# Literal dollar signs belong to Desktop Entry escaping.
-# shellcheck disable=SC2016
-ESCAPED_BIN=$(printf '%s' "$BIN_DIR/voice-type" | sed 's/\\/\\\\/g; s/"/\\"/g; s/`/\\`/g; s/\$/\\$/g; s/%/%%/g')
-write_entry() {
-    entry_path=$1
-    entry_argument=$2
-    entry_temp=$(mktemp "$(dirname "$entry_path")/.voice-type-entry.XXXXXX")
-    cat > "$entry_temp" <<ENTRY
-[Desktop Entry]
-Type=Application
-Name=Voice Type
-Comment=Voice dictation
-Exec="$ESCAPED_BIN"$entry_argument
-Icon=$APP_ID
-Terminal=false
-Categories=AudioVideo;Audio;
-StartupNotify=true
-ENTRY
-    chmod 644 "$entry_temp"
-    mv -f "$entry_temp" "$entry_path"
-}
-write_entry "$DESKTOP_FILE" ''
-if [ -f "$CONFIG_DIR/autostart/voice-type.desktop" ]; then
-    write_entry "$CONFIG_DIR/autostart/voice-type.desktop" ' --background'
-fi
-mv -f "$STAGED_BIN" "$BIN_DIR/voice-type"
-STAGED_BIN=
-remove_legacy_system_binary
-rm -f "$BIN_DIR/voice-type-app" "$DATA_DIR/icons/hicolor/scalable/apps/voice-type.svg" "$DATA_DIR/icons/hicolor/512x512/apps/voice-type.png"
-printf 'Installed Voice Type %s. Open it from the launcher or run %s/voice-type\n' "$APP_VERSION" "$BIN_DIR"
-printf '%s\n' 'Remove it and every user file with uninstall.sh.'
-if command -v gtk-update-icon-cache >/dev/null 2>&1; then gtk-update-icon-cache -f -t "$DATA_DIR/icons/hicolor" >/dev/null 2>&1 || true; fi
-if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database "$DATA_DIR/applications" >/dev/null 2>&1 || true; fi
+request_quit
+install_package
+INSTALLED=$("$INSTALLED_BIN" --version) || fail 'Voice Type was installed but cannot start. Check the package dependency error above.'
+[ "v$INSTALLED" = "$TAG" ] || fail "Installed Voice Type $INSTALLED does not match release $TAG."
+remove_legacy_installs
+printf 'Installed Voice Type %s system-wide. Open it from the launcher.\n' "$INSTALLED"
+printf '%s\n' 'Remove the package, the desktop integration and every user file with uninstall.sh.'

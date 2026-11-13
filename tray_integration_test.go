@@ -303,60 +303,28 @@ func TestNativeTray(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("tray quit did not stop app")
 	}
-	// Install the actual native binary into a private clean home, then upgrade
-	// an old companion and uninstall while it is running. No rebuild is needed.
-	source := filepath.Join(home, "source")
-	if err := os.MkdirAll(filepath.Join(source, "build"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(source, "tools"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	for _, asset := range []struct {
-		from, to string
-		mode     os.FileMode
-	}{
-		{"install.sh", filepath.Join(source, "install.sh"), 0755},
-		{"uninstall.sh", filepath.Join(source, "uninstall.sh"), 0755},
-		{"icon.png", filepath.Join(source, "icon.png"), 0644},
-		{binary, filepath.Join(source, "build/voice-type"), 0755},
-		{filepath.Join(filepath.Dir(binary), "LICENSE"), filepath.Join(source, "build/LICENSE"), 0644},
-		{filepath.Join(filepath.Dir(binary), "THIRD-PARTY-LICENSES.md"), filepath.Join(source, "build/THIRD-PARTY-LICENSES.md"), 0644},
-	} {
-		data, err := os.ReadFile(asset.from)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(asset.to, data, asset.mode); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(source, "go.mod"), []byte("module example.test/app\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(source, "tools/make"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", filepath.Join(source, "tools")+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// Uninstall a running legacy copy of the native binary. Voice Type installs
+	// system-wide only, so the copy is placed where an older release left it.
 	binDir := filepath.Join(home, "bin")
 	t.Setenv("VOICE_TYPE_BIN_DIR", binDir)
+	t.Setenv("VOICE_TYPE_INSTALLED_BIN", filepath.Join(home, "missing/voice-type"))
+	t.Setenv("VOICE_TYPE_LEGACY_BIN", filepath.Join(home, "legacy-voice-type"))
 	configFile := filepath.Join(home, ".voice-type-config.jsonc")
 	if _, err := os.Stat(configFile); err != nil {
 		t.Fatal(err)
 	}
-	for iteration := range 2 {
-		if iteration == 1 {
-			if err := os.WriteFile(filepath.Join(binDir, "voice-type-app"), []byte("old-companion"), 0755); err != nil {
-				t.Fatal(err)
-			}
-		}
-		value, err := exec.CommandContext(ctx, filepath.Join(source, "install.sh"), "--local").CombinedOutput()
-		if err != nil {
-			t.Fatalf("native install/upgrade: %v %s", err, value)
-		}
+	payload, err := os.ReadFile(binary)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(binDir, "voice-type-app")); !os.IsNotExist(err) {
-		t.Fatal("companion survived upgrade")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "voice-type"), payload, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "voice-type-app"), []byte("old-companion"), 0755); err != nil {
+		t.Fatal(err)
 	}
 	installed := exec.CommandContext(ctx, filepath.Join(binDir, "voice-type"), "--background")
 	if err := installed.Start(); err != nil {
@@ -364,7 +332,25 @@ func TestNativeTray(t *testing.T) {
 	}
 	defer func() { installed.Process.Kill(); installed.Wait() }()
 	waitEvent("desktop.started", 2)
-	if value, err := exec.CommandContext(ctx, filepath.Join(source, "uninstall.sh")).CombinedOutput(); err != nil {
+	tools := filepath.Join(home, "tools")
+	if err := os.MkdirAll(tools, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"dpkg-query", "rpm", "pacman"} {
+		if err := os.WriteFile(filepath.Join(tools, name), []byte("#!/bin/sh\nexit 1\n"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	uninstaller, err := os.ReadFile("uninstall.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	uninstallScript := filepath.Join(home, "uninstall.sh")
+	if err := os.WriteFile(uninstallScript, uninstaller, 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if value, err := exec.CommandContext(ctx, "sh", uninstallScript).CombinedOutput(); err != nil {
 		t.Fatalf("native uninstall: %v %s", err, value)
 	}
 	if err := installed.Wait(); err != nil {
@@ -372,6 +358,9 @@ func TestNativeTray(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(binDir, "voice-type")); !os.IsNotExist(err) {
 		t.Fatal("binary survived uninstall")
+	}
+	if _, err := os.Stat(filepath.Join(binDir, "voice-type-app")); !os.IsNotExist(err) {
+		t.Fatal("companion survived uninstall")
 	}
 	if _, err := os.Stat(configFile); !os.IsNotExist(err) {
 		t.Fatal("uninstall kept the configuration file", err)

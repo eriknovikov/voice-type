@@ -82,10 +82,9 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Build distribution packages
         run: make packages
-      - name: Verify and package application
+      - name: Verify application build
         env:
           VERSION: ${{ needs.version.outputs.version }}
-          ARCH: ${{ matrix.arch }}
           GOARCH: ${{ matrix.goarch }}
         run: |
           test "$(build/voice-type --version)" = "$VERSION"
@@ -95,10 +94,6 @@ jobs:
           printf '%s\n' "$INFO" | grep -F 'CGO_ENABLED=1'
           printf '%s\n' "$INFO" | grep -F "vcs.revision=$GITHUB_SHA"
           printf '%s\n' "$INFO" | grep -F 'vcs.modified=false'
-          mkdir -p "$RUNNER_TEMP/payload" "$RUNNER_TEMP/release"
-          cp build/voice-type build/THIRD-PARTY-LICENSES.md icon.png LICENSE "$RUNNER_TEMP/payload/"
-          tar -czf "$RUNNER_TEMP/release/voice-type-linux-$ARCH.tar.gz" -C "$RUNNER_TEMP/payload" LICENSE THIRD-PARTY-LICENSES.md icon.png voice-type
-          tar -tzf "$RUNNER_TEMP/release/voice-type-linux-$ARCH.tar.gz"
       - name: Install packages in clean distributions
         run: ./scripts/verify-packages.sh
       - name: Collect release assets
@@ -129,12 +124,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          test "$(find . -maxdepth 1 -name '*.tar.gz' | wc -l)" -eq 2
           test "$(find . -maxdepth 1 -name '*.deb' | wc -l)" -eq 2
           test "$(find . -maxdepth 1 -name '*.rpm' | wc -l)" -eq 2
           test "$(find . -maxdepth 1 -name '*.pkg.tar.zst' | wc -l)" -eq 1
           FILES=$(find . -maxdepth 1 -type f \
-            \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) \
             -printf '%f\n' | sort)
           printf '%s\n' "$FILES"
           # shellcheck disable=SC2086

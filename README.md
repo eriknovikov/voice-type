@@ -9,6 +9,9 @@ curl -fsSL https://raw.githubusercontent.com/eriknovikov/voice-type/main/install
 ```
 
 
+Voice Type installs system-wide only. There is no per-user installation, so
+exactly one binary and one launcher can exist on a machine.
+
 <details>
 <summary>What does it do?</summary>
 It installs everything for you : the distro package at `/usr/bin/voice-type`, a launcher entry, an icon and
