@@ -41,6 +41,7 @@ func startEngine(version string) (*engine, error) {
 		}
 	}
 	settings, err := cfg.resolveSTT(workspaceLoad())
+	recordingReady := err == nil
 	if err != nil {
 		// A new installation has no profile yet. Setup is not a load failure;
 		// startSession still requires a profile before opening the microphone.
@@ -62,13 +63,20 @@ func startEngine(version string) (*engine, error) {
 	if configErr != nil {
 		d.configError = configErr.Error()
 		d.runLog.diagnostic("configuration.failed", "error", "Configuration could not be loaded.")
-	} else if !errors.Is(err, errNoProfiles) {
+	} else if recordingReady {
 		if err := settings.validateCredentials(); err != nil {
 			d.configError = err.Error()
+			recordingReady = false
 		}
 	}
+	d.recordingReady = recordingReady && configErr == nil
 	return d, nil
 }
+
+// RecordingReady reports whether a cold start can dictate immediately: config,
+// active profile and credentials all resolved. It deliberately ignores the UI
+// onboarding marker, which is absent on installs that never changed a setting.
+func (d *engine) RecordingReady() bool { return d.recordingReady }
 
 func (d *engine) Status() Status {
 	d.mu.Lock()
