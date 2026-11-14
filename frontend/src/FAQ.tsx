@@ -19,12 +19,14 @@ export function FAQ() {
         <details className="faq-item">
           <summary>Local, OpenAI or OpenRouter?</summary>
           <p>
-            Local works offline without an API key. Choose Parakeet Unified
-            English for English and live processing, or Parakeet TDT v3 for 25
-            European languages after recording. Selecting an uninstalled model
-            starts its download; progress continues if you leave the editor.
-            OpenAI and OpenRouter need internet access and a funded provider
-            account.
+            Local works offline without an API key. Parakeet Unified English is
+            English only and the only model that streams. Parakeet Ultra and
+            Parakeet TDT v3 cover 25 European languages, and Qwen3 ASR covers 30
+            languages including Chinese, Japanese, Korean and Arabic while
+            detecting the language automatically; batch models insert text after
+            recording. Selecting an uninstalled model starts its download;
+            progress continues if you leave the editor. OpenAI and OpenRouter
+            need internet access and a funded provider account.
           </p>
         </details>
         <details className="faq-item">

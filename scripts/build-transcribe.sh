@@ -9,6 +9,12 @@ SOURCE_DIR="$NATIVE_DIR/source-$REV"
 ARCHIVE="$NATIVE_DIR/transcribe.cpp-$REV.tar.gz"
 BUILD_DIR="$NATIVE_DIR/build"
 PREFIX="$NATIVE_DIR/install"
+# The stamp records the inputs that change the compiled engine: revision,
+# Vulkan mode and this script's build flags. A matching stamp lets local and
+# CI builds skip the multi-minute C++ compile.
+STAMP="$NATIVE_DIR/.voice-type-build"
+SCRIPT_SHA256=$(sha256sum "$0" | awk '{print $1}')
+LICENSE_SHA256=$(sha256sum "$ROOT/LICENSE" | awk '{print $1}')
 
 for tool in cmake curl sha256sum tar pkg-config go; do
     command -v "$tool" >/dev/null 2>&1 || {
@@ -58,6 +64,17 @@ case "${VOICE_TYPE_VULKAN:-auto}" in
         ;;
 esac
 
+if [ -f "$STAMP" ] &&
+    [ "$(cat "$STAMP")" = "$REV $VULKAN $SCRIPT_SHA256 $LICENSE_SHA256" ] &&
+    [ -f "$PREFIX/include/transcribe.abihash" ] &&
+    { [ -f "$PREFIX/lib/transcribe-link.json" ] || [ -f "$PREFIX/lib64/transcribe-link.json" ]; } &&
+    [ -f "$NATIVE_DIR/pkgconfig/voicetype-transcribe.pc" ] &&
+    [ -f "$ROOT/build/LICENSE" ] &&
+    [ -f "$ROOT/build/THIRD-PARTY-LICENSES.md" ]; then
+    printf 'transcribe.cpp %s already built (%s backend build)\n' "$REV" "$VULKAN"
+    exit 0
+fi
+
 cmake -S "$SOURCE_DIR" -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
@@ -94,4 +111,5 @@ cp "$ROOT/LICENSE" "$ROOT/build/LICENSE"
     printf '\n---\n\n'
     cat "$SOURCE_DIR/THIRD-PARTY-LICENSES.md"
 } > "$ROOT/build/THIRD-PARTY-LICENSES.md"
+printf '%s %s %s %s\n' "$REV" "$VULKAN" "$SCRIPT_SHA256" "$LICENSE_SHA256" > "$STAMP"
 printf 'Built transcribe.cpp %s (%s backend build)\n' "$REV" "$VULKAN"

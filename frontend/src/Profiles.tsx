@@ -2,8 +2,13 @@ import { Plus, Pencil } from "lucide-react";
 import type { ProfileSummary } from "./api";
 import { providerName } from "./ProfileEditor";
 
-const modelName = (id?: string) =>
-  id === "parakeet-tdt-v3" ? "Parakeet TDT v3" : "Parakeet Unified English";
+const modelNames: Record<string, string> = {
+  "parakeet-unified-en": "Parakeet Unified English",
+  "parakeet-tdt-v3": "Parakeet TDT v3",
+  "parakeet-ultra": "Parakeet Ultra",
+  "qwen3-asr-0.6b": "Qwen3 ASR 0.6B",
+};
+const modelName = (id?: string) => (id && modelNames[id]) || id || "Local model";
 const modeName = (mode?: string) =>
   mode === "live" ? "Live" : mode === "none" ? "Batch" : "Streaming";
 

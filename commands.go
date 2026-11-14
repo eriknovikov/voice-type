@@ -69,6 +69,11 @@ func (r *commandRouter) submit(command Command) {
 		r.dispatch(command)
 		return
 	}
+	// Pressing the hotkey again during startup must not replay as an immediate
+	// start-then-stop pair once the engine becomes ready.
+	if command == CommandToggle && len(r.pending) > 0 && r.pending[len(r.pending)-1] == CommandToggle {
+		return
+	}
 	if len(r.pending) < 32 {
 		r.pending = append(r.pending, command)
 	}
@@ -81,8 +86,10 @@ func (r *commandRouter) start(recordingReady bool) {
 	}
 	r.ready = true
 	for _, command := range r.pending {
+		// An unready engine cannot record, and a hotkey launch must not open
+		// settings: the tray already reports that setup is needed.
 		if command == CommandToggle && !recordingReady {
-			command = CommandShow
+			continue
 		}
 		r.dispatch(command)
 	}

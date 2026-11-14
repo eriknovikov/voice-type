@@ -20,28 +20,43 @@ import (
 )
 
 func TestPinnedLocalCatalogMetadataAndCapabilities(t *testing.T) {
-	if len(localModelCatalog) != 2 {
-		t.Fatalf("catalog offers %d models, want only the two pinned Parakeet models", len(localModelCatalog))
+	pinned := []struct {
+		id         string
+		repository string
+		filename   string
+		revision   string
+		bytes      int64
+		sha256     string
+		streaming  bool
+		license    string
+	}{
+		{localModelUnifiedEnglish, "handy-computer/parakeet-unified-en-0.6b-gguf", "parakeet-unified-en-0.6b-Q8_0.gguf", "7e948f21b7bdbac698d3318db9d350f1096f3b6c", 731_357_568, "4b50b6dd862bf6e346929aaf4f5eaacec003bfa3f56462d6c874b41ef2f38795", true, "CC BY 4.0"},
+		{localModelParakeetV3, "handy-computer/parakeet-tdt-0.6b-v3-gguf", "parakeet-tdt-0.6b-v3-Q8_0.gguf", "85ac09ea12fc4b1112fa76810059364bc6adc9de", 739_508_576, "5859f77944efcd8eafa23a6350731960b2b55b2203df51f319665c807d802cc7", false, "CC BY 4.0"},
+		{localModelParakeetUltra, "handy-computer/parakeet-ultra-gguf", "parakeet-ultra-Q8_0.gguf", "a1539be1b849ea7463b88343e5277b373d0c4ea9", 740_363_168, "007a59761e9258779f189df396b50d12b83bb5b79e66df4b955c230d2f2a0a59", false, "CC BY 4.0"},
+		{localModelQwen3ASR, "handy-computer/Qwen3-ASR-0.6B-gguf", "Qwen3-ASR-0.6B-Q8_0.gguf", "7e7c69a577fa2725dfedbe34b5e999336e30a19b", 850_423_456, "f081b2d5e23bd669d92cc331d722a8a0681943b8e6f34b48996fd5c319b5acd8", false, "Apache 2.0"},
 	}
-	unified, ok := localModelByID(localModelUnifiedEnglish)
-	if !ok || unified.Revision != "7e948f21b7bdbac698d3318db9d350f1096f3b6c" || unified.Bytes != 731_357_568 || unified.SHA256 != "4b50b6dd862bf6e346929aaf4f5eaacec003bfa3f56462d6c874b41ef2f38795" || !unified.SupportsStreaming || !strings.Contains(unified.License, "CC BY 4.0") || !strings.Contains(unified.ModelCardURL, unified.Revision) {
-		t.Fatalf("Unified English artifact or streaming capability drifted: %+v", unified)
+	if len(localModelCatalog) != len(pinned) {
+		t.Fatalf("catalog offers %d models, want the %d pinned models", len(localModelCatalog), len(pinned))
 	}
-	v3, ok := localModelByID(localModelParakeetV3)
-	if !ok || v3.Revision != "85ac09ea12fc4b1112fa76810059364bc6adc9de" || v3.Bytes != 739_508_576 || v3.SHA256 != "5859f77944efcd8eafa23a6350731960b2b55b2203df51f319665c807d802cc7" || v3.SupportsStreaming {
-		t.Fatalf("Parakeet v3 artifact or batch-only capability drifted: %+v", v3)
+	for _, want := range pinned {
+		model, ok := localModelByID(want.id)
+		if !ok || model.Repository != want.repository || model.Filename != want.filename || model.Revision != want.revision || model.Bytes != want.bytes || model.SHA256 != want.sha256 || model.SupportsStreaming != want.streaming || !strings.Contains(model.License, want.license) || !strings.Contains(model.ModelCardURL, model.Revision) || model.RAMBytes <= 0 {
+			t.Fatalf("pinned model %q artifact or capability drifted: %+v", want.id, model)
+		}
 	}
 	for _, mode := range []streamingMode{streamingModeProcess, streamingModeLive, streamingModeNone} {
 		if err := validateStreamingMode(localModelUnifiedEnglish, mode); err != nil {
 			t.Fatalf("Unified English rejected %q: %v", mode, err)
 		}
 	}
-	if err := validateStreamingMode(localModelParakeetV3, streamingModeNone); err != nil {
-		t.Fatal(err)
-	}
-	for _, mode := range []streamingMode{streamingModeProcess, streamingModeLive} {
-		if err := validateStreamingMode(localModelParakeetV3, mode); err == nil {
-			t.Fatalf("Parakeet v3 unexpectedly accepts %q", mode)
+	for _, id := range []string{localModelParakeetV3, localModelParakeetUltra, localModelQwen3ASR} {
+		if err := validateStreamingMode(id, streamingModeNone); err != nil {
+			t.Fatal(err)
+		}
+		for _, mode := range []streamingMode{streamingModeProcess, streamingModeLive} {
+			if err := validateStreamingMode(id, mode); err == nil {
+				t.Fatalf("%s unexpectedly accepts %q", id, mode)
+			}
 		}
 	}
 }

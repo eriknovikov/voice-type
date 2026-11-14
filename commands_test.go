@@ -61,7 +61,7 @@ func TestCommandRouterBoundAndConcurrency(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 100 {
 		wg.Add(1)
-		go func() { defer wg.Done(); r.submit(CommandToggle) }()
+		go func() { defer wg.Done(); r.submit(CommandShow) }()
 	}
 	wg.Wait()
 	r.start(true)
@@ -70,16 +70,46 @@ func TestCommandRouterBoundAndConcurrency(t *testing.T) {
 	}
 }
 
-func TestStartupRecoveryDoesNotAutomaticallyRecord(t *testing.T) {
+func TestPendingTogglesCollapseAndUnreadyTogglesAreDropped(t *testing.T) {
 	var got []Command
 	r := commandRouter{dispatch: func(c Command) { got = append(got, c) }}
 	r.submit(CommandToggle)
-	r.start(false)
-	if !reflect.DeepEqual(got, []Command{CommandShow}) {
-		t.Fatal(got)
-	}
 	r.submit(CommandToggle)
-	if got[1] != CommandToggle {
-		t.Fatal("explicit command after recovery was ignored")
+	r.submit(CommandShow)
+	r.submit(CommandToggle)
+	r.submit(CommandToggle)
+	r.start(true)
+	if !reflect.DeepEqual(got, []Command{CommandToggle, CommandShow, CommandToggle}) {
+		t.Fatalf("dispatch %v", got)
+	}
+	got = nil
+	unready := commandRouter{dispatch: func(c Command) { got = append(got, c) }}
+	unready.submit(CommandToggle)
+	unready.start(false)
+	if len(got) != 0 {
+		t.Fatalf("unready hotkey opened settings: %v", got)
+	}
+}
+
+func TestStartupWindowVisibility(t *testing.T) {
+	for _, test := range []struct {
+		command     Command
+		ready, tray bool
+		want        bool
+	}{
+		{CommandShow, true, true, false},
+		{CommandShow, false, false, false},
+		{CommandToggle, true, true, true},
+		{CommandToggle, true, false, true},
+		{CommandToggle, false, true, true},
+		{CommandToggle, false, false, false},
+		{CommandBackground, true, true, true},
+		{CommandBackground, true, false, true},
+		{CommandBackground, false, true, true},
+		{CommandBackground, false, false, false},
+	} {
+		if got := startupWindowHidden(test.command, test.ready, test.tray); got != test.want {
+			t.Errorf("%s ready=%v tray=%v: hidden=%v", test.command, test.ready, test.tray, got)
+		}
 	}
 }
