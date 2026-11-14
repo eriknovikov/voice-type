@@ -159,10 +159,12 @@ func Run(version string, command Command) error {
 	}
 	b.initializePreferences()
 	startupReady := b.prefs.SetupComplete && b.Status().Error == "" && b.preferencesError == "" && b.notice == "" && ConfigNotice() == "" && b.Status().Notice == ""
-	hidden := (command == CommandBackground || command == CommandToggle) && startupReady
+	hidden := startupWindowHidden(command, startupReady, b.trayStatus())
 	// Recovery/setup feedback takes precedence over an automatic first recording.
 	initial := command
-	if command == CommandToggle && !startupReady {
+	if command == CommandToggle && !startupReady && !hidden {
+		// Without a tray icon settings is the only discoverable way to finish
+		// setup, so the hotkey falls back to opening it.
 		initial = CommandShow
 	}
 	router.submit(initial)
@@ -251,6 +253,19 @@ func Run(version string, command Command) error {
 		}
 	}()
 	return app.Run()
+}
+
+// startupWindowHidden reports whether a launch starts without opening settings.
+// Background and hotkey launches stay out of the way, even before setup is
+// complete: only an explicit settings request (the tray, or no arguments) may
+// show the window. Without a tray icon, an unready launch falls back to
+// settings so the user still has a discoverable way to finish setup.
+func startupWindowHidden(command Command, startupReady, trayAvailable bool) bool {
+	switch command {
+	case CommandBackground, CommandToggle:
+		return startupReady || trayAvailable
+	}
+	return false
 }
 
 func trayState(status Status) string {
