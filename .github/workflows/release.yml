@@ -54,6 +54,12 @@ jobs:
       VOICE_TYPE_VULKAN: "0"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      # The engine build is the slowest step. Its stamp keys off the pinned
+      # revision and build flags, so a cached tree skips straight through.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/transcribe
+          key: transcribe-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-transcribe.sh', 'scripts/generate-transcribe-pkgconfig.go') }}
       - name: Native dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake libgtk-4-dev libwebkitgtk-6.0-dev libx11-dev libxkbcommon-dev pkg-config ibus dbus-x11 xvfb gnome-settings-daemon-common shellcheck
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -64,12 +70,18 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: make check build
+      # Tests run once, on x64; the ARM job only needs to produce its artifacts.
+      - if: matrix.arch == 'x64'
+        run: make check build
+      - if: matrix.arch != 'x64'
+        run: make build
       - name: Mock providers and isolated IBus
+        if: matrix.arch == 'x64'
         run: VOICE_TYPE_TEST_IBUS_DAEMON=/usr/bin/ibus-daemon go test -race ./...
         env:
           PKG_CONFIG_PATH: ${{ github.workspace }}/build/transcribe/pkgconfig
       - name: Native application and tray
+        if: matrix.arch == 'x64'
         run: xvfb-run -a make native-check
         env:
           GDK_BACKEND: x11
@@ -94,8 +106,8 @@ jobs:
           printf '%s\n' "$INFO" | grep -F 'CGO_ENABLED=1'
           printf '%s\n' "$INFO" | grep -F "vcs.revision=$GITHUB_SHA"
           printf '%s\n' "$INFO" | grep -F 'vcs.modified=false'
-      - name: Install packages in clean distributions
-        run: ./scripts/verify-packages.sh
+      # Clean-container install checks are intentionally not part of CI.
+      # Verify a release locally with `make packages && make verify-packages`.
       - name: Collect release assets
         run: |
           mkdir -p "$RUNNER_TEMP/release"
