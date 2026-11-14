@@ -67,6 +67,8 @@ const (
 
 	localModelUnifiedEnglish = "parakeet-unified-en"
 	localModelParakeetV3     = "parakeet-tdt-v3"
+	localModelParakeetUltra  = "parakeet-ultra"
+	localModelQwen3ASR       = "qwen3-asr-0.6b"
 
 	streamingModeProcess = "process"
 	streamingModeLive    = "live"

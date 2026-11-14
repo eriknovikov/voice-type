@@ -70,6 +70,35 @@ var localModelCatalog = []localModelDefinition{
 		LicenseURL:        "https://creativecommons.org/licenses/by/4.0/",
 		ModelCardURL:      "https://huggingface.co/handy-computer/parakeet-tdt-0.6b-v3-gguf/blob/85ac09ea12fc4b1112fa76810059364bc6adc9de/README.md",
 	},
+	{
+		ID:                localModelParakeetUltra,
+		Name:              "Parakeet Ultra",
+		Filename:          "parakeet-ultra-Q8_0.gguf",
+		Repository:        "handy-computer/parakeet-ultra-gguf",
+		Revision:          "a1539be1b849ea7463b88343e5277b373d0c4ea9",
+		Bytes:             740_363_168,
+		RAMBytes:          1_122_394_112, // ~1.0 GiB resident while loaded
+		SHA256:            "007a59761e9258779f189df396b50d12b83bb5b79e66df4b955c230d2f2a0a59",
+		Languages:         "25 European languages, auto-detected",
+		VocabularySupport: "Biasing",
+		License:           "CC BY 4.0",
+		LicenseURL:        "https://creativecommons.org/licenses/by/4.0/",
+		ModelCardURL:      "https://huggingface.co/handy-computer/parakeet-ultra-gguf/blob/a1539be1b849ea7463b88343e5277b373d0c4ea9/README.md",
+	},
+	{
+		ID:           localModelQwen3ASR,
+		Name:         "Qwen3 ASR 0.6B",
+		Filename:     "Qwen3-ASR-0.6B-Q8_0.gguf",
+		Repository:   "handy-computer/Qwen3-ASR-0.6B-gguf",
+		Revision:     "7e7c69a577fa2725dfedbe34b5e999336e30a19b",
+		Bytes:        850_423_456,
+		RAMBytes:     884_408_320, // ~843 MiB resident while loaded
+		SHA256:       "f081b2d5e23bd669d92cc331d722a8a0681943b8e6f34b48996fd5c319b5acd8",
+		Languages:    "30 languages, auto-detected",
+		License:      "Apache 2.0",
+		LicenseURL:   "https://www.apache.org/licenses/LICENSE-2.0",
+		ModelCardURL: "https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/blob/7e7c69a577fa2725dfedbe34b5e999336e30a19b/README.md",
+	},
 }
 
 const (

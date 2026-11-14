@@ -20,9 +20,6 @@ export const providerName = (provider: string) =>
         ? "Local"
         : provider;
 const unifiedModel = "parakeet-unified-en";
-const modelSupportsStreaming = (modelID: string) => modelID === unifiedModel;
-const defaultMode = (modelID: string) =>
-  modelSupportsStreaming(modelID) ? "process" : "none";
 const nextName = (baseName: string, profiles: ProfileSummary[]) => {
   let name = baseName;
   let suffix = 2;
@@ -70,6 +67,11 @@ export function ProfileEditor({
     busy: modelBusy,
     actions: modelActions,
   } = modelDownloads;
+  const modelSupportsStreaming = (modelID: string) =>
+    localModels.find((model) => model.id === modelID)?.supports_streaming ??
+    modelID === unifiedModel;
+  const defaultMode = (modelID: string) =>
+    modelSupportsStreaming(modelID) ? "process" : "none";
   const suggestName = (provider: string, modelID: string) =>
     nextName(
       provider === "local"
