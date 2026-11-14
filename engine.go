@@ -72,9 +72,10 @@ type engine struct {
 	captureStartedAt   time.Time
 	pendingStartupStop time.Time
 
-	testRecorder *Recorder
-	testTimer    *time.Timer
-	exitOnce     sync.Once
+	testRecorder   *Recorder
+	testTimer      *time.Timer
+	exitOnce       sync.Once
+	recordingReady bool // resolved once by startEngine; immutable afterwards
 }
 
 func newEngine(cfg Config, recorder audioRecorder, settings sttSettings) *engine {

@@ -157,19 +157,23 @@ func Run(version string, command Command) error {
 	if preferencesErr != nil {
 		b.engine.RecordDiagnostic("preferences.invalid", "error", "Could not read desktop preferences; check file permissions")
 	}
+	recordingReady := b.engine.RecordingReady()
+	if recordingReady && !b.prefs.SetupComplete {
+		// A configured install may predate the settings save that normally sets
+		// this marker. Keep it truthful so it never blocks a hotkey launch.
+		b.prefs.SetupComplete = true
+	}
 	b.initializePreferences()
-	startupReady := b.prefs.SetupComplete && b.Status().Error == "" && b.preferencesError == "" && b.notice == "" && ConfigNotice() == "" && b.Status().Notice == ""
-	hidden := startupWindowHidden(command, startupReady, b.trayStatus())
-	// Recovery/setup feedback takes precedence over an automatic first recording.
+	hidden := startupWindowHidden(command, recordingReady, b.trayStatus())
+	// Without a tray icon settings is the only discoverable way to finish
+	// setup, so an unusable hotkey launch falls back to opening it.
 	initial := command
-	if command == CommandToggle && !startupReady && !hidden {
-		// Without a tray icon settings is the only discoverable way to finish
-		// setup, so the hotkey falls back to opening it.
+	if command == CommandToggle && !recordingReady && !hidden {
 		initial = CommandShow
 	}
 	router.submit(initial)
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
-		router.start(startupReady)
+		router.start(recordingReady)
 		b.engine.RecordDiagnostic("desktop.started", "ok", "Voice Type started.")
 	})
 	// The settings window is created on first use for background and toggle
@@ -256,14 +260,13 @@ func Run(version string, command Command) error {
 }
 
 // startupWindowHidden reports whether a launch starts without opening settings.
-// Background and hotkey launches stay out of the way, even before setup is
-// complete: only an explicit settings request (the tray, or no arguments) may
-// show the window. Without a tray icon, an unready launch falls back to
-// settings so the user still has a discoverable way to finish setup.
-func startupWindowHidden(command Command, startupReady, trayAvailable bool) bool {
+// Background and hotkey launches stay out of the way: only an explicit settings
+// request (the tray, or no arguments) may show the window. Without a tray icon,
+// an unusable hotkey launch falls back to settings so setup stays reachable.
+func startupWindowHidden(command Command, recordingReady, trayAvailable bool) bool {
 	switch command {
 	case CommandBackground, CommandToggle:
-		return startupReady || trayAvailable
+		return recordingReady || trayAvailable
 	}
 	return false
 }
