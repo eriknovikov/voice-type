@@ -35,7 +35,7 @@ dev:
 	wails3 dev -config ./build/config.yml
 
 check: frontend native-engine
-	@test -z "$$(gofmt -l *.go cmd/voice-type/*.go)" || { gofmt -l *.go cmd/voice-type/*.go; exit 1; }
+	@test -z "$$(gofmt -l *.go src/*.go cmd/voice-type/*.go)" || { gofmt -l *.go src/*.go cmd/voice-type/*.go; exit 1; }
 	npm --prefix frontend test
 	go vet ./...
 	go test -race ./...

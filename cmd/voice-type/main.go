@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	vt "github.com/eriknovikov/voice-type"
+	vt "github.com/eriknovikov/voice-type/src"
 )
 
 var version = "dev"

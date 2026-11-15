@@ -341,7 +341,7 @@ func TestNativeTray(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	uninstaller, err := os.ReadFile("uninstall.sh")
+	uninstaller, err := os.ReadFile(filepath.Join("..", "uninstall.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}

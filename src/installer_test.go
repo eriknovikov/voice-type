@@ -24,7 +24,7 @@ func installerFixture(t *testing.T) (string, string) {
 		}
 	}
 	for _, name := range []string{"install.sh", "uninstall.sh"} {
-		data, err := os.ReadFile(name)
+		data, err := os.ReadFile(filepath.Join("..", name))
 		if err != nil {
 			t.Fatal(err)
 		}
