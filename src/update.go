@@ -2,7 +2,6 @@ package voicetype
 
 import (
 	"context"
-	_ "embed"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,10 +14,11 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	embedded "github.com/eriknovikov/voice-type"
 )
 
-//go:embed install.sh
-var installerScript []byte
+var installerScript = embedded.Installer
 
 const (
 	latestReleaseURL = "https://github.com/eriknovikov/voice-type/releases/latest"

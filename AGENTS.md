@@ -2,10 +2,16 @@
 
 ## Structure and behavior
 
-- One Linux Wails v3 app: `cmd/voice-type` is the app entry point; root Go files
-  share flat `package voicetype`. React lives in `frontend/`.
+- One Linux Wails v3 app: `cmd/voice-type` is the app entry point; the Go
+  package lives in `src/` as flat `package voicetype`. React lives in `frontend/`.
+- `embed.go` at the repository root is the only Go file outside `src/`: it
+  embeds `frontend/dist`, `icon.png` and `install.sh` because `go:embed`
+  patterns cannot reference parent directories.
 - `frontend/src/api.ts` contains handwritten Wails `Call.ByName` calls and JSON
-  types, not generated bindings. Keep them aligned with `bridge.go` and Go DTOs.
+  types, not generated bindings. Wails derives binding IDs from the Go package
+  path (`github.com/eriknovikov/voice-type/src.Bridge.<Method>`), so moving the
+  package means updating `api.ts`. Keep the calls aligned with `bridge.go` and
+  the Go DTOs.
 - Minimize hides; Quit/× exits. Preserve `RequestHide`/`RequestQuit` →
   `flush-settings` → `CompleteWindowAction`: it guards profile drafts and flushes
   settings, shortcuts and preferences before hiding/quitting.
@@ -16,7 +22,7 @@
   build dependencies are listed in `.github/workflows/test.yml`.
 - `make dev`: Wails + Vite HMR using `build/config.yml`; backend restarts build
   `build/voice-type-dev`. Its watcher does not watch `VERSION`; restart after a bump.
-- `make build`: production binary at `build/voice-type`. `app.go` embeds
+- `make build`: production binary at `build/voice-type`. `embed.go` embeds
   `frontend/dist`, so UI changes require rebuilding the binary outside dev mode.
 - `make check`: frontend typecheck/build/tests, gofmt verification, Go vet/race
   tests, Python syntax and shell checks.
@@ -27,7 +33,7 @@
   Outside Make recipes, supply the native pkg-config path explicitly:
 
   ```sh
-  CGO_ENABLED=1 PKG_CONFIG_PATH="$PWD/build/transcribe/pkgconfig" go test -race -run '^TestName$' .
+  CGO_ENABLED=1 PKG_CONFIG_PATH="$PWD/build/transcribe/pkgconfig" go test -race -run '^TestName$' ./src
   ```
 
 - Native sources are pinned by `scripts/build-transcribe.sh`; do not edit generated

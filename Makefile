@@ -35,7 +35,7 @@ dev:
 	wails3 dev -config ./build/config.yml
 
 check: frontend native-engine
-	@test -z "$$(gofmt -l *.go cmd/voice-type/*.go)" || { gofmt -l *.go cmd/voice-type/*.go; exit 1; }
+	@test -z "$$(gofmt -l *.go src/*.go cmd/voice-type/*.go)" || { gofmt -l *.go src/*.go cmd/voice-type/*.go; exit 1; }
 	npm --prefix frontend test
 	go vet ./...
 	go test -race ./...
@@ -63,7 +63,7 @@ verify-packages:
 	./scripts/verify-packages.sh "$(PACKAGE_DIR)"
 
 native-check: build
-	VOICE_TYPE_DESKTOP_TEST_BINARY="$(CURDIR)/build/voice-type" go test -race -count=1 -run '^TestNativeTray$$' -v
+	VOICE_TYPE_DESKTOP_TEST_BINARY="$(CURDIR)/build/voice-type" go test -race -count=1 -run '^TestNativeTray$$' -v ./src
 	python3 scripts/smoke.py
 
 install:

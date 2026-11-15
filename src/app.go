@@ -2,7 +2,6 @@ package voicetype
 
 import (
 	"bytes"
-	"embed"
 	"image"
 	"image/color"
 	"image/png"
@@ -12,16 +11,11 @@ import (
 	"strings"
 	"time"
 
+	embedded "github.com/eriknovikov/voice-type"
 	"github.com/godbus/dbus/v5"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 )
-
-//go:embed frontend/dist
-var assets embed.FS
-
-//go:embed icon.png
-var appIcon []byte
 
 func trayAvailable() bool {
 	conn, err := dbus.ConnectSessionBus()
@@ -68,7 +62,7 @@ func trayIcon(state string) []byte {
 }
 func Run(version string, command Command) error {
 	appID, appName := applicationIdentity()
-	frontend, err := fs.Sub(assets, "frontend/dist")
+	frontend, err := fs.Sub(embedded.Frontend, "frontend/dist")
 	if err != nil {
 		return err
 	}
@@ -86,7 +80,7 @@ func Run(version string, command Command) error {
 	defer router.close()
 	done := make(chan struct{})
 	app := application.New(application.Options{
-		Name: appName, Icon: appIcon, Description: "System-wide voice dictation",
+		Name: appName, Icon: embedded.Icon, Description: "System-wide voice dictation",
 		Linux:    application.LinuxOptions{ApplicationID: appID},
 		Services: []application.Service{application.NewService(b)},
 		Assets:   application.AssetOptions{Handler: application.BundledAssetFileServer(frontend)},
