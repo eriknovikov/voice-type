@@ -147,7 +147,8 @@ export interface LogPage {
   unchanged?: boolean;
 }
 const call = <T>(method: string, ...args: unknown[]): Promise<T> =>
-  Call.ByName(`github.com/eriknovikov/voice-type.Bridge.${method}`, ...args);
+  // Wails derives binding IDs from the Go package path: the package lives in src/.
+  Call.ByName(`github.com/eriknovikov/voice-type/src.Bridge.${method}`, ...args);
 export const api = {
   beginShortcutCapture: () => call<void>("BeginShortcutCapture"),
   endShortcutCapture: () => call<void>("EndShortcutCapture"),

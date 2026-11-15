@@ -8,7 +8,10 @@
   embeds `frontend/dist`, `icon.png` and `install.sh` because `go:embed`
   patterns cannot reference parent directories.
 - `frontend/src/api.ts` contains handwritten Wails `Call.ByName` calls and JSON
-  types, not generated bindings. Keep them aligned with `bridge.go` and Go DTOs.
+  types, not generated bindings. Wails derives binding IDs from the Go package
+  path (`github.com/eriknovikov/voice-type/src.Bridge.<Method>`), so moving the
+  package means updating `api.ts`. Keep the calls aligned with `bridge.go` and
+  the Go DTOs.
 - Minimize hides; Quit/× exits. Preserve `RequestHide`/`RequestQuit` →
   `flush-settings` → `CompleteWindowAction`: it guards profile drafts and flushes
   settings, shortcuts and preferences before hiding/quitting.
