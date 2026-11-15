@@ -63,7 +63,7 @@ verify-packages:
 	./scripts/verify-packages.sh "$(PACKAGE_DIR)"
 
 native-check: build
-	VOICE_TYPE_DESKTOP_TEST_BINARY="$(CURDIR)/build/voice-type" go test -race -count=1 -run '^TestNativeTray$$' -v
+	VOICE_TYPE_DESKTOP_TEST_BINARY="$(CURDIR)/build/voice-type" go test -race -count=1 -run '^TestNativeTray$$' -v ./src
 	python3 scripts/smoke.py
 
 install:
