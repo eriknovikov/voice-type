@@ -2,6 +2,10 @@
 
 System-wide speech to text app. Press a hotkey, speak, press it again, then what you said lands instantly where your cursor is. Free, fast, accurate, private, and cool.
 
+## Why use it?
+
+There are other apps for dictation, like [hex from anomaly](https://github.com/anomalyco/hex) . If you care mostly about a nice UX, and offline models, then I definitely suggest you use hex instead. I personally use Voice Type because of memory constraints (I work with 8GB of RAM laptops, so having 1GB for a local model isn't viable), and the Voice Type's integration with openai's gpt-transcribe model is incredible accurate and fast. You'd need an openai (or openrouter) api key for this, which costs cents per month even with heavy usage, but is a tradeoff I'm perfectly OK with. 
+Either way, I suggest you try a few of these dictation apps, and keep the one you like the most.
 
 ## Install
 
@@ -19,15 +23,11 @@ docs, with GTK4, WebKitGTK 6.0 and IBus as dependencies. `sudo` is needed for in
 
 ## Requirements
 
-Linux (x86_64/ARM64), GTK4, WebKitGTK 6.0, IBus, and PulseAudio or PipeWire-Pulse. The installer resolves package dependencies. Use an API key for cloud transcription or download a model for local transcription.
+Linux (x86_64/ARM64), GTK4, WebKitGTK 6.0, IBus, and PulseAudio or PipeWire-Pulse. The installer resolves package dependencies, plus an API key for cloud transcription or download a model for local transcription.
 
 ## Contributing
 
 Found a problem? Open an issue or send a PR. For bug reports, open **General → Open diagnostics → Copy to clipboard** and attach the report, or run `voice-type doctor` in a terminal.
-
-## Disclaimer
-
-Despite the time and effort (almost a year) I've put into Voice Type, I would genuinely recommend you used [hex from anomaly](https://github.com/anomalyco/hex). It's open source as well, though many times better. As a solo dev I can't, nor expect to compete with such a big, resourceful, and talented group of people. Still, I'd love your feedback on Voice Type!
 
 
 ## Uninstall
