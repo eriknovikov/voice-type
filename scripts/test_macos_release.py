@@ -48,8 +48,9 @@ class FakeNative:
         if args[-1] == "--version":
             return "6.4.0\n"
         if name == "codesign":
-            if "--extract-certificates" in args:
-                Path(args[args.index("--extract-certificates") + 1] + "0").write_bytes(self.certificate)
+            extracts = [arg for arg in args if arg.startswith("--extract-certificates=")]
+            if extracts:
+                Path(extracts[0].split("=", 1)[1] + "0").write_bytes(self.certificate)
                 return ""
             if "--requirements" in args and "--display" in args:
                 return self.requirement

@@ -42,7 +42,8 @@ class ReleaseAssetGateTests(unittest.TestCase):
                 elif scenario == "extra":
                     (directory / "extra.dmg").write_bytes(b"unexpected")
                 result = subprocess.run(["bash", "-eu", "-o", "pipefail", "-c", script], cwd=directory,
-                                        env=dict(os.environ, VERSION=version, RUNNER_TEMP=temporary), capture_output=True, text=True)
+                                        env=dict(os.environ, VERSION=version, RUNNER_TEMP=temporary,
+                                                 SOURCE_SHA="native-fixture", GITHUB_SHA="packaging-fixture"), capture_output=True, text=True)
                 self.assertEqual(result.returncode == 0, scenario == "complete", result.stderr)
                 self.assertEqual((directory / "checksums.txt").exists(), scenario == "complete")
 

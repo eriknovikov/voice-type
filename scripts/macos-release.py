@@ -45,7 +45,7 @@ def verify_signature(path, run=command, app=True):
     require("Signature=adhoc" not in info, "ad-hoc signatures cannot be distributed")
     with tempfile.TemporaryDirectory(prefix="voice-type-certificate-") as temporary:
         prefix = Path(temporary) / "certificate"
-        run("codesign", "--display", "--extract-certificates", prefix, path)
+        run("codesign", "--display", f"--extract-certificates={prefix}", path)
         require(Path(str(prefix) + "0").read_bytes() == CERTIFICATE, "unexpected signing certificate")
     if app:
         require(re.search(r"flags=.*\bruntime\b", info), "hardened runtime required")

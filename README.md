@@ -85,6 +85,9 @@ encrypted certificate/password secrets declared in `.github/workflows/macos.yml`
 Never paste private credentials into source or issues. The Mac Preview workflow
 publishes both verified DMGs as a prerelease, never Latest, without changing VERSION.
 Stable publishing still requires both Mac DMGs and all five Linux packages.
+For a packaging-only retry, maintainers can set `MACOS_PREVIEW_NATIVE_RUN` to a
+prior preview run. Reuse requires both native gates to have passed, unchanged app/
+build sources and matching binary source stamps. Clear the variable after recovery.
 
 ## Contributing
 

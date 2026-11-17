@@ -12,10 +12,14 @@
   D10 now supersedes all historical Developer ID/notarization requirements below.
   The user approved end-to-end implementation, feat/mac commit/push, hosted CI and
   public preview downloads. No main merge, stable publication or VERSION bump.
-- Next: push the keychain search/default fix after run 44154713968. Trust/import
-  now succeed in seconds and find-identity reports the correct valid fingerprint,
-  but codesign cannot find its private key. Register the temporary keychain in
-  user search/default lists (matching GitHub's documented signing setup), retry.
+- Next: push certificate extraction argument fix and packaging-only artifact reuse.
+  Run 44158542323 passed native gates and now signs/strict-verifies both apps.
+  Certificate extraction failed because optional codesign prefix needs `=path`.
+  Reuse its existing binaries (version 6.4.0-mac.preview.6, source 002d590) via
+  temporary repo variable MACOS_PREVIEW_NATIVE_RUN=44158542323. Provenance validator
+  checks both trusted native jobs passed and app/build sources are unchanged; signing
+  checks each binary's clean source stamp. Do NOT rebuild the app for pipeline-only
+  corrections. Clear the variable after publishing/verification. No DMG yet.
   Run 44141118702 passed BOTH
   native jobs, including minimum-OS/runtime-dependency/source-stamp checks, but
   signing stalled in non-sudo security add-trusted-cert; cancelled at user's status
@@ -233,6 +237,12 @@ publish unless I explicitly authorize it.
 
 ## Progress log
 
+- Run 44158542323: keychain search/default fix PASS; signing and initial strict
+  verification work on both architectures. Failure is `--extract-certificates`
+  optional argument parsing: use --extract-certificates=prefix, not separate argv.
+  Added cross-run artifact reuse for packaging-only retries. 23 local Python tests
+  and actionlint PASS; live provenance probe selects correct preview.6/source/run.
+  Release notes/target now distinguish app source from packaging workflow revision.
 - Run 44154713968: both native jobs PASS again. Noninteractive administrative
   trust fix PASS on both runners; 1 valid signing identity matches pinned cert.
   codesign fails `no identity found`/`item could not be found in keychain`.

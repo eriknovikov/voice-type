@@ -9,6 +9,12 @@ on:
       version:
         type: string
         default: ""
+      native-run-id:
+        type: string
+        default: ""
+      source-sha:
+        type: string
+        default: ""
     secrets:
       MACOS_CERTIFICATE_P12_BASE64:
         required: false
@@ -17,9 +23,11 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   native:
+    if: inputs.native-run-id == ''
     strategy:
       fail-fast: false
       matrix:
@@ -93,7 +101,7 @@ jobs:
 
   signed:
     needs: native
-    if: inputs.sign && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/mac') && github.event_name != 'pull_request'
+    if: always() && inputs.sign && (needs.native.result == 'success' || (needs.native.result == 'skipped' && inputs.native-run-id != '')) && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/mac') && github.event_name != 'pull_request'
     environment: macos-release
     strategy:
       fail-fast: false
@@ -109,6 +117,7 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer
       BUILD_VERSION: ${{ inputs.version }}
+      SOURCE_SHA: ${{ inputs.source-sha || github.sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -118,6 +127,8 @@ jobs:
         with:
           name: macos-unsigned-${{ matrix.arch }}
           path: ${{ runner.temp }}/unsigned
+          run-id: ${{ inputs.native-run-id || github.run_id }}
+          github-token: ${{ github.token }}
       - name: Locate temporary signing keychain
         run: echo "MACOS_KEYCHAIN=$RUNNER_TEMP/voice-type-signing.keychain-db" >> "$GITHUB_ENV"
       - name: Import temporary release credentials
@@ -152,6 +163,9 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           ditto -x -k "$RUNNER_TEMP/unsigned/voice-type-unsigned-$ARCH.zip" "$RUNNER_TEMP/signing"
+          INFO=$(go version -m "$RUNNER_TEMP/signing/Voice Type.app/Contents/MacOS/voice-type")
+          printf '%s\n' "$INFO" | grep -F "vcs.revision=$SOURCE_SHA"
+          printf '%s\n' "$INFO" | grep -F 'vcs.modified=false'
           python3 scripts/macos-release.py package --app "$RUNNER_TEMP/signing/Voice Type.app" --arch "$ARCH" --version "${BUILD_VERSION:-$(cat VERSION)}"
       - name: Remove temporary credentials
         if: always()

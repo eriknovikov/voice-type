@@ -330,6 +330,10 @@ Findings and session handoff: [memory.md](memory.md).
   Run 44154713968: import/trust PASS on both runners with correct valid identity;
   codesign cannot locate private key. Add temporary keychain to search/default
   lists before import/signing; no signed DMG/publication evidence yet.
+  Run 44158542323: app signing and initial strict verification PASS on both; fix
+  codesign optional extraction prefix to `--extract-certificates=prefix`.
+  Packaging-only reuse validates previous trusted native jobs, unchanged app/build
+  source and clean binary revision. Local 23 Python tests + actionlint PASS.
 
 ## MAC-120: Native CI and release gates
 

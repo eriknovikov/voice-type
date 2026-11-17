@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: mac-preview-${{ github.ref }}
@@ -19,10 +20,23 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
+      native-run-id: ${{ steps.version.outputs.native-run-id }}
+      source-sha: ${{ steps.version.outputs.source-sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
       - id: version
-        run: echo "version=$(cat VERSION)-mac.preview.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+        env:
+          REUSE_NATIVE_RUN: ${{ vars.MACOS_PREVIEW_NATIVE_RUN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$REUSE_NATIVE_RUN" ]; then
+            python3 scripts/macos-preview-source.py "$REUSE_NATIVE_RUN" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$(cat VERSION)-mac.preview.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "source-sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          fi
 
   mac:
     needs: version
@@ -30,6 +44,8 @@ jobs:
     with:
       sign: true
       version: ${{ needs.version.outputs.version }}
+      native-run-id: ${{ needs.version.outputs.native-run-id }}
+      source-sha: ${{ needs.version.outputs.source-sha }}
     secrets: inherit
 
   publish:
@@ -49,6 +65,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.version.outputs.version }}
+          SOURCE_SHA: ${{ needs.version.outputs.source-sha }}
         run: |
           set -euo pipefail
           test "$(find . -maxdepth 1 -type f | wc -l)" -eq 4
@@ -67,6 +84,7 @@ jobs:
 
           In General, allow Microphone and Accessibility. Choose a cloud provider/API key or download a local model. Test dictation into TextEdit with Control-Option-Space. This preview is separate from stable Linux releases. Updates are manual: quit, download the next preview and replace the app. Permissions may need approval again; retention is not yet verified.
           NOTES
+          printf '\nApp source: %s. Packaging workflow: %s.\n' "$SOURCE_SHA" "$GITHUB_SHA" >> "$RUNNER_TEMP/notes.txt"
           TAG="v$VERSION"
-          gh release create "$TAG" ./*.dmg checksums.txt --target "$GITHUB_SHA" \
+          gh release create "$TAG" ./*.dmg checksums.txt --target "$SOURCE_SHA" \
             --prerelease --latest=false --title "Mac Preview $VERSION (unnotarized)" --notes-file "$RUNNER_TEMP/notes.txt"
