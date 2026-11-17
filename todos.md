@@ -295,6 +295,10 @@ Findings and session handoff: [memory.md](memory.md).
   encrypted environment secrets stored with main/feat/mac branch restrictions.
   Removed Apple gates in favor of exact certificate/DR/runtime/entitlement checks.
   All 16 portable Python tests and actionlint v1.7.12 PASS; native execution pending.
+  First hosted run 44131304495: Intel static inference and 103 UI tests PASS;
+  Cgo compile found VERSION/<version> collision on case-insensitive APFS. Fix is a
+  case-sensitive CI source volume. Apple Silicon had no available hosted runner.
+  Signing/DMGs remain unverified; no public preview exists yet.
 
 ## MAC-120: Native CI and release gates
 

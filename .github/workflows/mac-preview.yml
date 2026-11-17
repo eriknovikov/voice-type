@@ -3,6 +3,7 @@ name: Mac Preview
 on:
   push:
     branches: [feat/mac]
+    paths-ignore: ['**/*.md']
   workflow_dispatch:
 
 permissions:

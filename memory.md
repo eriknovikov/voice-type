@@ -12,8 +12,8 @@
   D10 now supersedes all historical Developer ID/notarization requirements below.
   The user approved end-to-end implementation, feat/mac commit/push, hosted CI and
   public preview downloads. No main merge, stable publication or VERSION bump.
-- Next: commit/push the full feature tree, run Mac Preview CI on both native
-  architectures, fix actual failures, publish and verify public DMG downloads.
+- Next: fix native failures from run 44131304495 and push the correction, then
+  run Mac Preview CI on both architectures, publish and verify public DMG downloads.
   Then the user reboots this same machine into macOS for installer acceptance.
   No local Mac build tools or remote access are requested.
 - MAC-090/100 help, diagnostics and matching-DMG updates are now implemented and
@@ -222,6 +222,26 @@ publish unless I explicitly authorize it.
 
 ## Progress log
 
+- Native run 44131304495 failed before signing/publication. Intel Xcode 16.4
+  compiled the static engine and passed all 103 UI tests, but Cgo C++ compilation
+  resolved <version> to root VERSION on default case-insensitive APFS. CI now
+  mounts an ephemeral case-sensitive APFS source workspace before checkout and
+  verifies VERSION/version are distinct. Keep VERSION and the flat package intact.
+  Save native caches before later gates so failures do not rebuild inference.
+  Apple Silicon did not acquire a runner after 15m (GitHub capacity issue), not a
+  source failure. Retry both architectures; no Mac build/signature claim yet.
+- 2026-11-17 preview execution: committed/pushed c1d6bdb on feat/mac using verified
+  personal author/committer and explicit eriknovikov HTTPS credentials. Native Mac
+  Preview run: https://github.com/eriknovikov/voice-type/actions/runs/44131304495.
+  Hosted completion/signing/publication is pending. No stable/main/VERSION change.
+  Linux arm64 `VOICE_TYPE_VULKAN=0 VOICE_TYPE_TEST_IBUS_DAEMON=/usr/bin/ibus-daemon
+  make check build` PASS: 103 UI tests, Go vet/race, malgo and 17 Python tests.
+  actionlint v1.7.12 and git whitespace checks PASS. Linux native tray and full
+  application smoke PASS on Wayland using its absolute socket path. X11 was
+  unavailable and xvfb-run absent; neither is needed for the passing Wayland run.
+  Stable Latest baseline is v6.4.3 (release 446007629); previews must not change it.
+  Browser relay is offline; verify final downloads through anonymous HTTP/hash
+  checks rather than claim an interactive browser installation test.
 - 2026-11-17: Completed portability investigation and Linux baseline checks.
   User approved recommended decisions, requested branch and durable handoff, and
   offered a spare Mac. Created feat/mac and the three planning documents. No app
