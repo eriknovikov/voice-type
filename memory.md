@@ -12,7 +12,8 @@
   D10 now supersedes all historical Developer ID/notarization requirements below.
   The user approved end-to-end implementation, feat/mac commit/push, hosted CI and
   public preview downloads. No main merge, stable publication or VERSION bump.
-- Next: push the remaining native-test portability corrections and retry CI.
+- Next: push Mach-O verification parser correction and retry native/signing CI.
+  Run 44138018299 passed both native check/build suites but failed mac-verify.
   Intel native Cgo compilation/vet now pass. Apple Silicon macos-15 could not
   acquire a runner twice, so use free macos-26 with Xcode 26.6 for arm64 instead;
   Intel keeps macos-15-intel/Xcode 16.4. Both still enforce a 13.0 deployment target.
@@ -224,6 +225,17 @@ publish unless I explicitly authorize it.
 
 ## Progress log
 
+- Run 44138018299: BOTH architectures passed native compilation/vet, full Go race
+  suite, malgo null-backend race tests, 103 UI tests and production bundle assembly.
+  Python: 17 tests OK, 3 correctly skipped Linux-only checks. Native mac-verify
+  rejected the deployment target. Realistic otool fixture with LC_BUILD_VERSION's
+  linker-tool `version 1115.7.3` reproduces failure: parser wrongly treats it as an
+  OS minimum. Parse only minos for LC_BUILD_VERSION and version for the legacy
+  LC_VERSION_MIN_MACOSX command; keep strict macOS 13 validation. No signing yet.
+- Current run: https://github.com/eriknovikov/voice-type/actions/runs/44138018299,
+  commit 9d70b04. Background watcher sh_1ea916046001wHUyb65blpTpEG notifies at
+  completion. Local full Go race suite PASS after test fixes. Private PKCS#12
+  integrity/password check PASS; private files have 0600 permissions outside git.
 - Run 44134615417: case-sensitive APFS fix PASS. Intel native compilation, vet
   and 103 UI tests PASS. Go race suite found 3 fixture groups missing Mac config/
   log parents, plus a Pulse-only test mistakenly shared on Mac. Create fixture

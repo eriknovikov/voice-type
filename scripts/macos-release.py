@@ -89,9 +89,15 @@ def verify_bundle(app, version, arch, signed=False, development=False, run=comma
     load_commands = run("otool", "-l", binary)
     minimums = []
     for block in re.split(r"Load command \d+", load_commands):
-        if re.search(r"cmd LC_(?:BUILD_VERSION|VERSION_MIN_MACOSX)\b", block):
-            minimums.extend(re.findall(r"^\s*(?:minos|version)\s+(\d+\.\d+(?:\.\d+)?)\s*$", block, re.MULTILINE))
-    require(minimums and all(tuple(map(int, item.split(".")))[:2] == (13, 0) for item in minimums), "Mach-O deployment target must be macOS 13.0")
+        field = None
+        if re.search(r"cmd LC_BUILD_VERSION\b", block):
+            field = "minos"
+        elif re.search(r"cmd LC_VERSION_MIN_MACOSX\b", block):
+            field = "version"
+        if field:
+            minimums.extend(re.findall(rf"^\s*{field}\s+(\d+\.\d+(?:\.\d+)?)\s*$", block, re.MULTILINE))
+    require(minimums and all(tuple(map(int, item.split(".")))[:2] == (13, 0) for item in minimums),
+            f"Mach-O deployment target must be macOS 13.0; found {minimums}")
     for line in run("otool", "-L", binary).splitlines()[1:]:
         dependency = line.strip().split(" (", 1)[0]
         require(dependency.startswith(("/System/Library/", "/usr/lib/")), f"non-system runtime dependency: {dependency}")

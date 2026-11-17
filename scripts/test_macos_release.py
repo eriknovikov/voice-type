@@ -41,7 +41,7 @@ class FakeNative:
             return "x86_64\n" if self.arch == "amd64" else self.arch + "\n"
         if name == "otool":
             if args[1] == "-l":
-                return f"Load command 1\n cmd LC_BUILD_VERSION\n platform 1\n minos {self.minimum}\n sdk 15.5\nLoad command 2\n cmd LC_SOURCE_VERSION\n version 0.0\n"
+                return f"Load command 1\n cmd LC_BUILD_VERSION\n platform 1\n minos {self.minimum}\n sdk 15.5\n ntools 1\n tool LD\n version 1115.7.3\nLoad command 2\n cmd LC_SOURCE_VERSION\n version 0.0\n"
             return f"{args[-1]}:\n\t{self.dependency} (compatibility version 1.0.0)\n"
         if name == "go":
             return f'-tags=production\n-ldflags="-X main.version=6.4.0"\nGOOS=darwin\nGOARCH={self.arch}\nCGO_ENABLED=1\n'
@@ -124,6 +124,13 @@ class ReleaseTests(unittest.TestCase):
     def test_machine_readable_command_output_excludes_stderr(self):
         result = RELEASE.command(sys.executable, "-c", 'import sys; print(\'{"status":"Accepted"}\'); print("progress", file=sys.stderr)')
         self.assertEqual(json.loads(result), {"status": "Accepted"})
+
+    def test_legacy_minimum_version_command(self):
+        def legacy(*args):
+            if args[:2] == ("otool", "-l"):
+                return "Load command 1\n cmd LC_VERSION_MIN_MACOSX\n version 13.0\n sdk 15.5\nLoad command 2\n cmd LC_SOURCE_VERSION\n version 999.0\n"
+            return self.native(*args)
+        RELEASE.verify_bundle(self.app, "6.4.0", "arm64", run=legacy)
 
     def test_missing_credentials_never_sign_or_publish(self):
         with self.assertRaises(ValueError):

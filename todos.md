@@ -302,6 +302,9 @@ Findings and session handoff: [memory.md](memory.md).
   Retry 44134615417: Intel native Cgo compile/vet and 103 UI tests PASS. Correcting
   test fixture config/log directories and Linux-only Pulse test scope. macos-15
   arm64 runner unavailable twice; use macos-26/Xcode 26.6 (still target macOS 13).
+  Run 44138018299: BOTH native check/build suites PASS (Go race, malgo, 103 UI
+  tests, production bundles). mac-verify parser confuses linker-tool version with
+  minimum OS; realistic fixture reproduces it. Fix keeps strict 13.0 validation.
 
 ## MAC-120: Native CI and release gates
 
