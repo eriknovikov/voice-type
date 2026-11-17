@@ -1,6 +1,7 @@
 """Portable orchestration tests, not native macOS build/signing evidence."""
 
 import importlib.util
+import base64
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 
 
@@ -157,6 +159,41 @@ elif name in ("sha256sum", "shasum"):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Vulkan is not supported", result.stderr)
         self.assertFalse(any(name == "cmake" for name, _ in calls))
+
+
+class SigningSetupTests(unittest.TestCase):
+    def test_import_registers_keychain_for_private_key_lookup_and_removes_p12(self):
+        workflow = (ROOT / ".github/workflows/macos.yml").read_text()
+        section = workflow.split("- name: Import temporary release credentials\n", 1)[1]
+        script = textwrap.dedent(section.split("        run: |\n", 1)[1].split("      - name:", 1)[0])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tools = root / "tools"
+            tools.mkdir()
+            security = tools / "security"
+            security.write_text(f"#!{sys.executable}\n" + '''
+import json, os, pathlib, sys
+with open(os.environ["TEST_LOG"], "a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
+if sys.argv[1] == "create-keychain":
+    pathlib.Path(sys.argv[-1]).touch()
+''')
+            security.chmod(0o755)
+            log = root / "commands.jsonl"
+            keychain = str(root / "signing.keychain-db")
+            result = subprocess.run(["bash", "-e", "-c", script], capture_output=True, text=True,
+                                    env=dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"],
+                                             TEST_LOG=str(log), RUNNER_TEMP=temporary, MACOS_KEYCHAIN=keychain,
+                                             CERTIFICATE=base64.b64encode(b"fixture, not a certificate").decode(),
+                                             CERTIFICATE_PASSWORD="fixture-password"))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            search = calls.index(["list-keychains", "-d", "user", "-s", keychain])
+            default = calls.index(["default-keychain", "-d", "user", "-s", keychain])
+            imported = next(i for i, call in enumerate(calls) if call[0] == "import")
+            self.assertLess(search, imported)
+            self.assertLess(default, imported)
+            self.assertFalse((root / "voice-type-signing.p12").exists())
 
 
 if __name__ == "__main__":

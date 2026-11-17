@@ -136,6 +136,8 @@ jobs:
           security create-keychain -p "$PASSWORD" "$MACOS_KEYCHAIN"
           security set-keychain-settings -lut 3600 "$MACOS_KEYCHAIN"
           security unlock-keychain -p "$PASSWORD" "$MACOS_KEYCHAIN"
+          security list-keychains -d user -s "$MACOS_KEYCHAIN"
+          security default-keychain -d user -s "$MACOS_KEYCHAIN"
           security import "$P12" -P "$CERTIFICATE_PASSWORD" -k "$MACOS_KEYCHAIN" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PASSWORD" "$MACOS_KEYCHAIN"
       - name: Trust signing certificate on this disposable runner only

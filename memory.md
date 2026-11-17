@@ -12,7 +12,11 @@
   D10 now supersedes all historical Developer ID/notarization requirements below.
   The user approved end-to-end implementation, feat/mac commit/push, hosted CI and
   public preview downloads. No main merge, stable publication or VERSION bump.
-- Next: push headless signing trust fix and retry CI. Run 44141118702 passed BOTH
+- Next: push the keychain search/default fix after run 44154713968. Trust/import
+  now succeed in seconds and find-identity reports the correct valid fingerprint,
+  but codesign cannot find its private key. Register the temporary keychain in
+  user search/default lists (matching GitHub's documented signing setup), retry.
+  Run 44141118702 passed BOTH
   native jobs, including minimum-OS/runtime-dependency/source-stamp checks, but
   signing stalled in non-sudo security add-trusted-cert; cancelled at user's status
   check. Use sudo -n with administrative trust on the disposable CI runner only,
@@ -229,6 +233,11 @@ publish unless I explicitly authorize it.
 
 ## Progress log
 
+- Run 44154713968: both native jobs PASS again. Noninteractive administrative
+  trust fix PASS on both runners; 1 valid signing identity matches pinned cert.
+  codesign fails `no identity found`/`item could not be found in keychain`.
+  The imported keychain was not in user search/default lists; add both. No DMG or
+  public preview has been produced yet. Keep all bounded signing timeouts.
 - Run 44141118702: BOTH native jobs PASS, including native check/build/mac-verify,
   version/arch/13.0/system-dependency checks, clean source stamp and bundle archives.
   Signing import succeeded (1 identity imported), then trust setup hung for ~58m.

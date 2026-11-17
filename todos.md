@@ -327,6 +327,9 @@ Findings and session handoff: [memory.md](memory.md).
   Run 44141118702: native bundle gates PASS on both architectures. Signing imports
   identity, then hangs in user-domain trust setup. Cancelled and corrected to
   noninteractive administrative trust on disposable runners, with bounded steps.
+  Run 44154713968: import/trust PASS on both runners with correct valid identity;
+  codesign cannot locate private key. Add temporary keychain to search/default
+  lists before import/signing; no signed DMG/publication evidence yet.
 
 ## MAC-120: Native CI and release gates
 
