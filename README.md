@@ -29,6 +29,11 @@ These builds are self-signed, **not Apple-notarized**, and still need installed
 device testing. No Apple membership, Git or developer tools are needed to install.
 Do not use the Linux install or uninstall scripts on macOS.
 
+Testable preview: [Apple Silicon (M-series)](https://github.com/eriknovikov/voice-type/releases/download/v6.4.0-mac.preview.6/voice-type_6.4.0-mac.preview.6_darwin_arm64.dmg)
+or [Intel](https://github.com/eriknovikov/voice-type/releases/download/v6.4.0-mac.preview.6/voice-type_6.4.0-mac.preview.6_darwin_amd64.dmg).
+Both native builds, self-signatures and download checksums have been verified;
+real microphone, permission and insertion acceptance is still pending.
+
 Open the matching DMG, drag Voice Type to Applications and launch it there. If
 macOS blocks it, use **System Settings → Privacy & Security → Open Anyway** for
 this app and confirm. Do not disable Gatekeeper or install a root certificate.

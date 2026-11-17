@@ -289,7 +289,7 @@ Findings and session handoff: [memory.md](memory.md).
 
 ## MAC-110: Final signed DMG packaging
 
-- Status: DOING
+- Status: DONE
 - Depends: MAC-020, MAC-080, MAC-100
 - Decisions: D02, D10
 - Scope: Final bundle metadata/icon/licenses, production/dev identities and minimal
@@ -334,6 +334,10 @@ Findings and session handoff: [memory.md](memory.md).
   codesign optional extraction prefix to `--extract-certificates=prefix`.
   Packaging-only reuse validates previous trusted native jobs, unchanged app/build
   source and clean binary revision. Local 23 Python tests + actionlint PASS.
+  Final evidence: BOTH signed jobs PASS in run 44161860130; pinned certificate/DR,
+  runtime/entitlements, native metadata/dependencies, readonly mounted contents and
+  checksums all verified. Locally downloaded both CI DMGs and independently verified
+  their sidecars. Self-signed/unnotarized preview.6, not installed Mac acceptance.
 
 ## MAC-120: Native CI and release gates
 
@@ -361,15 +365,20 @@ Findings and session handoff: [memory.md](memory.md).
   Full Python suite: 16 PASS on Linux arm64. Hosted runs remain BLOCKED on an
   explicitly authorized push/dispatch; configure macos-release reviewer protection
    and signing secrets before a release. No workflow was run remotely.
+  Superseding evidence: both native jobs PASS in 44158542323 and both signed DMG
+  jobs PASS in 44161860130. Exact asset gate PASS. Hosted publisher still gets
+  HTTP403 despite contents:write; manual execution of the SAME gate/publisher with
+  verified personal auth published preview.6. This ticket remains BLOCKED only on
+  hosted publication permissions, not on the available public installers.
 
 ## MAC-125: Early device smoke without release credentials
 
 - Status: BLOCKED
 - Depends: MAC-090, MAC-100
 - Decisions: D03-D08, D12
-- Scope: Arrange user-run or explicitly approved remote testing of a locally built
-  development bundle on the spare Mac. Start hardware validation without waiting
-  for Developer ID or public release access. Record device/OS/arch and artifact ID.
+- Scope: User installs the finished public preview after rebooting this same
+  machine from Fedora into macOS. No development tools, terminal builds or SSH.
+  Record device/OS/arch and artifact ID. Developer ID is not required (D10).
 - Acceptance: With explicit test consent, verify microphone permissions/capture,
   one local-model dictation, direct/paste output in TextEdit, shortcut/menu/quit
   and dev isolation. Use the MAC-130 checklist to record any additional coverage.
@@ -382,10 +391,13 @@ Findings and session handoff: [memory.md](memory.md).
   check arrangement. All source/docs are uncommitted and must be transferred with
   the working tree; cloning feat/mac alone is insufficient. No Apple signing
   credentials are needed for this first native gate.
+  Superseding ready-to-test evidence: public self-signed preview.6, native verified
+  for both architectures. User action is now download/install and one TextEdit
+  dictation, not source transfer/local compilation. Actual hardware remains untested.
 
 ## MAC-130: Installed acceptance on the spare Mac
 
-- Status: TODO
+- Status: BLOCKED
 - Depends: MAC-110, MAC-125
 - Decisions: D03-D12
 - Scope: Install the actual signed app through Finder/DMG. Record Mac model,
@@ -401,7 +413,9 @@ Findings and session handoff: [memory.md](memory.md).
   both architectures; never claim full hardware coverage from one laptop. Record
   minimum-OS coverage honestly. Real provider/model/audio/Keychain tests need
   explicit opt-in; paid provider smoke is optional unless separately authorized.
-- Evidence: pending
+- Evidence: Public preview.6 is ready. Both anonymous DMG downloads returned HTTP200
+  and match published SHA256/native artifacts. Awaiting user reboot/install and
+  actual permission/microphone/AX/output/update acceptance. No device pass is claimed.
 
 ## MAC-140: Completion and release handoff
 
@@ -416,4 +430,8 @@ Findings and session handoff: [memory.md](memory.md).
 - Done when: Implementation and public-release readiness are reported separately,
   user handoff is self-contained, and any publish action remains explicitly gated.
   Commits/pushes require personal identity/auth verification and user authorization.
-- Evidence: pending
+- Evidence: Download-delivery objective met: public unnotarized preview.6, both
+  native architectures/signatures/checksums verified, anonymous downloads checked.
+  Stable Latest remains v6.4.3; VERSION remains 6.4.0; no main merge. Full feature
+  completion is still blocked on installed Mac acceptance and hosted publisher
+  permissions. User receives direct links and concise per-app approval/test steps.

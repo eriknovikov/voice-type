@@ -6,13 +6,30 @@
 - Work queue and definitions of done: [todos.md](todos.md).
 - Branch: `feat/mac`, created from clean `dev` at
   `37a00bad072c807dd3fd56f276f092127554c986`.
-- State: both native Mac check/build/mac-verify jobs PASS in run 44141118702.
-  Signing/public download delivery is in progress. VERSION remains 6.4.0.
+- State: public self-signed/unnotarized Mac preview.6 is downloadable and verified.
+  Both native check/build/verify suites and both signing jobs PASS. VERSION is 6.4.0.
 - Current policy: user rejected Apple fees and chose persistent self-signing.
   D10 now supersedes all historical Developer ID/notarization requirements below.
   The user approved end-to-end implementation, feat/mac commit/push, hosted CI and
   public preview downloads. No main merge, stable publication or VERSION bump.
-- Next: push certificate extraction argument fix and packaging-only artifact reuse.
+- Ready for user: reboot this same machine into macOS, download the matching DMG,
+  drag to Applications, use per-app Open Anyway if blocked, grant Microphone and
+  Accessibility, then test one dictation in TextEdit. No Git/build tools/SSH needed.
+- Public release: https://github.com/eriknovikov/voice-type/releases/tag/v6.4.0-mac.preview.6.
+  Assets: voice-type_6.4.0-mac.preview.6_darwin_arm64.dmg (Apple Silicon),
+  voice-type_6.4.0-mac.preview.6_darwin_amd64.dmg (Intel), checksums.txt.
+  Both anonymous HTTP downloads returned 200; actual downloaded bytes match the
+  public checksums and native signed artifacts. Not a device-installation claim.
+- App source: 002d590; packaging source: 07c5157; native/source run 44158542323;
+  final signing run 44161860130. That run's publisher remains red: its integration
+  token got HTTP403 despite contents:write, also after precreating the source tag.
+  Exact asset-gated publisher was therefore executed locally with explicit verified
+  eriknovikov auth, successfully publishing the SAME checked artifacts. Do not
+  misreport the hosted publisher as passing. No broad personal token was stored in CI.
+- MACOS_PREVIEW_NATIVE_RUN temporary repo variable is removed. Next code changes
+  rebuild normally; packaging-only retries can reuse tested binaries with strict
+  provenance. Resolve hosted publication permissions separately if needed; do not
+  delay this already-published device test for pipeline cleanup.
   Run 44158542323 passed native gates and now signs/strict-verifies both apps.
   Certificate extraction failed because optional codesign prefix needs `=path`.
   Reuse its existing binaries (version 6.4.0-mac.preview.6, source 002d590) via
@@ -237,6 +254,19 @@ publish unless I explicitly authorize it.
 
 ## Progress log
 
+- Publication complete: v6.4.0-mac.preview.6 is public, isDraft=false,
+  isPrerelease=true. Both final DMGs anonymous HTTP200 and SHA256 PASS:
+  arm64 9,509,924 bytes / 7e7c460707c19cc65f06b166caa1e6ae6384059a06f82560a49a49e5705126f3;
+  amd64 8,040,550 bytes / 9c4cabe741907caac0f2c65c5a637bf0a4e31c5fa34a8841129a6c5154023b13.
+  Stable Latest is still v6.4.3 (release 446007629). VERSION unchanged. No main merge.
+  Integration-token publisher failed twice; same publisher with personal auth PASS.
+  Temporary reuse variable removed. Remaining acceptance requires the user's Mac.
+- Run 44161860130: BOTH signing jobs PASS. Final DMG SHA-256:
+  arm64 7e7c460707c19cc65f06b166caa1e6ae6384059a06f82560a49a49e5705126f3;
+  amd64 9c4cabe741907caac0f2c65c5a637bf0a4e31c5fa34a8841129a6c5154023b13.
+  Publisher verifies both checksums, then release creation gets HTTP403 despite
+  contents:write (older source tag did not exist). Authorized personal account
+  created that exact source tag; retry only publisher, reusing finished signed DMGs.
 - Run 44158542323: keychain search/default fix PASS; signing and initial strict
   verification work on both architectures. Failure is `--extract-certificates`
   optional argument parsing: use --extract-certificates=prefix, not separate argv.
