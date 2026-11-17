@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -518,6 +519,9 @@ func TestLogPageFiltersBeforePaginationAndRejectsUnchangedPolls(t *testing.T) {
 func TestLogPageIncludesRotatedSegmentAndExportStreamsAll(t *testing.T) {
 	isolatedPreferences(t)
 	current := runLogFilePath()
+	if err := os.MkdirAll(filepath.Dir(current), 0700); err != nil {
+		t.Fatal(err)
+	}
 	rotated := current + ".1"
 	writeLine := func(path, message string) {
 		record := runLogRecord{Event: "dictation.completed", Outcome: "ok", Message: message}

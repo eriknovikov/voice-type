@@ -12,8 +12,10 @@
   D10 now supersedes all historical Developer ID/notarization requirements below.
   The user approved end-to-end implementation, feat/mac commit/push, hosted CI and
   public preview downloads. No main merge, stable publication or VERSION bump.
-- Next: fix native failures from run 44131304495 and push the correction, then
-  run Mac Preview CI on both architectures, publish and verify public DMG downloads.
+- Next: push the remaining native-test portability corrections and retry CI.
+  Intel native Cgo compilation/vet now pass. Apple Silicon macos-15 could not
+  acquire a runner twice, so use free macos-26 with Xcode 26.6 for arm64 instead;
+  Intel keeps macos-15-intel/Xcode 16.4. Both still enforce a 13.0 deployment target.
   Then the user reboots this same machine into macOS for installer acceptance.
   No local Mac build tools or remote access are requested.
 - MAC-090/100 help, diagnostics and matching-DMG updates are now implemented and
@@ -222,6 +224,16 @@ publish unless I explicitly authorize it.
 
 ## Progress log
 
+- Run 44134615417: case-sensitive APFS fix PASS. Intel native compilation, vet
+  and 103 UI tests PASS. Go race suite found 3 fixture groups missing Mac config/
+  log parents, plus a Pulse-only test mistakenly shared on Mac. Create fixture
+  parents and move that test to profile_session_linux_test.go, without skipping
+  shared coverage or changing production behavior. Arm runner unavailable again.
+  Official macos-26 arm64 image lists Xcode 26.6; switch to that free runner pool.
+  Signing/publication have still not run. No downloaded installer exists yet.
+- Retry run: https://github.com/eriknovikov/voice-type/actions/runs/44134615417,
+  commit 2a192d0. Watcher is background shell sh_1ea8032c7001ZbfSrJgDUvvnTI and will
+  notify on completion. Do not poll it. All 17 portable tests/actionlint still PASS.
 - Native run 44131304495 failed before signing/publication. Intel Xcode 16.4
   compiled the static engine and passed all 103 UI tests, but Cgo C++ compilation
   resolved <version> to root VERSION on default case-insensitive APFS. CI now

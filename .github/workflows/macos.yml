@@ -24,13 +24,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15
+          - runner: macos-26
             arch: arm64
+            xcode: "26.6"
           - runner: macos-15-intel
             arch: amd64
+            xcode: "16.4"
     runs-on: ${{ matrix.runner }}
     env:
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer
       MACOSX_DEPLOYMENT_TARGET: "13.0"
       VOICE_TYPE_VULKAN: "0"
       BUILD_VERSION: ${{ inputs.version }}
@@ -64,7 +66,7 @@ jobs:
         id: native-cache
         with:
           path: build/transcribe
-          key: transcribe-${{ runner.os }}-${{ matrix.arch }}-xcode16.4-macos13-static-metal-by-arch-${{ hashFiles('scripts/build-transcribe.sh', 'scripts/generate-transcribe-pkgconfig.go', 'go.mod') }}
+          key: transcribe-${{ runner.os }}-${{ matrix.arch }}-xcode${{ matrix.xcode }}-macos13-static-metal-by-arch-${{ hashFiles('scripts/build-transcribe.sh', 'scripts/generate-transcribe-pkgconfig.go', 'go.mod') }}
       - name: Build static inference engine
         run: make native-engine
       - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -97,13 +99,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15
+          - runner: macos-26
             arch: arm64
+            xcode: "26.6"
           - runner: macos-15-intel
             arch: amd64
+            xcode: "16.4"
     runs-on: ${{ matrix.runner }}
     env:
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer
       BUILD_VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5

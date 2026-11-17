@@ -64,7 +64,8 @@ entries in System Settings if wanted. Deleting the app alone does not erase keys
 
 ### Building and release gates
 
-On a Mac, select Xcode 16.4 with its command-line tools, Go from `go.mod`, Node 24.15+,
+On a Mac, select Xcode with its command-line tools (CI uses 26.6 on Apple Silicon
+and 16.4 on Intel), Go from `go.mod`, Node 24.15+,
 and `cmake`, `pkgconf` and `shellcheck`. Use a case-sensitive APFS checkout, as CI
 does: otherwise `VERSION` shadows C++'s `<version>` header on macOS. Run
 `make check build mac-verify`.

@@ -25,6 +25,9 @@ func warningTestEngine(t *testing.T, provider string, recorder audioRecorder) *e
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
 	useCredentialStore(t, &memoryCredentials{values: map[string]string{}})
+	if err := os.MkdirAll(filepath.Dir(configFilePath()), 0700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(configFilePath(), []byte(fmt.Sprintf(`{"provider":%q,"api_key":"fixture"}`, provider)), 0600); err != nil {
 		t.Fatal(err)
 	}

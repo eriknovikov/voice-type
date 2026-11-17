@@ -299,6 +299,9 @@ Findings and session handoff: [memory.md](memory.md).
   Cgo compile found VERSION/<version> collision on case-insensitive APFS. Fix is a
   case-sensitive CI source volume. Apple Silicon had no available hosted runner.
   Signing/DMGs remain unverified; no public preview exists yet.
+  Retry 44134615417: Intel native Cgo compile/vet and 103 UI tests PASS. Correcting
+  test fixture config/log directories and Linux-only Pulse test scope. macos-15
+  arm64 runner unavailable twice; use macos-26/Xcode 26.6 (still target macOS 13).
 
 ## MAC-120: Native CI and release gates
 

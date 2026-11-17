@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -28,6 +29,9 @@ func TestDictationFailureStaysVisibleUntilNextAttempt(t *testing.T) {
 			config := `{"provider":"openai","api_key":"fixture"}`
 			if kind == "configuration_error" {
 				config = `{"provider":"openai"}`
+			}
+			if err := os.MkdirAll(filepath.Dir(configFilePath()), 0700); err != nil {
+				t.Fatal(err)
 			}
 			if err := os.WriteFile(configFilePath(), []byte(config), 0600); err != nil {
 				t.Fatal(err)
