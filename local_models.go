@@ -213,21 +213,6 @@ func validateStreamingMode(modelID string, mode streamingMode) error {
 	}
 }
 
-func modelDataDirectory() (string, error) {
-	base := os.Getenv("XDG_DATA_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", errors.New("cannot locate your home directory")
-		}
-		base = filepath.Join(home, ".local", "share")
-	}
-	if !filepath.IsAbs(base) {
-		return "", errors.New("XDG_DATA_HOME must be an absolute path")
-	}
-	return filepath.Join(base, "voice-type", "models"), nil
-}
-
 func (m *LocalModelManager) directory() (string, error) {
 	m.mu.Lock()
 	root := m.root
@@ -247,6 +232,9 @@ func (m *LocalModelManager) directory() (string, error) {
 		m.mu.Unlock()
 	}
 	appDir := filepath.Dir(root)
+	if err := prepareStorageParent(filepath.Join(root, "model.gguf")); err != nil {
+		return "", err
+	}
 	directories := []string{appDir, root}
 	for _, dir := range directories {
 		info, err := os.Lstat(dir)

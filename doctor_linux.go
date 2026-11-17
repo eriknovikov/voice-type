@@ -4,10 +4,7 @@ package voicetype
 
 import (
 	"bufio"
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -16,13 +13,6 @@ import (
 
 	"github.com/godbus/dbus/v5"
 )
-
-// RunDoctor prints the same read-only report shown in General › Diagnostics.
-// It never reads secrets.
-func RunDoctor(version string, out io.Writer) int {
-	fmt.Fprint(out, runDiagnostics(version).Text())
-	return 0
-}
 
 func runDiagnostics(version string) DiagnosticsReport {
 	checks := []DiagnosticCheck{
@@ -124,52 +114,17 @@ func launchSearchDirs() []string {
 	return dirs
 }
 
-func readConfigForDiagnostics() (Config, DiagnosticCheck, string) {
-	path := configFilePath()
-	if _, err := os.Stat(path); err != nil {
-		return Config{}, diagnosticCheck("Configuration", "info",
-			path+" (not created yet)"), ""
-	}
-	_, raw, err := readConfigDocument()
-	if err != nil {
-		return Config{}, diagnosticCheck("Configuration", "fail", path+": "+err.Error()), ""
-	}
-	config, err := configValidate(raw)
-	if err != nil {
-		return Config{}, diagnosticCheck("Configuration", "fail", path+": "+err.Error()), ""
-	}
-	return config, diagnosticCheck("Configuration", "ok", path+" (valid)"), config.Microphone
-}
-
-func profileCheck(config Config) DiagnosticCheck {
-	if len(config.Profiles) == 0 {
-		return diagnosticCheck("Active profile", "warn", "no profiles yet; add one in General")
-	}
-	profile, ok := config.activeProfile()
-	if !ok {
-		return diagnosticCheck("Active profile", "warn", "none selected")
-	}
-	detail := profile.Name + " · " + profile.Provider
-	if profile.Provider == providerLocal {
-		detail += " · " + profile.ModelID()
-		if mode := profile.StreamingMode(); mode != "" {
-			detail += " · " + string(mode)
-		}
-	}
-	return diagnosticCheck("Active profile", "ok", detail)
-}
-
 func audioChecks(saved string) []DiagnosticCheck {
-	recorder, err := NewRecorder()
+	device, err := newCaptureDevice()
 	if err != nil {
 		return []DiagnosticCheck{diagnosticCheck("Audio server", "fail", err.Error())}
 	}
-	defer recorder.Close()
-	sources, listErr := recorder.client.ListSources()
+	defer device.close()
+	sources, listErr := device.client.ListSources()
 	if listErr != nil {
 		return []DiagnosticCheck{diagnosticCheck("Audio server", "fail", "connect to PulseAudio/PipeWire: "+listErr.Error())}
 	}
-	defaultSource, defaultErr := recorder.client.DefaultSource()
+	defaultSource, defaultErr := device.client.DefaultSource()
 	detail := fmt.Sprintf("%d input device(s)", len(sources))
 	if defaultErr == nil {
 		detail += " · default: " + defaultSource.Name()
@@ -285,145 +240,6 @@ func readMemInfo() (uint64, uint64, error) {
 		return 0, 0, fmt.Errorf("no memory information")
 	}
 	return total, available, nil
-}
-
-func modelChecks(config Config) []DiagnosticCheck {
-	directory, err := modelDataDirectory()
-	if err != nil {
-		return []DiagnosticCheck{diagnosticCheck("Local models", "fail", err.Error())}
-	}
-	selected := ""
-	if profile, ok := config.activeProfile(); ok && profile.Provider == providerLocal {
-		selected = profile.ModelID()
-	}
-	checks := make([]DiagnosticCheck, 0, len(localModelCatalog))
-	for _, model := range localModelCatalog {
-		label := "Model · " + model.Name
-		if model.ID == selected {
-			label += " (active)"
-		}
-		final := filepath.Join(directory, model.ID+".gguf")
-		info, statErr := os.Lstat(final)
-		switch {
-		case statErr == nil && info.Size() == model.Bytes:
-			checks = append(checks, diagnosticCheck(label, "ok",
-				fmt.Sprintf("installed (%.0f MB)", float64(info.Size())/(1<<20))))
-		case statErr == nil:
-			checks = append(checks, diagnosticCheck(label, "warn",
-				fmt.Sprintf("file is %.0f MB, expected %.0f MB; reinstall it in Local Models",
-					float64(info.Size())/(1<<20), float64(model.Bytes)/(1<<20))))
-		default:
-			partial := filepath.Join(directory, model.ID+".partial")
-			if partialInfo, partialErr := os.Lstat(partial); partialErr == nil && partialInfo.Size() > 0 {
-				percent := float64(partialInfo.Size()) / float64(model.Bytes) * 100
-				status := "warn"
-				detail := fmt.Sprintf("download incomplete (%.0f%%)", percent)
-				if model.ID == selected {
-					status = "fail"
-					detail += "; the active profile cannot record"
-				}
-				checks = append(checks, diagnosticCheck(label, status, detail))
-			} else if model.ID == selected {
-				checks = append(checks, diagnosticCheck(label, "fail",
-					"not installed; download it in Local Models before recording"))
-			} else {
-				checks = append(checks, diagnosticCheck(label, "info", "not installed"))
-			}
-		}
-	}
-	return checks
-}
-
-func diskCheck() DiagnosticCheck {
-	directory, err := modelDataDirectory()
-	if err == nil {
-		if free, freeErr := freeDiskBytes(directory); freeErr == nil {
-			detail := fmt.Sprintf("%.1f GiB free under %s", float64(free)/(1<<30), directory)
-			if free < 2<<30 {
-				return diagnosticCheck("Disk space", "warn", detail+" · models need about 740 MB each")
-			}
-			return diagnosticCheck("Disk space", "ok", detail)
-		}
-	}
-	return diagnosticCheck("Disk space", "info", "could not determine free space")
-}
-
-func freeDiskBytes(path string) (uint64, error) {
-	for {
-		var stat syscall.Statfs_t
-		err := syscall.Statfs(path, &stat)
-		if err == nil {
-			return stat.Bavail * uint64(stat.Bsize), nil
-		}
-		parent := filepath.Dir(path)
-		if parent == path {
-			return 0, err
-		}
-		path = parent
-	}
-}
-
-func logCheck() DiagnosticCheck {
-	path := runLogFilePath()
-	total := int64(0)
-	for _, candidate := range []string{path, path + ".1"} {
-		if info, err := os.Stat(candidate); err == nil {
-			total += info.Size()
-		}
-	}
-	if total == 0 {
-		return diagnosticCheck("Logs", "info", path+" (empty)")
-	}
-	if total < 1<<20 {
-		return diagnosticCheck("Logs", "info", fmt.Sprintf("%s (%d KB)", path, (total+1023)/1024))
-	}
-	return diagnosticCheck("Logs", "info", fmt.Sprintf("%s (%.1f MB)", path, float64(total)/(1<<20)))
-}
-
-func lastDictationCheck() DiagnosticCheck {
-	data, err := os.ReadFile(runLogFilePath())
-	if err != nil || len(data) == 0 {
-		return diagnosticCheck("Last dictation", "info", "none recorded yet")
-	}
-	lines := bytes.Split(data, []byte("\n"))
-	var latest, failure *runLogRecord
-	for i := len(lines) - 1; i >= 0; i-- {
-		if !bytes.Contains(lines[i], []byte(`"dictation.completed"`)) {
-			continue
-		}
-		var record runLogRecord
-		if json.Unmarshal(lines[i], &record) != nil {
-			continue
-		}
-		if latest == nil {
-			copy := record
-			latest = &copy
-		}
-		if failure == nil && record.Outcome != "ok" && record.Outcome != "cancelled" && !record.isWarning() {
-			copy := record
-			failure = &copy
-		}
-		if latest != nil && failure != nil {
-			break
-		}
-	}
-	format := func(record *runLogRecord) string {
-		detail := record.Timestamp + " · " + record.Provider + "/" + record.ConfiguredModel + " · " + record.Outcome
-		if record.Error != "" {
-			detail += " · " + record.Error
-		}
-		return detail
-	}
-	if failure != nil {
-		return diagnosticCheck("Recent failure", "warn", format(failure))
-	}
-	if latest != nil {
-		if latest.isWarning() {
-			return diagnosticCheck("Last dictation", "warn", format(latest))
-		}
-		return diagnosticCheck("Last dictation", "ok", format(latest))
-	}
-	return diagnosticCheck("Last dictation", "info", "no completed dictation in the current log")
 }
 
 // secretService reports the owner of org.freedesktop.secrets without reading

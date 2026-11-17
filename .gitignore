@@ -4,3 +4,5 @@ build/*
 !build/config.yml
 .env
 .env.*
+__pycache__/
+.vite/

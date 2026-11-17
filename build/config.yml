@@ -36,16 +36,12 @@ dev_mode:
       type: blocking
       cmd: |
         set -eu
-        make native-engine
-        mkdir -p frontend/dist
-        test -f frontend/dist/index.html || printf '%s\n' '<!doctype html><html><body></body></html>' > frontend/dist/index.html
-        pkg-config --exists gtk4 webkitgtk-6.0
-        go build -ldflags="-s -w -X main.version=$(cat VERSION)-dev" -o build/voice-type-dev ./cmd/voice-type
+        make dev-backend
       env:
         CGO_ENABLED: "1"
         PKG_CONFIG_PATH: "build/transcribe/pkgconfig"
     - name: app
-      cmd: ./build/voice-type-dev
+      cmd: make dev-run
       type: primary
       exit_policy: shutdown
       env:

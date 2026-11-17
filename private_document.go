@@ -13,16 +13,15 @@ import (
 // BackupDirectory is separate from config/state so removal of either primary
 // directory does not also remove its last valid copy.
 func BackupDirectory() (string, error) {
-	base := os.Getenv("XDG_DATA_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", errors.New("cannot locate your home directory")
-		}
-		base = filepath.Join(home, ".local", "share")
+	paths, err := currentStorageLocations()
+	if err != nil {
+		return "", err
 	}
-	app := filepath.Join(base, "voice-type")
+	app := paths.data
 	path := filepath.Join(app, "backups")
+	if err := prepareStorageParent(filepath.Join(path, "config.jsonc")); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(path, 0700); err != nil {
 		return "", fmt.Errorf("create private backup directory: %w", err)
 	}
@@ -39,6 +38,9 @@ func BackupDirectory() (string, error) {
 func AtomicPrivateWrite(path string, data []byte) error { return atomicPrivateWrite(path, data) }
 
 func atomicPrivateWrite(path string, data []byte) error {
+	if err := prepareStorageParent(path); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
@@ -95,7 +97,13 @@ func preservePrivateDocument(name string, data []byte) error {
 // ReadPrivateDocument returns nil data when there is no valid primary or
 // backup. Callers then supply safe defaults. Unreadable files are never reset.
 func ReadPrivateDocument(path, backupName string, validate func([]byte) error) ([]byte, string, error) {
-	data, err := os.ReadFile(path)
+	if err := prepareStorageParent(path); err != nil {
+		return nil, "", err
+	}
+	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+		return nil, "", errors.New("settings must be a real regular file, not a symlink")
+	}
+	data, err := readPrivateFile(path)
 	missing := os.IsNotExist(err)
 	if err != nil && !missing {
 		return nil, "", fmt.Errorf("read settings; check file permissions: %w", err)
@@ -108,7 +116,7 @@ func ReadPrivateDocument(path, backupName string, validate func([]byte) error) (
 		if err != nil {
 			return nil, "", err
 		}
-		old, readErr := os.ReadFile(backup)
+		old, readErr := readPrivateFile(backup)
 		if readErr != nil && !os.IsNotExist(readErr) {
 			return nil, "", fmt.Errorf("read settings backup: %w", readErr)
 		}
@@ -128,7 +136,7 @@ func ReadPrivateDocument(path, backupName string, validate func([]byte) error) (
 	if err != nil {
 		return nil, "", err
 	}
-	last, err := os.ReadFile(backup)
+	last, err := readPrivateFile(backup)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, "", fmt.Errorf("read settings backup: %w", err)
 	}

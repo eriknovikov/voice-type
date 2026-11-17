@@ -11,6 +11,13 @@ import (
 
 var credentialService = "com.eriknovikov.voice-type"
 
+func credentialServiceName() string {
+	if developmentMode() {
+		return credentialService + ".dev"
+	}
+	return credentialService
+}
+
 type credentialStore interface {
 	Set(provider, key string) error
 	Get(provider string) (string, error)
@@ -20,15 +27,15 @@ type credentialStore interface {
 type systemCredentialStore struct{}
 
 func (systemCredentialStore) Set(provider, key string) error {
-	return keyring.Set(credentialService, provider, key)
+	return keyring.Set(credentialServiceName(), provider, key)
 }
 
 func (systemCredentialStore) Get(provider string) (string, error) {
-	return keyring.Get(credentialService, provider)
+	return keyring.Get(credentialServiceName(), provider)
 }
 
 func (systemCredentialStore) Delete(provider string) error {
-	return keyring.Delete(credentialService, provider)
+	return keyring.Delete(credentialServiceName(), provider)
 }
 
 var (

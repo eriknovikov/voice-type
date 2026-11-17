@@ -65,6 +65,9 @@ vi.mock("./api", () => ({
   api: {
     settings: vi.fn(),
     info: vi.fn(),
+    setLoginStartup: vi.fn(),
+    requestPermission: vi.fn(),
+    openPermissionSettings: vi.fn(),
     status: vi.fn(),
     save: vi.fn(),
     logs: vi.fn(),
@@ -1568,4 +1571,118 @@ it("shows preparation distinctly from idle and recording", async () => {
   vi.mocked(api.status).mockResolvedValue({state: "checking", error: "", level: 0});
   await ready();
   expect(await screen.findByText("Preparing")).toBeTruthy();
+});
+
+it("requests Mac permissions only after an explicit click and refreshes status", async () => {
+  info.platform = "darwin";
+  info.permissions = { platform: "darwin", microphone: "unknown", accessibility: "denied" };
+  vi.mocked(api.requestPermission).mockImplementation(async () => {
+    info.permissions = { platform: "darwin", microphone: "granted", accessibility: "denied" };
+    return structuredClone(info.permissions);
+  });
+  vi.mocked(api.openPermissionSettings).mockResolvedValue();
+  await ready();
+  const panel = await screen.findByRole("region", { name: "macOS permissions" });
+  expect(api.requestPermission).not.toHaveBeenCalled();
+  expect(api.openPermissionSettings).not.toHaveBeenCalled();
+  fireEvent.click(within(panel).getByRole("button", { name: "Allow microphone" }));
+  await within(panel).findByText("Microphone: Allowed");
+  expect(api.requestPermission).toHaveBeenCalledExactlyOnceWith("microphone");
+  fireEvent.click(within(panel).getByRole("button", { name: "Open Accessibility settings" }));
+  await waitFor(() => expect(api.openPermissionSettings).toHaveBeenCalledWith("accessibility"));
+  info.permissions.microphone = "denied";
+  await within(panel).findByText("Microphone: Not allowed");
+  expect(within(panel).queryByRole("button", { name: "Allow microphone" })).toBeNull();
+  expect(api.preferences).not.toHaveBeenCalled();
+});
+
+it("keeps permission request failures visible and does not promise access", async () => {
+  info.platform = "darwin";
+  info.permissions = { platform: "darwin", microphone: "unknown", accessibility: "granted" };
+  vi.mocked(api.requestPermission).mockRejectedValue(new Error("Open the Voice Type .app bundle first"));
+  await ready();
+  fireEvent.click(await screen.findByRole("button", { name: "Allow microphone" }));
+  await screen.findByText("Open the Voice Type .app bundle first");
+  expect(screen.getByText("Microphone: Not requested")).toBeTruthy();
+  await waitFor(() => expect((screen.getByRole("button", { name: "Allow microphone" }) as HTMLButtonElement).disabled).toBe(false));
+});
+
+it("shows policy restrictions without an Allow button and leaves Linux unchanged", async () => {
+  await ready();
+  expect(screen.queryByRole("region", { name: "macOS permissions" })).toBeNull();
+  info.platform = "darwin";
+  info.permissions = { platform: "darwin", microphone: "restricted", accessibility: "granted" };
+  const panel = await screen.findByRole("region", { name: "macOS permissions" });
+  expect(within(panel).getByText("Microphone: Restricted by system policy")).toBeTruthy();
+  expect(within(panel).queryByRole("button", { name: "Allow microphone" })).toBeNull();
+  expect(api.requestPermission).not.toHaveBeenCalled();
+});
+
+it("saves opt-in paste with a privacy warning and never changes a live profile", async () => {
+  Element.prototype.scrollIntoView = vi.fn();
+  info.platform = "darwin";
+  saved.profiles[0].streaming_mode = "live";
+  const before = structuredClone(saved.profiles);
+  await ready();
+  fireEvent.click(await screen.findByRole("combobox", { name: "Output method" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Paste compatibility" }));
+  await waitFor(() => expect(api.preferences).toHaveBeenCalledWith(expect.objectContaining({ output_mode: "paste", setup_complete: true })));
+  await screen.findByText(/Other apps or clipboard managers may read or save it/);
+  expect(screen.getByText(/Paste compatibility cannot be used with live insertion/)).toBeTruthy();
+  expect(saved.profiles).toEqual(before);
+  expect(api.upsertProfile).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("combobox", { name: "Output method" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Direct insertion" }));
+  await waitFor(() => expect(api.preferences).toHaveBeenLastCalledWith(expect.objectContaining({ output_mode: "direct" })));
+  await waitFor(() => expect(screen.queryByText(/Other apps or clipboard managers may read or save it/)).toBeNull());
+});
+
+it("keeps the previous output method and shows a failed preference save", async () => {
+  Element.prototype.scrollIntoView = vi.fn();
+  info.platform = "darwin";
+  vi.mocked(api.preferences).mockRejectedValue(new Error("Output preference could not be saved"));
+  await ready();
+  fireEvent.click(await screen.findByRole("combobox", { name: "Output method" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Paste compatibility" }));
+  await screen.findByText("Output preference could not be saved");
+  expect(screen.getByRole("combobox", { name: "Output method" }).textContent).toContain("Direct insertion");
+  expect(info.preferences.output_mode).toBeUndefined();
+});
+
+it("does not offer Mac output methods on Linux", async () => {
+  info.platform = "linux";
+  await ready();
+  expect(screen.queryByRole("combobox", { name: "Output method" })).toBeNull();
+  expect(api.preferences).not.toHaveBeenCalled();
+});
+
+it("shows the effective Mac login state and changes it only on explicit toggle", async () => {
+  info.platform = "darwin";
+  info.preferences.autostart = true;
+  info.login_startup = { enabled: false, state: "requires_approval" };
+  vi.mocked(api.setLoginStartup).mockImplementation(async (enabled) => {
+    info.login_startup = { enabled, state: enabled ? "enabled" : "disabled" };
+  });
+  await ready();
+  const toggle = screen.getByRole("switch", { name: "Start at login" });
+  expect((toggle as HTMLInputElement).checked).toBe(false);
+  expect(screen.getByText(/Voice Type will not override your choice/)).toBeTruthy();
+  expect(api.setLoginStartup).not.toHaveBeenCalled();
+  fireEvent.click(toggle);
+  await waitFor(() => expect(api.setLoginStartup).toHaveBeenCalledExactlyOnceWith(true));
+  await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(true));
+  expect(api.preferences).not.toHaveBeenCalled();
+});
+
+it("uses Mac shortcut labels and resets to Control-Option-Space", async () => {
+  info.platform = "darwin";
+  info.preferences.shortcut = "Super+Shift+K";
+  await ready();
+  fireEvent.click(screen.getByRole("button", { name: "Shortcuts" }));
+  await screen.findByText("Command");
+  fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+  await waitFor(() => expect(api.preferences).toHaveBeenCalledWith(expect.objectContaining({ shortcut: "Ctrl+Alt+Space" })));
+  await screen.findByText("Control");
+  expect(screen.getByText("Option")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Reset" })).toBeNull();
 });

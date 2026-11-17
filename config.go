@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"unicode"
@@ -84,6 +82,7 @@ func configDefaults() Config {
 // sttSettings is a snapshot for one recording. Reloads never mutate it during
 // capture or transcription.
 type sttSettings struct {
+	InsertBackend        InsertBackend
 	Provider             string
 	Model                string
 	StreamingMode        streamingMode
@@ -296,17 +295,6 @@ func parseVocabulary(raw json.RawMessage) (vocabLists, error) {
 		return nil, nil
 	}
 	return lists, nil
-}
-
-// configFilePath is the one and only config location: ~/.voice-type-config.jsonc,
-// the same path install.sh writes. An empty result is reported by the loader;
-// it must never terminate the desktop process or use a relative file.
-func configFilePath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".voice-type-config.jsonc")
 }
 
 // stripJsoncComments removes // line comments while leaving string literals

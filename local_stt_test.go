@@ -141,11 +141,11 @@ func TestLocalFinalInsertionFailureRetainsAudioAndTranscript(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	oldFactory := textInserterBackends[InsertBackendIBus]
-	textInserterBackends[InsertBackendIBus] = func(context.Context) (TextInserter, error) {
+	oldFactory := textInserterBackends[DefaultInsertBackend()]
+	textInserterBackends[DefaultInsertBackend()] = func(context.Context) (TextInserter, error) {
 		return &recordingInserter{err: errors.New("test insertion failure")}, nil
 	}
-	defer func() { textInserterBackends[InsertBackendIBus] = oldFactory }()
+	defer func() { textInserterBackends[DefaultInsertBackend()] = oldFactory }()
 	service.recorder = &fixtureRecorder{}
 	stream := newLocalStreamSession(context.Background(), streamingModeProcess, &fakeLocalStream{finalSnapshot: fakeStreamSnapshot{full: "retained transcript", committed: "retained transcript"}}, nil)
 	service.mu.Lock()

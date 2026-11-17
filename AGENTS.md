@@ -1,5 +1,12 @@
 # AGENTS.md — Voice Type
 
+## macOS feature handoff
+
+- For `feat/mac` work, first read `end_goal.md`, `todos.md` and `memory.md`.
+- Those files hold approved decisions, testable tickets and the current resume point.
+  Update ticket evidence and memory before compaction or ending a feature session.
+- Distinguish implemented, tested on Mac, signed/notarized, and published states.
+
 ## Structure and behavior
 
 - One Linux Wails v3 app: `cmd/voice-type` is the app entry point; root Go files

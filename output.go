@@ -10,13 +10,20 @@ func insertText(ctx context.Context, text string) error {
 	return insertTextTimed(ctx, text, nil)
 }
 func insertTextTimed(ctx context.Context, text string, timings *dictationTiming) (err error) {
+	return insertTextBackendTimed(ctx, text, DefaultInsertBackend(), timings)
+}
+
+func insertTextBackendTimed(ctx context.Context, text string, backend InsertBackend, timings *dictationTiming) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := validateInsertionText(text); err != nil {
 		return err
 	}
-	inserter, err := NewTextInserter(ctx, InsertBackendIBus)
+	if backend == "" {
+		backend = DefaultInsertBackend()
+	}
+	inserter, err := NewTextInserter(ctx, backend)
 	if err != nil {
 		return err
 	}

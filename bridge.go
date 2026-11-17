@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,15 +17,19 @@ type Preferences struct {
 	Shortcut      string `json:"shortcut"`
 	Autostart     bool   `json:"autostart"`
 	SetupComplete bool   `json:"setup_complete"`
+	OutputMode    string `json:"output_mode,omitempty"`
 }
 type DesktopInfo struct {
-	LastShortcutAt   string      `json:"last_shortcut_at"`
-	Preferences      Preferences `json:"preferences"`
-	TrayAvailable    bool        `json:"tray_available"`
-	ShortcutError    string      `json:"shortcut_error"`
-	Version          string      `json:"version"`
-	PreferencesError string      `json:"preferences_error"`
-	Notice           string      `json:"notice"`
+	Platform         string             `json:"platform"`
+	Permissions      PermissionStatus   `json:"permissions"`
+	LoginStartup     LoginStartupStatus `json:"login_startup"`
+	LastShortcutAt   string             `json:"last_shortcut_at"`
+	Preferences      Preferences        `json:"preferences"`
+	TrayAvailable    bool               `json:"tray_available"`
+	ShortcutError    string             `json:"shortcut_error"`
+	Version          string             `json:"version"`
+	PreferencesError string             `json:"preferences_error"`
+	Notice           string             `json:"notice"`
 }
 type Bridge struct {
 	app                 *application.App
@@ -36,6 +41,7 @@ type Bridge struct {
 	mu                  sync.Mutex
 	capturingShortcut   atomic.Bool
 	prefs               Preferences
+	loginControl        loginStartupControl
 	shortcutError       string
 	lastShortcutAt      atomic.Int64
 	version             string
@@ -44,6 +50,7 @@ type Bridge struct {
 	frontendReady       bool
 	pendingWindowAction string
 	visible             atomic.Bool
+	finalQuit           atomic.Bool
 	trayMu              sync.Mutex
 	trayCheckedAt       time.Time
 	trayValue           bool
@@ -217,9 +224,7 @@ func (b *Bridge) finishQuitWithoutFrontend() {
 			return
 		}
 	}
-	if b.app != nil {
-		b.app.Quit()
-	}
+	b.quitApplication()
 }
 
 // setWindow publishes the settings window. It is created only when settings
@@ -275,7 +280,7 @@ func (b *Bridge) CompleteWindowAction(action string) error {
 		if status.State != "idle" && status.State != "testing" {
 			return errors.New("finish the current dictation before quitting")
 		}
-		b.app.Quit()
+		b.quitApplication()
 	} else {
 		_ = b.StopMicrophoneTest()
 		_ = b.EndShortcutCapture()
@@ -335,6 +340,11 @@ func (b *Bridge) Info() DesktopInfo {
 	info := DesktopInfo{Preferences: b.prefs, ShortcutError: b.shortcutError, Version: b.version, PreferencesError: b.preferencesError, Notice: b.notice}
 	b.mu.Unlock()
 	// A slow desktop bus must not hold up preference saves or shortcut handling.
+	info.Permissions = b.Permissions()
+	info.Platform = info.Permissions.Platform
+	if info.Platform == "darwin" {
+		info.LoginStartup = b.loginStartup().status()
+	}
 	info.TrayAvailable = b.trayStatus()
 	if last := b.lastShortcutAt.Load(); last != 0 {
 		info.LastShortcutAt = time.Unix(0, last).Format(time.RFC3339)
@@ -425,10 +435,10 @@ func (b *Bridge) registerShortcuts(prefs Preferences) error {
 		// Development runs must not replace the installed app's shortcut.
 		return nil
 	}
-	if isGNOME() {
+	if runtime.GOOS == "linux" && isGNOME() {
 		return applyGNOMEShortcuts(prefs, false)
 	}
-	if os.Getenv("XDG_SESSION_TYPE") == "wayland" {
+	if runtime.GOOS == "linux" && os.Getenv("XDG_SESSION_TYPE") == "wayland" {
 		return errors.New("configure global shortcuts in your desktop on this Wayland session")
 	}
 
@@ -470,7 +480,7 @@ func (b *Bridge) releaseShortcuts() error {
 		// No shortcut was registered by a development run.
 		return nil
 	}
-	if isGNOME() {
+	if runtime.GOOS == "linux" && isGNOME() {
 		return applyGNOMEShortcuts(b.prefs, true)
 	}
 	return b.app.GlobalShortcut.UnregisterAll()

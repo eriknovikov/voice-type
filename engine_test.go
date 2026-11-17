@@ -23,6 +23,9 @@ func setupEngineTest(t *testing.T) int {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
+	if err := os.MkdirAll(filepath.Dir(configFilePath()), 0700); err != nil {
+		t.Fatal(err)
+	}
 	keyring.MockInit()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -6,23 +6,22 @@ import (
 	"math"
 	"sync"
 	"time"
-
-	"github.com/jfreymuth/pulse"
-	"github.com/jfreymuth/pulse/proto"
 )
 
-// Recorder owns the PulseAudio connection. The client is created once at application
-// start (measured ~3 ms) and reused; only the record stream is per-session
-// (~13 ms setup, ~87 ms to the first sample on a cold device).
-//
-// Two locks on purpose: streamMu guards the stream lifecycle, bufMu guards the
-// sample buffer that the pulse library's own goroutine writes into. Sharing one
-// lock would make Start() block its own write callback.
-type Recorder struct {
-	client *pulse.Client
+// Capture callbacks must stop before stop returns. All lifecycle methods run
+// under streamMu; callbacks use only bufMu and never touch the device lifecycle.
+type captureDevice interface {
+	start(sourceID string, samples func([]int16) (int, error)) (fellBack bool, err error)
+	stop() error
+	close()
+}
 
-	streamMu sync.Mutex
-	stream   *pulse.RecordStream
+// Recorder shares buffering and metering across native capture backends. Separate
+// lifecycle and buffer locks let Start safely receive immediate sample callbacks.
+type Recorder struct {
+	streamMu  sync.Mutex
+	device    captureDevice
+	recording bool
 
 	bufMu         sync.Mutex
 	samples       []int16
@@ -48,36 +47,29 @@ type audioRecorder interface {
 }
 
 func NewRecorder() (*Recorder, error) {
-	client, err := pulse.NewClient(
-		pulse.ClientApplicationName("voice-type"),
-		pulse.ClientTimeout(time.Second),
-	)
+	device, err := newCaptureDevice()
 	if err != nil {
-		return nil, fmt.Errorf("connect to PulseAudio: %w", err)
+		return nil, err
 	}
-	return &Recorder{client: client}, nil
+	return &Recorder{device: device}, nil
 }
 
 func (r *Recorder) Close() {
 	r.streamMu.Lock()
-	if r.stream != nil {
-		r.stream.Stop()
-		r.stream.Close()
-		r.stream = nil
+	defer r.streamMu.Unlock()
+	if r.device != nil {
+		_ = r.device.stop()
+		r.device.close()
+		r.device = nil
 	}
+	r.recording = false
 	r.fellBack = false
-	r.streamMu.Unlock()
 	r.bufMu.Lock()
 	r.samples = nil
 	r.chunkSink = nil
 	r.sessionBuffer, r.bufferFailure = nil, nil
 	r.meterWindow = nil
 	r.bufMu.Unlock()
-
-	if r.client != nil {
-		r.client.Close()
-		r.client = nil
-	}
 }
 
 // Start opens a fresh 16 kHz mono stream and begins appending samples.
@@ -85,7 +77,7 @@ func (r *Recorder) Start() error {
 	r.streamMu.Lock()
 	defer r.streamMu.Unlock()
 
-	if r.stream != nil {
+	if r.recording {
 		return fmt.Errorf("already recording")
 	}
 	r.fellBack = false
@@ -101,63 +93,35 @@ func (r *Recorder) Start() error {
 	r.meterAt = time.Time{}
 	r.bufMu.Unlock()
 
-	if r.client == nil {
-		client, err := pulse.NewClient(pulse.ClientApplicationName("voice-type"), pulse.ClientTimeout(time.Second))
+	if r.device == nil {
+		device, err := newCaptureDevice()
 		if err != nil {
-			return fmt.Errorf("connect to audio server: %w", err)
+			return err
 		}
-		r.client = client
+		r.device = device
 	}
-	var source *pulse.Source
-	var err error
-	if r.sourceID != "" {
-		source, err = r.client.SourceByID(r.sourceID)
-		if errors.Is(err, proto.ErrNoSuchEntity) {
-			if _, saveErr := persistMissingMicrophone(r.sourceID); saveErr != nil {
-				return fmt.Errorf("save system default microphone: %w", saveErr)
-			}
-			r.sourceID = ""
-			r.fellBack = true
-			source, err = r.client.DefaultSource()
-		}
-	} else {
-		source, err = r.client.DefaultSource()
+	fellBack, err := r.device.start(r.sourceID, r.acceptSamples)
+	r.fellBack = fellBack
+	if fellBack {
+		r.sourceID = ""
 	}
 	if err != nil {
-		return fmt.Errorf("resolve default source: %w", err)
+		return err
 	}
-
-	stream, err := r.client.NewRecord(
-		pulse.Int16Writer(r.acceptSamples),
-		pulse.RecordMono,
-		pulse.RecordSampleRate(wavSampleRate),
-		pulse.RecordLatency(0.02),
-		pulse.RecordMediaName("voice-type dictation"),
-		pulse.RecordSource(source),
-	)
-	if err != nil {
-		return fmt.Errorf("open record stream: %w", err)
-	}
-
-	r.stream = stream
-	stream.Start()
-	logf("AUDIO", "recording from %s (%s)", source.Name(), source.ID())
+	r.recording = true
 	return nil
 }
 
 // Stop ends capture and returns everything recorded during the session.
 func (r *Recorder) Stop() ([]int16, error) {
 	r.streamMu.Lock()
-	stream := r.stream
-	r.stream = nil
-	r.streamMu.Unlock()
+	defer r.streamMu.Unlock()
 
 	var streamErr error
-	if stream != nil {
-		stream.Stop()
-		streamErr = stream.Error()
-		stream.Close()
+	if r.device != nil {
+		streamErr = r.device.stop()
 	}
+	r.recording = false
 
 	r.bufMu.Lock()
 	r.chunkSink = nil
@@ -183,22 +147,6 @@ type AudioSource struct {
 	Name string `json:"name"`
 }
 
-func ListAudioSources() ([]AudioSource, error) {
-	r, err := NewRecorder()
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-	sources, err := r.client.ListSources()
-	if err != nil {
-		return nil, err
-	}
-	out := []AudioSource{}
-	for _, source := range sources {
-		out = append(out, AudioSource{source.ID(), source.Name()})
-	}
-	return out, nil
-}
 func (r *Recorder) SetSource(id string) {
 	r.streamMu.Lock()
 	defer r.streamMu.Unlock()
@@ -319,7 +267,7 @@ func (r *Recorder) acceptSamples(samples []int16) (int, error) {
 			if err != nil && failure != nil {
 				failure(err)
 			}
-			// The engine coordinates Stop; do not also ask Pulse to stop itself on
+			// The engine coordinates Stop; do not also ask capture to stop itself on
 			// another goroutine after an upload failure.
 			return len(samples), nil
 		}

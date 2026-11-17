@@ -14,18 +14,6 @@ import (
 // which is encoding, not encryption: the file is readable by the user account.
 type fileCredentialStore struct{}
 
-func credentialDirectory() (string, error) {
-	base := os.Getenv("XDG_DATA_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		base = filepath.Join(home, ".local", "share")
-	}
-	return filepath.Join(base, "voice-type"), nil
-}
-
 func credentialPath(provider string) (string, error) {
 	dir, err := credentialDirectory()
 	if err != nil {
@@ -39,11 +27,8 @@ func (fileCredentialStore) Set(provider, key string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
 	encoded := base64.StdEncoding.EncodeToString([]byte(key)) + "\n"
-	return os.WriteFile(path, []byte(encoded), 0600)
+	return atomicPrivateWrite(path, []byte(encoded))
 }
 
 func (fileCredentialStore) Get(provider string) (string, error) {
@@ -51,7 +36,7 @@ func (fileCredentialStore) Get(provider string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(path)
+	data, err := readPrivateFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", keyring.ErrNotFound
 	}

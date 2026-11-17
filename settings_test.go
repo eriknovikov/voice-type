@@ -17,6 +17,9 @@ func settingsTestHome(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "environment-must-not-be-used")
 	t.Setenv("OPENROUTER_API_KEY", "environment-must-not-be-used")
+	if err := os.MkdirAll(filepath.Dir(configFilePath()), 0700); err != nil {
+		t.Fatal(err)
+	}
 	keyring.MockInit()
 }
 func ptr[T any](v T) *T { return &v }

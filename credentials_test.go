@@ -294,10 +294,10 @@ func TestProfileSaveFailureDoesNotPublishAProviderSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(os.Getenv("HOME"), 0500); err != nil {
+	if err := os.Chmod(filepath.Dir(configFilePath()), 0500); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(os.Getenv("HOME"), 0700) })
+	t.Cleanup(func() { _ = os.Chmod(filepath.Dir(configFilePath()), 0700) })
 	if _, err := UpsertProfile(ProfileUpdate{
 		Revision:      view.Revision,
 		ID:            id,

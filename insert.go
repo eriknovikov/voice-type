@@ -13,8 +13,10 @@ import (
 type InsertBackend string
 
 const (
-	InsertBackendIBus  InsertBackend = "ibus"
-	InsertBackendFcitx InsertBackend = "fcitx"
+	InsertBackendIBus      InsertBackend = "ibus"
+	InsertBackendFcitx     InsertBackend = "fcitx"
+	InsertBackendMacDirect InsertBackend = "mac-direct"
+	InsertBackendMacPaste  InsertBackend = "mac-paste"
 )
 
 var (
@@ -39,6 +41,19 @@ type TextInserter interface {
 // libraries, so an unavailable platform does not compile those dependencies.
 var textInserterBackends = map[InsertBackend]func(context.Context) (TextInserter, error){}
 
+func DefaultInsertBackend() InsertBackend { return defaultInsertionBackend(runtime.GOOS) }
+
+func defaultInsertionBackend(platform string) InsertBackend {
+	switch platform {
+	case "linux":
+		return InsertBackendIBus
+	case "darwin":
+		return InsertBackendMacDirect
+	default:
+		return ""
+	}
+}
+
 // NewTextInserter selects and prepares a backend. It does not submit text or
 // provide a focus delay. The caller controls when to call Insert.
 func NewTextInserter(ctx context.Context, backend InsertBackend) (TextInserter, error) {
@@ -46,7 +61,7 @@ func NewTextInserter(ctx context.Context, backend InsertBackend) (TextInserter, 
 		return nil, err
 	}
 	switch backend {
-	case InsertBackendIBus, InsertBackendFcitx:
+	case InsertBackendIBus, InsertBackendFcitx, InsertBackendMacDirect, InsertBackendMacPaste:
 	default:
 		return nil, fmt.Errorf("unknown text insertion backend %q", backend)
 	}

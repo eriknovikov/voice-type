@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/coder/websocket v1.8.14
+	github.com/gen2brain/malgo v0.11.28
 	github.com/godbus/dbus/v5 v5.2.4
 	github.com/jfreymuth/pulse v0.1.2
 	github.com/wailsapp/wails/v3 v3.0.0

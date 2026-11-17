@@ -52,12 +52,18 @@ export function ShortcutPicker({
   value,
   onChange,
   onError,
+  platform,
 }: {
   name: string;
   value: string;
   onChange: (value: string) => Promise<void>;
   onError: (message: string) => void;
+  platform?: string;
 }) {
+  const defaultShortcut = platform === "darwin" ? "Ctrl+Alt+Space" : "Ctrl+Space";
+  const keyLabel = (key: string) => platform === "darwin"
+    ? ({ Ctrl: "Control", Alt: "Option", Super: "Command" }[key] || key)
+    : key;
   const [editing, setEditing] = useState(false);
   const [ready, setReady] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
@@ -153,7 +159,7 @@ export function ShortcutPicker({
                       +
                     </span>
                   )}
-                  <kbd>{key}</kbd>
+                  <kbd>{keyLabel(key)}</kbd>
                 </span>
               ))
             : editing
@@ -162,11 +168,11 @@ export function ShortcutPicker({
                 : "Preparing…"
               : "Disabled"}
         </button>
-        {!editing && value !== "Ctrl+Space" && (
+        {!editing && value !== defaultShortcut && (
           <button
             className="text-button"
             onClick={() =>
-              void changeCapture(() => change.current("Ctrl+Space")).catch(
+              void changeCapture(() => change.current(defaultShortcut)).catch(
                 (error) => onError(String(error)),
               )
             }

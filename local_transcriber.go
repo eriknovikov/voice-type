@@ -167,7 +167,7 @@ type localStreamSession struct {
 	insertDisabled bool
 }
 
-func startLocalStream(ctx context.Context, use *localModelUse, mode streamingMode, vocabulary []string) (*localStreamSession, error) {
+func startLocalStream(ctx context.Context, use *localModelUse, mode streamingMode, vocabulary []string, backend InsertBackend) (*localStreamSession, error) {
 	if use == nil || use.native == nil || !use.native.supportsStreaming {
 		return nil, errors.New("selected local model is not streaming-capable")
 	}
@@ -181,7 +181,7 @@ func startLocalStream(ctx context.Context, use *localModelUse, mode streamingMod
 		return nil, err
 	}
 	return newLocalStreamSessionWithContext(streamCtx, cancel, mode, stream, func(ctx context.Context) (TextInserter, error) {
-		return NewTextInserter(ctx, InsertBackendIBus)
+		return NewTextInserter(ctx, backend)
 	}), nil
 }
 
@@ -193,7 +193,7 @@ func newLocalStreamSession(ctx context.Context, mode streamingMode, stream local
 func newLocalStreamSessionWithContext(streamCtx context.Context, cancel context.CancelFunc, mode streamingMode, stream localStreamEngine, newInserter localInserterFactory) *localStreamSession {
 	if newInserter == nil {
 		newInserter = func(ctx context.Context) (TextInserter, error) {
-			return NewTextInserter(ctx, InsertBackendIBus)
+			return NewTextInserter(ctx, DefaultInsertBackend())
 		}
 	}
 	session := &localStreamSession{

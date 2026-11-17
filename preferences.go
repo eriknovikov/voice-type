@@ -6,40 +6,45 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 var preferencesFileMu sync.Mutex
 
-func preferencesPath() string {
-	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
-		home, _ := os.UserHomeDir()
-		base = filepath.Join(home, ".local", "state")
-	}
-	return filepath.Join(base, "voice-type", "desktop.json")
+func parsePreferences(data []byte) (Preferences, error) {
+	return parsePreferencesForPlatform(data, runtime.GOOS)
 }
 
-func parsePreferences(data []byte) (Preferences, error) {
-	prefs := Preferences{Shortcut: "Ctrl+Space", Autostart: true}
+func defaultPreferences(platform string) Preferences {
+	shortcut := "Ctrl+Space"
+	if platform == "darwin" {
+		shortcut = "Ctrl+Alt+Space"
+	}
+	return Preferences{Shortcut: shortcut, Autostart: true}
+}
+
+func parsePreferencesForPlatform(data []byte, platform string) (Preferences, error) {
+	prefs := defaultPreferences(platform)
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil || fields == nil {
 		return prefs, errors.New("desktop preferences must be a JSON object")
 	}
-	for key, dest := range map[string]any{"shortcut": &prefs.Shortcut, "autostart": &prefs.Autostart, "setup_complete": &prefs.SetupComplete} {
+	for key, dest := range map[string]any{"shortcut": &prefs.Shortcut, "autostart": &prefs.Autostart, "setup_complete": &prefs.SetupComplete, "output_mode": &prefs.OutputMode} {
 		if raw, ok := fields[key]; ok {
 			if string(raw) == "null" || json.Unmarshal(raw, dest) != nil {
 				return prefs, fmt.Errorf("invalid desktop preference: %s", key)
 			}
 		}
 	}
-	if _, exists := fields["daemon_shortcut"]; !exists && fields["preferences_version"] == nil && prefs.Shortcut == "Ctrl+Alt+Space" {
+	if _, exists := fields["daemon_shortcut"]; platform == "linux" && !exists && fields["preferences_version"] == nil && prefs.Shortcut == "Ctrl+Alt+Space" {
 		prefs.Shortcut = "Ctrl+Space"
 	}
 	if _, err := gtkShortcut(prefs.Shortcut); err != nil {
 		return prefs, errors.New("invalid saved keyboard shortcut")
+	}
+	if err := validateOutputMode(prefs.OutputMode); err != nil {
+		return prefs, err
 	}
 	return prefs, nil
 }
@@ -48,17 +53,17 @@ func loadPreferences() (Preferences, string, error) {
 	preferencesFileMu.Lock()
 	defer preferencesFileMu.Unlock()
 	if err := protectPreferencesDirectory(); err != nil {
-		return Preferences{Shortcut: "Ctrl+Space", Autostart: true}, "", err
+		return defaultPreferences(runtime.GOOS), "", err
 	}
 	data, notice, err := ReadPrivateDocument(preferencesPath(), "desktop.json", func(data []byte) error { _, err := parsePreferences(data); return err })
 	if err != nil {
-		return Preferences{Shortcut: "Ctrl+Space", Autostart: true}, notice, err
+		return defaultPreferences(runtime.GOOS), notice, err
 	}
 	if len(data) == 0 {
 		if notice != "" {
 			notice = "Preferences were reset."
 		}
-		return Preferences{Shortcut: "Ctrl+Space", Autostart: true}, notice, nil
+		return defaultPreferences(runtime.GOOS), notice, nil
 	}
 	prefs, err := parsePreferences(data)
 	if notice != "" {
@@ -85,7 +90,7 @@ func writePreferences(prefs Preferences) error {
 			return err
 		}
 	}
-	for key, value := range map[string]any{"shortcut": prefs.Shortcut, "autostart": prefs.Autostart, "setup_complete": prefs.SetupComplete, "preferences_version": 1} {
+	for key, value := range map[string]any{"shortcut": prefs.Shortcut, "autostart": prefs.Autostart, "setup_complete": prefs.SetupComplete, "output_mode": prefs.OutputMode, "preferences_version": 1} {
 		fields[key], _ = json.Marshal(value)
 	}
 	data, err = json.MarshalIndent(fields, "", "  ")
@@ -99,19 +104,14 @@ func writePreferences(prefs Preferences) error {
 }
 
 func (b *Bridge) applyAutostart(enabled bool) error {
-	if developmentMode() {
-		// Do not create a second login entry for the development binary.
-		return nil
-	}
-	if enabled {
-		return b.app.Autostart.EnableWithOptions(application.AutostartOptions{Arguments: []string{"--background"}})
-	}
-	return b.app.Autostart.Disable()
+	return b.loginStartup().setEnabled(enabled)
 }
 
-// Apply even default preferences, so a checked Start at login always means an
-// actual registration. A failed registration remains visible and can be retried.
 func (b *Bridge) initializePreferences() {
+	b.initializePreferencesForPlatform(runtime.GOOS)
+}
+
+func (b *Bridge) initializePreferencesForPlatform(platform string) {
 	if b.preferencesError != "" {
 		b.recordPreferenceError("Preferences could not be loaded.")
 		return
@@ -119,10 +119,12 @@ func (b *Bridge) initializePreferences() {
 	if b.notice != "" {
 		b.engine.RecordDiagnostic("preferences.recovered", "ok", "Desktop preferences were restored or reset after damage.")
 	}
-	if err := b.applyAutostart(b.prefs.Autostart); err != nil {
-		b.preferencesError = "Could not update Start at login: " + err.Error()
-		b.recordPreferenceError("Could not register login startup")
-		return
+	if platform != "darwin" {
+		if err := b.applyAutostart(b.prefs.Autostart); err != nil {
+			b.preferencesError = "Could not update Start at login: " + err.Error()
+			b.recordPreferenceError("Could not register login startup")
+			return
+		}
 	}
 	if err := writePreferences(b.prefs); err != nil {
 		b.preferencesError = "Could not save desktop preferences: " + err.Error()
@@ -133,22 +135,32 @@ func (b *Bridge) initializePreferences() {
 func (b *Bridge) SavePreferences(prefs Preferences) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.savePreferences(prefs, runtime.GOOS != "darwin" || prefs.Autostart != b.prefs.Autostart)
+}
+
+func (b *Bridge) savePreferences(prefs Preferences, updateLogin bool) error {
+	if err := validateOutputMode(prefs.OutputMode); err != nil {
+		return err
+	}
 	if _, err := gtkShortcut(prefs.Shortcut); err != nil {
 		return err
 	}
 	old := b.prefs
-	wasEnabled, err := b.app.Autostart.IsEnabled()
-	if err != nil {
-		b.preferencesError = "Could not read Start at login: " + err.Error()
+	login := b.loginStartup().status()
+	if updateLogin && login.Error != "" {
+		b.preferencesError = "Could not read Start at login: " + login.Error
 		return errors.New(b.preferencesError)
 	}
 	changed := prefs.Shortcut != old.Shortcut || b.shortcutError != ""
+	loginTouched := false
 	rollback := func() {
 		if changed {
 			_ = b.releaseShortcuts()
 			_ = b.registerShortcuts(old)
 		}
-		_ = b.applyAutostart(wasEnabled)
+		if loginTouched {
+			_ = b.applyAutostart(login.Enabled)
+		}
 	}
 	fail := func(err error) error {
 		rollback()
@@ -163,8 +175,11 @@ func (b *Bridge) SavePreferences(prefs Preferences) error {
 			return fail(err)
 		}
 	}
-	if err := b.applyAutostart(prefs.Autostart); err != nil {
-		return fail(fmt.Errorf("could not update Start at login: %w", err))
+	if updateLogin {
+		loginTouched = true
+		if err := b.applyAutostart(prefs.Autostart); err != nil {
+			return fail(fmt.Errorf("could not update Start at login: %w", err))
+		}
 	}
 	if err := writePreferences(prefs); err != nil {
 		return fail(fmt.Errorf("could not save desktop preferences: %w", err))
@@ -186,6 +201,9 @@ func (b *Bridge) recordPreferenceError(message string) {
 }
 
 func protectPreferencesDirectory() error {
+	if err := prepareStorageParent(preferencesPath()); err != nil {
+		return err
+	}
 	dir := filepath.Dir(preferencesPath())
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("create desktop preferences directory: %w", err)

@@ -77,11 +77,21 @@ export interface Status {
   warning_version?: number;
 }
 export interface Preferences {
+  output_mode?: "" | "direct" | "paste";
   shortcut: string;
   autostart: boolean;
   setup_complete: boolean;
 }
+export type PermissionState = "unknown" | "granted" | "denied" | "restricted" | "not_required";
+export interface PermissionStatus {
+  platform: string;
+  microphone: PermissionState;
+  accessibility: PermissionState;
+}
 export interface DesktopInfo {
+  login_startup?: { enabled: boolean; state: string; error?: string };
+  platform?: string;
+  permissions?: PermissionStatus;
   last_shortcut_at?: string;
   preferences: Preferences;
   tray_available: boolean;
@@ -149,6 +159,12 @@ export interface LogPage {
 const call = <T>(method: string, ...args: unknown[]): Promise<T> =>
   Call.ByName(`github.com/eriknovikov/voice-type.Bridge.${method}`, ...args);
 export const api = {
+  setLoginStartup: (enabled: boolean) => call<void>("SetLoginStartup", enabled),
+  permissions: () => call<PermissionStatus>("Permissions"),
+  requestPermission: (permission: "microphone" | "accessibility") =>
+    call<PermissionStatus>("RequestPermission", permission),
+  openPermissionSettings: (permission: "microphone" | "accessibility") =>
+    call<void>("OpenPermissionSettings", permission),
   beginShortcutCapture: () => call<void>("BeginShortcutCapture"),
   endShortcutCapture: () => call<void>("EndShortcutCapture"),
   recoveryRevision: () => call<string>("RecoveryRevision"),

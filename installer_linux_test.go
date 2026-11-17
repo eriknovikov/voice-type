@@ -62,6 +62,24 @@ esac
 	t.Setenv("VOICE_TYPE_LEGACY_BIN", filepath.Join(t.TempDir(), "usr/local/bin/voice-type"))
 	return source, bin
 }
+
+func TestLinuxScriptsRefuseMacBeforeChangingAnything(t *testing.T) {
+	source, _ := installerFixture(t)
+	paths := seedUninstallData(t)
+	writeInstallerTool(t, source, "uname", "#!/bin/sh\nprintf '%s\\n' Darwin\n")
+	for _, script := range []string{"install.sh", "uninstall.sh"} {
+		output, err := exec.Command(filepath.Join(source, script)).CombinedOutput()
+		if err == nil || !strings.Contains(string(output), "for Linux. On macOS") {
+			t.Fatal(script, string(output), err)
+		}
+		for _, path := range paths {
+			data, err := os.ReadFile(path)
+			if err != nil || string(data) != "private-data" {
+				t.Fatal("Mac refusal changed data", path, err)
+			}
+		}
+	}
+}
 func runInstaller(t *testing.T, source string, args ...string) (string, error) {
 	t.Helper()
 	command := exec.Command(filepath.Join(source, "install.sh"), args...)

@@ -2,9 +2,16 @@ package voicetype
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"time"
 )
+
+// RunDoctor prints the same read-only report shown in General › Diagnostics.
+func RunDoctor(version string, out io.Writer) int {
+	fmt.Fprint(out, runDiagnostics(version).Text())
+	return 0
+}
 
 // DiagnosticCheck is one user-readable line of the diagnostics report. Status
 // is one of ok, warn, fail, or info.

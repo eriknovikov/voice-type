@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package voicetype
 
 import (
@@ -13,6 +15,9 @@ import (
 // on different files. Closing the descriptor (including process death) releases it.
 func acquireEngineLock() (*os.File, error) {
 	dir := engineRuntimeDir()
+	if err := prepareStorageParent(dir); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("create Voice Type runtime directory: %w", err)
 	}
@@ -49,18 +54,4 @@ func acquireEngineLock() (*os.File, error) {
 		return nil, fmt.Errorf("lock Voice Type engine: %w", err)
 	}
 	return file, nil
-}
-
-func engineRuntimeDir() string {
-	name := "voice-type"
-	if developmentMode() {
-		name += "-dev"
-	}
-	if base := os.Getenv("XDG_RUNTIME_DIR"); base != "" {
-		return filepath.Join(base, name)
-	}
-	if developmentMode() {
-		return filepath.Join(filepath.Dir(workspaceFilePath()), name)
-	}
-	return filepath.Dir(workspaceFilePath())
 }

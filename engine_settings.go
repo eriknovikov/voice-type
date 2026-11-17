@@ -180,6 +180,9 @@ func (d *engine) prepareToggle() (func() error, error) {
 	if d.shuttingDown {
 		return nil, errors.New("shutting down")
 	}
+	if d.suspended {
+		return nil, errors.New("recording is unavailable while the system is asleep")
+	}
 	if d.state == stateChecking {
 		if d.stt != nil && d.stt.settings.Provider == providerOpenAI && d.stt.settings.StreamingMode == streamingModeProcess {
 			// A quick Stop is a finishing request, even if microphone startup has

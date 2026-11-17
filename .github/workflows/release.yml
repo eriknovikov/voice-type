@@ -106,8 +106,16 @@ jobs:
           path: ${{ runner.temp }}/release/*
           if-no-files-found: error
 
+  mac:
+    needs: version
+    if: needs.version.outputs.release == 'true' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/macos.yml
+    with:
+      sign: true
+    secrets: inherit
+
   publish:
-    needs: [version, build]
+    needs: [version, build, mac]
     if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-24.04
     permissions:
@@ -129,9 +137,18 @@ jobs:
           test "$(find . -maxdepth 1 -name '*.deb' | wc -l)" -eq 2
           test "$(find . -maxdepth 1 -name '*.rpm' | wc -l)" -eq 2
           test "$(find . -maxdepth 1 -name '*.pkg.tar.zst' | wc -l)" -eq 1
+          test "$(find . -maxdepth 1 -name '*.dmg' | wc -l)" -eq 2
+          for ARCH in arm64 amd64; do
+            NAME="voice-type_${VERSION}_darwin_${ARCH}.dmg"
+            test -f "$NAME"
+            test "$(wc -l < "$NAME.sha256")" -eq 1
+            grep -Eq "^[0-9a-f]{64}  voice-type_${VERSION//./\\.}_darwin_${ARCH}\\.dmg$" "$NAME.sha256"
+            sha256sum -c "$NAME.sha256"
+          done
           FILES=$(find . -maxdepth 1 -type f \
-            \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' -o -name '*.dmg' \) \
             -printf '%f\n' | sort)
+          test "$(printf '%s\n' "$FILES" | wc -l)" -eq 7
           printf '%s\n' "$FILES"
           # shellcheck disable=SC2086
           sha256sum $FILES > checksums.txt

@@ -9,10 +9,10 @@ import (
 	"io/fs"
 	"log"
 	"math"
+	"runtime"
 	"strings"
 	"time"
 
-	"github.com/godbus/dbus/v5"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 )
@@ -23,16 +23,6 @@ var assets embed.FS
 //go:embed icon.png
 var appIcon []byte
 
-func trayAvailable() bool {
-	conn, err := dbus.ConnectSessionBus()
-	if err != nil {
-		return false
-	}
-	defer conn.Close()
-	var owner bool
-	err = conn.BusObject().Call("org.freedesktop.DBus.NameHasOwner", 0, "org.kde.StatusNotifierWatcher").Store(&owner)
-	return err == nil && owner
-}
 func trayIcon(state string) []byte {
 	canvas := image.NewNRGBA(image.Rect(0, 0, 32, 32))
 	c := color.RGBA{145, 150, 158, 255}
@@ -87,9 +77,11 @@ func Run(version string, command Command) error {
 	done := make(chan struct{})
 	app := application.New(application.Options{
 		Name: appName, Icon: appIcon, Description: "System-wide voice dictation",
-		Linux:    application.LinuxOptions{ApplicationID: appID},
-		Services: []application.Service{application.NewService(b)},
-		Assets:   application.AssetOptions{Handler: application.BundledAssetFileServer(frontend)},
+		Linux:      application.LinuxOptions{ApplicationID: appID},
+		Mac:        application.MacOptions{ActivationPolicy: application.ActivationPolicyAccessory},
+		ShouldQuit: func() bool { return b.allowNativeQuit(runtime.GOOS) },
+		Services:   []application.Service{application.NewService(b)},
+		Assets:     application.AssetOptions{Handler: application.BundledAssetFileServer(frontend)},
 		SingleInstance: &application.SingleInstanceOptions{UniqueID: appID, OnSecondInstanceLaunch: func(data application.SecondInstanceData) {
 			if len(data.Args) == 0 {
 				return
@@ -158,13 +150,11 @@ func Run(version string, command Command) error {
 		b.engine.RecordDiagnostic("preferences.invalid", "error", "Could not read desktop preferences; check file permissions")
 	}
 	b.initializePreferences()
-	startupReady := b.prefs.SetupComplete && b.Status().Error == "" && b.preferencesError == "" && b.notice == "" && ConfigNotice() == "" && b.Status().Notice == ""
-	hidden := (command == CommandBackground || command == CommandToggle) && startupReady
-	// Recovery/setup feedback takes precedence over an automatic first recording.
-	initial := command
-	if command == CommandToggle && !startupReady {
-		initial = CommandShow
+	if err := b.registerShortcuts(b.prefs); err != nil {
+		b.shortcutError = err.Error()
 	}
+	startupReady := b.prefs.SetupComplete && b.Permissions().recordingError(true) == nil && b.Status().Error == "" && b.preferencesError == "" && b.shortcutError == "" && b.notice == "" && ConfigNotice() == "" && b.Status().Notice == ""
+	hidden, initial := startupPresentation(runtime.GOOS, command, startupReady)
 	router.submit(initial)
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
 		router.start(startupReady)
@@ -196,7 +186,21 @@ func Run(version string, command Command) error {
 			b.setWindowVisible(true)
 		}
 	}
-	tray.OnClick(show)
+	if runtime.GOOS == "linux" {
+		tray.OnClick(show)
+	}
+	if runtime.GOOS == "darwin" {
+		app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(*application.ApplicationEvent) {
+			application.InvokeAsync(show)
+		})
+		app.Event.OnApplicationEvent(events.Common.SystemWillSleep, func(*application.ApplicationEvent) {
+			b.engine.setSuspended(true)
+			b.cancelLevelStream()
+		})
+		app.Event.OnApplicationEvent(events.Common.SystemDidWake, func(*application.ApplicationEvent) {
+			b.engine.setSuspended(false)
+		})
+	}
 	// Keep action IDs stable across state changes. A tray host can deliver a
 	// click from a layout it fetched just before a status update.
 	menu := app.NewMenu()
@@ -230,9 +234,6 @@ func Run(version string, command Command) error {
 	}
 	updateMenu("idle")
 
-	if err := b.registerShortcuts(b.prefs); err != nil {
-		b.shortcutError = err.Error()
-	}
 	go func() {
 		last := ""
 		ticker := time.NewTicker(100 * time.Millisecond)

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"testing"
@@ -134,6 +135,9 @@ func TestGNOMEShortcutsMergeFreshRegistrations(t *testing.T) {
 // GLib chooses its backend before its first initialization. Run its real API in
 // a fresh process with a keyfile backend, which cannot contact the user's dconf.
 func TestGNOMEShortcutsWithRealSettings(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("native GNOME settings are Linux-only")
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -147,6 +151,9 @@ func TestGNOMEShortcutsWithRealSettings(t *testing.T) {
 }
 
 func TestGNOMEShortcutsKeyfileHelper(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("native GNOME settings are Linux-only")
+	}
 	root := os.Getenv("VOICE_TYPE_SHORTCUT_TEST_ROOT")
 	if root == "" {
 		t.Skip("isolated subprocess only")

@@ -350,9 +350,9 @@ func TestCloudStreamEngineInsertsFinalOnceAndRecordsTiming(t *testing.T) {
 		}
 	})
 	inserter := &recordingInserter{}
-	oldFactory := textInserterBackends[InsertBackendIBus]
-	textInserterBackends[InsertBackendIBus] = func(context.Context) (TextInserter, error) { return inserter, nil }
-	defer func() { textInserterBackends[InsertBackendIBus] = oldFactory }()
+	oldFactory := textInserterBackends[DefaultInsertBackend()]
+	textInserterBackends[DefaultInsertBackend()] = func(context.Context) (TextInserter, error) { return inserter, nil }
+	defer func() { textInserterBackends[DefaultInsertBackend()] = oldFactory }()
 	service, err := startEngine("test")
 	if err != nil {
 		t.Fatal(err)
@@ -579,9 +579,9 @@ func TestCloudCaptureStartsImmediatelyAndStopBeforeAckFinishes(t *testing.T) {
 	http.DefaultTransport = redirectedRealtimeTransport{target: endpoint, original: originalTransport}
 	defer func() { http.DefaultTransport = originalTransport }()
 	inserter := &recordingInserter{}
-	oldFactory := textInserterBackends[InsertBackendIBus]
-	textInserterBackends[InsertBackendIBus] = func(context.Context) (TextInserter, error) { return inserter, nil }
-	defer func() { textInserterBackends[InsertBackendIBus] = oldFactory }()
+	oldFactory := textInserterBackends[DefaultInsertBackend()]
+	textInserterBackends[DefaultInsertBackend()] = func(context.Context) (TextInserter, error) { return inserter, nil }
+	defer func() { textInserterBackends[DefaultInsertBackend()] = oldFactory }()
 	service, err := startEngine("test")
 	if err != nil {
 		t.Fatal(err)

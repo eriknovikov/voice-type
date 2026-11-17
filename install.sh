@@ -35,7 +35,7 @@ while [ $# -gt 0 ]; do
         *) usage >&2; exit 2 ;;
     esac
 done
-[ "$(uname -s)" = Linux ] || fail 'Voice Type currently supports Linux.'
+[ "$(uname -s)" = Linux ] || fail 'This installer is for Linux. On macOS, use a published Voice Type DMG.'
 
 case "$(uname -m)" in
     x86_64) MACHINE=x86_64 ;;

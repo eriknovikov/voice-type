@@ -95,6 +95,9 @@ func emptyConfigDocument() []byte {
 
 // Called with settingsMu held for validation, migration and recovery.
 func readConfigDocument() ([]byte, map[string]json.RawMessage, error) {
+	if err := migrateLegacyConfiguration(); err != nil {
+		return nil, nil, err
+	}
 	if configFilePath() == "" {
 		return nil, nil, errors.New("cannot locate your home directory; restore HOME and reopen Voice Type")
 	}

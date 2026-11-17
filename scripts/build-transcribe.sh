@@ -10,22 +10,33 @@ ARCHIVE="$NATIVE_DIR/transcribe.cpp-$REV.tar.gz"
 BUILD_DIR="$NATIVE_DIR/build"
 PREFIX="$NATIVE_DIR/install"
 
-for tool in cmake curl sha256sum tar pkg-config go; do
+for tool in cmake curl tar pkg-config go; do
     command -v "$tool" >/dev/null 2>&1 || {
         printf 'Missing build dependency: %s\n' "$tool" >&2
         exit 1
     }
 done
 
+verify_archive() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s  %s\n' "$ARCHIVE_SHA256" "$1" | sha256sum -c -
+    elif command -v shasum >/dev/null 2>&1; then
+        printf '%s  %s\n' "$ARCHIVE_SHA256" "$1" | shasum -a 256 -c -
+    else
+        printf '%s\n' 'Missing build dependency: sha256sum or shasum.' >&2
+        exit 1
+    fi
+}
+
 mkdir -p "$NATIVE_DIR"
 if [ ! -f "$ARCHIVE" ]; then
     curl -fLsS --retry 3 \
         "https://github.com/anomalyco/transcribe.cpp/archive/$REV.tar.gz" \
         -o "$ARCHIVE.tmp"
-    printf '%s  %s\n' "$ARCHIVE_SHA256" "$ARCHIVE.tmp" | sha256sum -c -
+    verify_archive "$ARCHIVE.tmp"
     mv "$ARCHIVE.tmp" "$ARCHIVE"
 fi
-printf '%s  %s\n' "$ARCHIVE_SHA256" "$ARCHIVE" | sha256sum -c -
+verify_archive "$ARCHIVE"
 
 if [ ! -f "$SOURCE_DIR/.voice-type-revision" ]; then
     mkdir -p "$SOURCE_DIR"
@@ -34,6 +45,30 @@ if [ ! -f "$SOURCE_DIR/.voice-type-revision" ]; then
 fi
 
 VULKAN=OFF
+METAL=OFF
+set --
+case "$(uname -s)" in
+    Darwin)
+        case "$(go env GOARCH)" in
+            arm64) METAL=ON; APPLE_ARCH=arm64 ;;
+            amd64) APPLE_ARCH=x86_64 ;;
+            *) printf '%s\n' 'Unsupported macOS architecture.' >&2; exit 1 ;;
+        esac
+        export MACOSX_DEPLOYMENT_TARGET=13.0
+        set -- -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            "-DCMAKE_OSX_ARCHITECTURES=$APPLE_ARCH" \
+            -DGGML_ACCELERATE=ON -DGGML_METAL_EMBED_LIBRARY=ON
+        # Mac ships Metal (Apple Silicon) or CPU/Accelerate (Intel), not Vulkan.
+        case "${VOICE_TYPE_VULKAN:-auto}" in
+            auto|0|off|OFF) ;;
+            *) printf '%s\n' 'Vulkan is not supported in macOS builds.' >&2; exit 2 ;;
+        esac
+        ;;
+    Linux) ;;
+    *) printf '%s\n' 'Only native Linux and macOS builds are supported.' >&2; exit 1 ;;
+esac
+
+if [ "$(uname -s)" = Linux ]; then
 case "${VOICE_TYPE_VULKAN:-auto}" in
     0|off|OFF) ;;
     1|on|ON)
@@ -57,11 +92,13 @@ case "${VOICE_TYPE_VULKAN:-auto}" in
         exit 2
         ;;
 esac
+fi
 
 cmake -S "$SOURCE_DIR" -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
     -DTRANSCRIBE_BUILD_SHARED=OFF \
+    -DTRANSCRIBE_GGML_BACKEND_DL=OFF \
     -DTRANSCRIBE_BUILD_TESTS=OFF \
     -DTRANSCRIBE_BUILD_EXAMPLES=OFF \
     -DTRANSCRIBE_BUILD_TOOLS=OFF \
@@ -69,8 +106,9 @@ cmake -S "$SOURCE_DIR" -B "$BUILD_DIR" \
     -DTRANSCRIBE_USE_OPENMP=OFF \
     -DTRANSCRIBE_USE_SYSTEM_BLAS=OFF \
     -DTRANSCRIBE_VULKAN="$VULKAN" \
+    -DTRANSCRIBE_METAL="$METAL" \
     -DTRANSCRIBE_X86_CONSERVATIVE=ON \
-    -DGGML_NATIVE=OFF
+    -DGGML_NATIVE=OFF "$@"
 cmake --build "$BUILD_DIR" --parallel "${VOICE_TYPE_BUILD_JOBS:-4}"
 cmake --install "$BUILD_DIR"
 
@@ -94,4 +132,4 @@ cp "$ROOT/LICENSE" "$ROOT/build/LICENSE"
     printf '\n---\n\n'
     cat "$SOURCE_DIR/THIRD-PARTY-LICENSES.md"
 } > "$ROOT/build/THIRD-PARTY-LICENSES.md"
-printf 'Built transcribe.cpp %s (%s backend build)\n' "$REV" "$VULKAN"
+printf 'Built transcribe.cpp %s (Vulkan=%s Metal=%s)\n' "$REV" "$VULKAN" "$METAL"

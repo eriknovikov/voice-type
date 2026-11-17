@@ -57,7 +57,7 @@ while [ $# -gt 0 ]; do
         *) usage >&2; exit 2 ;;
     esac
 done
-[ "$(uname -s)" = Linux ] || fail 'Voice Type currently supports Linux.'
+[ "$(uname -s)" = Linux ] || fail 'This uninstaller is for Linux. On macOS, disable Start at login, quit and move Voice Type.app to Trash. Your Mac data is kept.'
 
 package_kind() {
     if command -v dpkg-query >/dev/null 2>&1 && dpkg-query -W -f='${Status}' voice-type 2>/dev/null </dev/null | grep -qx 'install ok installed'; then

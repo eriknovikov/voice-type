@@ -44,6 +44,7 @@ import { useLocalModels } from "./useLocalModels";
 import { APIKeys } from "./APIKeys";
 import { FAQ } from "./FAQ";
 import { Diagnostics } from "./Diagnostics";
+import { Permissions } from "./Permissions";
 
 type Tab =
   | "settings"
@@ -75,9 +76,16 @@ const sameInfo = (a: DesktopInfo | null, b: DesktopInfo) =>
   a.version === b.version &&
   a.shortcut_error === b.shortcut_error &&
   a.preferences_error === b.preferences_error &&
+  a.login_startup?.enabled === b.login_startup?.enabled &&
+  a.login_startup?.state === b.login_startup?.state &&
+  a.login_startup?.error === b.login_startup?.error &&
   a.notice === b.notice &&
+  a.platform === b.platform &&
+  a.permissions?.microphone === b.permissions?.microphone &&
+  a.permissions?.accessibility === b.permissions?.accessibility &&
   a.preferences.shortcut === b.preferences.shortcut &&
   a.preferences.autostart === b.preferences.autostart &&
+  a.preferences.output_mode === b.preferences.output_mode &&
   a.preferences.setup_complete === b.preferences.setup_complete;
 export function App() {
   const [store] = useState(() => new SettingsStore(api.settings, api.save));
@@ -142,7 +150,9 @@ export function App() {
       .catch(() => {})
       .then(async () => {
         const current = await api.info();
-        await api.preferences({
+        if (current.platform === "darwin" && patch.autostart !== undefined) {
+          await api.setLoginStartup(patch.autostart);
+        } else await api.preferences({
           ...current.preferences,
           ...patch,
           setup_complete: true,
@@ -442,6 +452,51 @@ export function App() {
           <div className="page-content">
             {tab === "settings" && (
               <>
+                {info?.platform === "darwin" && info.permissions && (
+                  <Permissions
+                    status={info.permissions}
+                    busy={busy}
+                    request={(permission) => void run(async () => {
+                      await api.requestPermission(permission);
+                      setInfo(await api.info());
+                    })}
+                    openSettings={(permission) => void run(() => api.openPermissionSettings(permission))}
+                  />
+                )}
+                {info?.platform === "darwin" && (
+                  <section className="settings-section" aria-label="Text insertion">
+                    <div className="section-heading"><h2>Text insertion</h2></div>
+                    <div className="settings-group">
+                      <div className="setting-row">
+                        <div className="setting-label">
+                          <label htmlFor="output-mode">Output method</label>
+                          <p className="quiet">Direct insertion keeps the clipboard unchanged. Some applications do not support it.</p>
+                        </div>
+                        <div className="setting-control">
+                          <Dropdown
+                            id="output-mode"
+                            label="Output method"
+                            value={info.preferences.output_mode || "direct"}
+                            disabled={busy}
+                            options={[
+                              { value: "direct", label: "Direct insertion" },
+                              { value: "paste", label: "Paste compatibility" },
+                            ]}
+                            onChange={(value) => void run(() => savePreferences({ output_mode: value as "direct" | "paste" }))}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    {info.preferences.output_mode === "paste" && (
+                      <>
+                        <p className="quiet section-note">Paste compatibility temporarily puts dictated text on the system clipboard and sends Command-V once. Other apps or clipboard managers may read or save it. Privacy markers are advisory. Voice Type restores the previous clipboard only while it still owns it. Clipboard read requests do not confirm insertion.</p>
+                        <p className={settings.profiles.some((profile) => profile.id === settings.active_profile && profile.streaming_mode === "live") ? "field-error section-note" : "quiet section-note"}>
+                          Paste compatibility cannot be used with live insertion. Choose direct insertion, process while recording, or insert at stop. Voice Type never changes your profile automatically.
+                        </p>
+                      </>
+                    )}
+                  </section>
+                )}
                 <Profiles
                   profiles={settings.profiles}
                   active={settings.active_profile}
@@ -470,7 +525,7 @@ export function App() {
                             className="switch"
                             type="checkbox"
                             role="switch"
-                            checked={info.preferences.autostart}
+                            checked={info.platform === "darwin" ? !!info.login_startup?.enabled : info.preferences.autostart}
                             disabled={busy}
                             onChange={(event) => {
                               const enabled = event.target.checked;
@@ -482,7 +537,9 @@ export function App() {
                         </span>
                       </label>
                     </div>
-                    {!info.tray_available && (
+                    {info.platform === "darwin" && info.login_startup?.state === "requires_approval" && <p className="quiet section-note">Allow Voice Type in System Settings → General → Login Items. Voice Type will not override your choice.</p>}
+                    {info.platform === "darwin" && info.login_startup?.error && <p className="field-error section-note">{info.login_startup.error}</p>}
+                    {info.platform !== "darwin" && !info.tray_available && (
                       <p className="quiet section-note">
                         Tray requires the AppIndicator extension.
                       </p>
@@ -599,6 +656,7 @@ export function App() {
               <section className="settings-section">
                 <div className="settings-group shortcut-settings">
                   <ShortcutPicker
+                    platform={info.platform}
                     name="Dictation"
                     value={info.preferences.shortcut}
                     onError={setError}
@@ -691,7 +749,7 @@ export function App() {
                 }
               />
             )}
-            {tab === "faq" && <FAQ />}
+            {tab === "faq" && <FAQ platform={info?.platform} shortcut={info?.preferences.shortcut} />}
           </div>
         )}
         <div

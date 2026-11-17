@@ -52,7 +52,7 @@ type runLogAttempt struct {
 	Error      string `json:"error,omitempty"`
 }
 
-// Submission is an IBus handoff, not confirmation of visible target text.
+// Submission is a backend handoff, not confirmation of visible target text.
 type dictationTiming struct {
 	streamTiming
 	CaptureRequested time.Time
@@ -144,14 +144,6 @@ func (l *runLog) diagnostic(event, outcome, message string) {
 	}
 }
 
-func runLogFilePath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ".voice-type-logs.jsonl"
-	}
-	return filepath.Join(home, ".voice-type-logs.jsonl")
-}
-
 func openRunLog(version string) *runLog {
 	return newRunLog(version)
 }
@@ -160,17 +152,34 @@ func newRunLog(version string) *runLog {
 	l := &runLog{version: version}
 
 	l.path = runLogFilePath()
+	if l.path == "" {
+		return l
+	}
+	if err := prepareStorageParent(l.path); err != nil {
+		logf("LOG", "persistent logging unavailable: %v", err)
+		return l
+	}
 	if err := os.MkdirAll(filepath.Dir(l.path), 0o700); err != nil {
 		logf("LOG", "persistent logging unavailable: %v", err)
 		return l
 	}
-	_ = os.Chmod(l.path, 0o600)
-	if info, err := os.Stat(l.path); err == nil && info.Size() >= runLogMaxBytes {
-		_ = os.Remove(l.path + ".1")
-		_ = os.Rename(l.path, l.path+".1")
+	if info, err := os.Lstat(l.path); err == nil {
+		if !info.Mode().IsRegular() {
+			logf("LOG", "persistent logging unavailable: log must be a real regular file")
+			return l
+		}
+		if info.Size() >= runLogMaxBytes {
+			_ = os.Remove(l.path + ".1")
+			_ = os.Rename(l.path, l.path+".1")
+		}
 	}
-	file, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	file, err := openPrivateFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY)
 	if err != nil {
+		logf("LOG", "persistent logging unavailable: %v", err)
+		return l
+	}
+	if err := file.Chmod(0600); err != nil {
+		file.Close()
 		logf("LOG", "persistent logging unavailable: %v", err)
 		return l
 	}
@@ -253,7 +262,7 @@ func (l *runLog) write(record runLogRecord) {
 		_ = l.file.Close()
 		_ = os.Remove(l.path + ".1")
 		_ = os.Rename(l.path, l.path+".1")
-		l.file, _ = os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		l.file, _ = openPrivateFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY)
 	}
 	if l.file != nil {
 		_, _ = l.file.Write(line)
@@ -444,7 +453,7 @@ func (l *runLog) writeFiltered(outcome string, w io.Writer) error {
 func (l *runLog) pageRevisionLocked() string {
 	revision := ""
 	for _, path := range []string{runLogFilePath() + ".1", runLogFilePath()} {
-		info, err := os.Stat(path)
+		info, err := os.Lstat(path)
 		if err != nil {
 			revision += "missing;"
 			continue
@@ -464,7 +473,7 @@ func reverseRecords(records []runLogRecord) {
 // every successfully decoded record.
 func scanLogRecords(visit func(runLogRecord) error) error {
 	for _, path := range []string{runLogFilePath() + ".1", runLogFilePath()} {
-		f, err := os.Open(path)
+		f, err := openPrivateFile(path, os.O_RDONLY)
 		if os.IsNotExist(err) {
 			continue
 		}

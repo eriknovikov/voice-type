@@ -53,6 +53,7 @@ type engine struct {
 	warningUntil      time.Time
 	warningVersion    uint64
 	recorder          audioRecorder
+	permissions       permissionAccess
 	stt               *sttClient
 	localModels       *LocalModelManager
 	runLog            *runLog
@@ -62,6 +63,8 @@ type engine struct {
 	// capTimer force-stops a session at the fixed duration cap.
 	capTimer           *time.Timer
 	shuttingDown       bool
+	suspended          bool
+	sessionInterrupted bool
 	sessionWG          sync.WaitGroup
 	sessionID          uint64
 	sessionCtx         context.Context
@@ -83,6 +86,7 @@ func newEngine(cfg Config, recorder audioRecorder, settings sttSettings) *engine
 	d := &engine{
 		cfg:             cfg,
 		recorder:        recorder,
+		permissions:     newPermissionAccess(),
 		stt:             newSTTClientWithModels(settings, models),
 		localModels:     models,
 		recoveryVersion: recoveryVersion,
@@ -112,10 +116,15 @@ func (d *engine) checkConfigRecovery() {
 // startSession moves idle -> recording. It reports a conflict if a session is
 // already in flight.
 func (d *engine) startSession() (operationErr error) {
+	permissionErr := d.permissionStatus().recordingError(true)
 	d.mu.Lock()
 	if d.shuttingDown {
 		d.mu.Unlock()
 		return errors.New("shutting down")
+	}
+	if d.suspended {
+		d.mu.Unlock()
+		return errors.New("recording is unavailable while the system is asleep")
 	}
 	if d.state != stateIdle {
 		state := d.state
@@ -125,6 +134,13 @@ func (d *engine) startSession() (operationErr error) {
 
 	d.lastAttemptFailed = false
 	d.warningUntil = time.Time{}
+	if permissionErr != nil {
+		d.lastAttemptFailed = true
+		d.configError = permissionErr.Error()
+		d.runLog.diagnostic("permissions.missing", "error", permissionErr.Error())
+		d.mu.Unlock()
+		return permissionErr
+	}
 	if err := d.reloadConfig(); err != nil {
 		d.lastAttemptFailed = true
 		d.runLog.complete(d.cfg.Provider, providerModel(d.cfg.Provider), "", "configuration_error", 0, 0, nil, err)
@@ -138,6 +154,7 @@ func (d *engine) startSession() (operationErr error) {
 	d.pendingStartupStop = time.Time{}
 	stt := d.stt
 	d.sessionID++
+	d.sessionInterrupted = false
 	sessionID := d.sessionID
 	ctx, cancel := context.WithCancel(context.Background())
 	d.sessionCtx = ctx
@@ -217,7 +234,7 @@ func (d *engine) startSession() (operationErr error) {
 			return err
 		}
 		if mode := stt.settings.StreamingMode; mode == streamingModeProcess || mode == streamingModeLive {
-			localStream, err = startLocalStream(ctx, localUse, mode, stt.settings.Vocabulary)
+			localStream, err = startLocalStream(ctx, localUse, mode, stt.settings.Vocabulary, stt.settings.InsertBackend)
 			if err != nil {
 				if ctx.Err() != nil {
 					return ctx.Err()
@@ -332,6 +349,10 @@ func (d *engine) reloadConfig() error {
 	if err != nil {
 		return err
 	}
+	backend, err := recordingOutputBackend(cfg)
+	if err != nil {
+		return err
+	}
 	settings, err := cfg.resolveSTT(workspace)
 	if err != nil {
 		return err
@@ -339,6 +360,7 @@ func (d *engine) reloadConfig() error {
 	if err := settings.validateCredentials(); err != nil {
 		return err
 	}
+	settings.InsertBackend = backend
 	d.cfg = cfg
 	d.stt = newSTTClientWithModels(settings, d.localModels)
 	return nil
@@ -432,10 +454,26 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 		d.sessionWG.Done()
 	}()
 
+	var result sttResult
 	samples, recordErr := d.recorder.Stop()
+	defer func() {
+		d.mu.Lock()
+		interrupted := d.sessionInterrupted
+		d.mu.Unlock()
+		if !interrupted || len(samples) == 0 {
+			return
+		}
+		retained := retainLocalResult(WavEncode(samples), result.Text)
+		message := "dictation stopped for system sleep; no output will resume automatically"
+		if retained != "" {
+			message += "; " + retained
+		}
+		operationErr = errors.New(message)
+		d.runLog.diagnostic("recording.interrupted", "error", "System sleep interrupted dictation; recovery was attempted without replay.")
+	}()
 	timings.CaptureStopped = time.Now()
 	if err := ctx.Err(); err != nil {
-		logf("AUDIO", "recording discarded during shutdown")
+		logf("AUDIO", "capture cancelled before transcription")
 		return nil
 	}
 	if cloud, ok := localStream.(*cloudStreamSession); ok {
@@ -514,7 +552,6 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 			Error:      safeRequestError(err),
 		})
 	}
-	var result sttResult
 	var err error
 	liveInserted := false
 	localRecoveryText := ""
@@ -642,21 +679,21 @@ func (d *engine) stopSessionMatching(sessionID uint64, durationCap bool) (operat
 	}
 
 	outputStart := time.Now()
-	if err := insertTextTimed(ctx, result.Text, &timings); err != nil {
+	if err := insertTextBackendTimed(ctx, result.Text, stt.settings.InsertBackend, &timings); err != nil {
 		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
 			logf("OUTPUT", "cancelled before insertion")
 			return nil
 		}
-		logf("OUTPUT", "IBus insertion failed: %v", err)
+		logf("OUTPUT", "text insertion failed: %v", err)
 		outcome = "insertion_error"
 		if stt.local != nil {
 			retained := retainLocalResult(wavBytes(), result.Text)
-			return fmt.Errorf("IBus insertion failed: %w; %s", err, retained)
+			return fmt.Errorf("text insertion failed: %w; %s", err, retained)
 		}
-		return fmt.Errorf("IBus insertion failed: %w", err)
+		return fmt.Errorf("text insertion failed: %w", err)
 	}
 
-	logf("OUTPUT", "submitted via IBus in %v", time.Since(outputStart).Round(time.Millisecond))
+	logf("OUTPUT", "text submitted in %v", time.Since(outputStart).Round(time.Millisecond))
 	return nil
 }
 
@@ -749,8 +786,14 @@ func (d *engine) Close() {
 }
 
 func (d *engine) StartMicrophoneTest(id string) error {
+	if err := d.permissionStatus().recordingError(false); err != nil {
+		return err
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.suspended {
+		return errors.New("microphone testing is unavailable while the system is asleep")
+	}
 	if d.state != stateIdle || d.shuttingDown {
 		return fmt.Errorf("cannot test microphone while %s", d.state)
 	}

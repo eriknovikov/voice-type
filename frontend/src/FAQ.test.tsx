@@ -46,4 +46,27 @@ describe("FAQ", () => {
     expect(openrouter.getAttribute("target")).toBe("_blank");
     expect(openrouter.getAttribute("rel")).toBe("noreferrer");
   });
+
+  it("shows Mac setup, output privacy, login and data help without Linux instructions", () => {
+    render(<FAQ platform="darwin" />);
+    expect(screen.getByText("Control+Option+Space")).toBeTruthy();
+    expect(screen.getByText(/Microphone and Accessibility access/)).toBeTruthy();
+    expect(screen.getByText(/No Screen Recording or Input Monitoring/)).toBeTruthy();
+    expect(screen.getByText(/macOS Keychain/)).toBeTruthy();
+    expect(screen.getByText(/despite advisory privacy markers/)).toBeTruthy();
+    expect(screen.getByText(/Paste compatibility cannot be used with live insertion/)).toBeTruthy();
+    expect(screen.getByText(/never overrides an OS disable/)).toBeTruthy();
+    expect(screen.getByText("~/Library/Application Support/Voice Type/")).toBeTruthy();
+    expect(screen.getByText(/This keeps your data/)).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/IBus|GNOME|Wayland|X11|AppIndicator/);
+  });
+
+  it("uses the saved shortcut with platform labels", () => {
+    const { rerender } = render(<FAQ platform="darwin" shortcut="Super+Shift+K" />);
+    expect(screen.getByText("Command+Shift+K")).toBeTruthy();
+    rerender(<FAQ platform="linux" shortcut="Ctrl+F8" />);
+    expect(screen.getByText("Ctrl+F8")).toBeTruthy();
+    expect(screen.getByText(/IBus is running/)).toBeTruthy();
+    expect(screen.queryByText(/Which macOS permissions/)).toBeNull();
+  });
 });

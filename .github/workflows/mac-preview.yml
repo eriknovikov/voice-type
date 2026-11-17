@@ -1,0 +1,71 @@
+name: Mac Preview
+
+on:
+  push:
+    branches: [feat/mac]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-preview-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    if: github.ref == 'refs/heads/feat/mac'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - id: version
+        run: echo "version=$(cat VERSION)-mac.preview.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
+
+  mac:
+    needs: version
+    uses: ./.github/workflows/macos.yml
+    with:
+      sign: true
+      version: ${{ needs.version.outputs.version }}
+    secrets: inherit
+
+  publish:
+    needs: [version, mac]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: voice-type-macos-*
+          merge-multiple: true
+          path: release
+      - name: Publish verified preview, never Latest
+        working-directory: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 4
+          for ARCH in arm64 amd64; do
+            NAME="voice-type_${VERSION}_darwin_${ARCH}.dmg"
+            test -f "$NAME"
+            test "$(wc -l < "$NAME.sha256")" -eq 1
+            grep -Fx "$(sha256sum "$NAME")" "$NAME.sha256"
+            sha256sum -c "$NAME.sha256"
+          done
+          sha256sum ./*.dmg | sed 's|  ./|  |' > checksums.txt
+          cat > "$RUNNER_TEMP/notes.txt" <<'NOTES'
+          macOS 13+ preview. Self-signed, NOT Apple-notarized. Installation and real microphone/Accessibility behavior still need device testing.
+
+          Download arm64 for Apple Silicon (M-series) or amd64 for Intel. Open the DMG and drag Voice Type into Applications. Launch it there. If macOS blocks it, use System Settings > Privacy & Security > Open Anyway for this app, then confirm. Do not disable Gatekeeper or install a root certificate. Managed Macs may prohibit opening it.
+
+          In General, allow Microphone and Accessibility. Choose a cloud provider/API key or download a local model. Test dictation into TextEdit with Control-Option-Space. This preview is separate from stable Linux releases. Updates are manual: quit, download the next preview and replace the app. Permissions may need approval again; retention is not yet verified.
+          NOTES
+          TAG="v$VERSION"
+          gh release create "$TAG" ./*.dmg checksums.txt --target "$GITHUB_SHA" \
+            --prerelease --latest=false --title "Mac Preview $VERSION (unnotarized)" --notes-file "$RUNNER_TEMP/notes.txt"

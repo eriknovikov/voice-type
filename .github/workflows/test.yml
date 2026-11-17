@@ -9,6 +9,9 @@ permissions:
   contents: read
 
 jobs:
+  mac:
+    uses: ./.github/workflows/macos.yml
+
   app:
     runs-on: ubuntu-24.04
     # Keep the transcribe engine CPU-only so packaged artifacts do not change

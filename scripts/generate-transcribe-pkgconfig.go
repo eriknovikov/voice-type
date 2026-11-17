@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -29,6 +31,10 @@ func main() {
 }
 
 func generate(args []string) error {
+	return generateForPlatform(args, runtime.GOOS)
+}
+
+func generateForPlatform(args []string, platform string) error {
 	if len(args) != 3 {
 		return errors.New("usage: generate-transcribe-pkgconfig PREFIX MANIFEST OUTDIR")
 	}
@@ -47,7 +53,7 @@ func generate(args []string) error {
 	if manifest.Shared {
 		return errors.New("Voice Type requires the static transcribe.cpp link posture")
 	}
-	if len(manifest.Frameworks) != 0 {
+	if len(manifest.Frameworks) != 0 && platform != "darwin" {
 		return errors.New("unexpected platform frameworks in the Linux link manifest")
 	}
 	libDir, err := relativeManifestPath(manifest.LibDir, "lib")
@@ -60,7 +66,7 @@ func generate(args []string) error {
 	}
 	libs := make([]string, 0, len(manifest.Libraries)+len(manifest.LibraryPaths)+len(manifest.SystemLibs)+len(manifest.LinkFlags))
 	for _, name := range manifest.Libraries {
-		if name == "" || strings.ContainsAny(name, " \t\r\n") {
+		if !linkName.MatchString(name) {
 			return fmt.Errorf("invalid library name in transcribe.cpp manifest: %q", name)
 		}
 		libs = append(libs, "-l"+name)
@@ -78,7 +84,16 @@ func generate(args []string) error {
 		}
 	}
 	for _, name := range manifest.SystemLibs {
+		if !linkName.MatchString(name) {
+			return fmt.Errorf("invalid system library name in transcribe.cpp manifest: %q", name)
+		}
 		libs = append(libs, "-l"+name)
+	}
+	for _, name := range manifest.Frameworks {
+		if !linkName.MatchString(name) {
+			return fmt.Errorf("invalid framework name in transcribe.cpp manifest: %q", name)
+		}
+		libs = append(libs, "-framework", name)
 	}
 	libs = append(libs, manifest.LinkFlags...)
 	if len(libs) == 0 {
@@ -104,6 +119,8 @@ func generate(args []string) error {
 	}, "\n")
 	return os.WriteFile(filepath.Join(outputDir, "voicetype-transcribe.pc"), []byte(contents), 0644)
 }
+
+var linkName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.+\-]*$`)
 
 func relativeManifestPath(value, fallback string) (string, error) {
 	if value == "" {

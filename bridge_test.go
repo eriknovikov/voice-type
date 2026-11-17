@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,9 @@ import (
 )
 
 func TestDesktopAutostartPreferences(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("tests Linux desktop-file autostart; must not change native login settings")
+	}
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
@@ -52,16 +56,15 @@ func TestDesktopAutostartPreferences(t *testing.T) {
 }
 
 func TestShortcutDefaultsAndMigration(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	isolatedPreferences(t)
 	prefs := readPreferences()
-	if prefs.Shortcut != "Ctrl+Space" {
+	if prefs.Shortcut != defaultPreferences(runtime.GOOS).Shortcut {
 		t.Fatal("incorrect defaults")
 	}
 	if err := os.MkdirAll(filepath.Dir(preferencesPath()), 0700); err != nil {
 		t.Fatal(err)
 	}
-	for _, test := range []struct{ old, want string }{{"Ctrl+Alt+Space", "Ctrl+Space"}, {"Ctrl+F8", "Ctrl+F8"}} {
+	for _, test := range []struct{ old, want string }{{"Ctrl+Alt+Space", defaultPreferences(runtime.GOOS).Shortcut}, {"Ctrl+F8", "Ctrl+F8"}} {
 		if err := os.WriteFile(preferencesPath(), []byte(`{"shortcut":"`+test.old+`","setup_complete":true}`), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -162,6 +165,9 @@ func TestPreferencesPreserveUnknownFields(t *testing.T) {
 }
 
 func TestPreferencesFailureRollsBackAutostart(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("tests Linux autostart rollback; must not change native login settings")
+	}
 	isolatedPreferences(t)
 	app := application.New(application.Options{Name: "Voice Type"})
 	old := Preferences{Shortcut: "Ctrl+Space", Autostart: true}
@@ -233,6 +239,9 @@ func TestTrayAvailabilityIsCachedAndInvalidatedOnShow(t *testing.T) {
 }
 
 func TestFreshPreferencesRegisterBackgroundStartup(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux login registration fixture; Mac registration must be explicit")
+	}
 	isolatedPreferences(t)
 	prefs, notice, err := loadPreferences()
 	if err != nil {

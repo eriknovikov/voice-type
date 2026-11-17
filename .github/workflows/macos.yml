@@ -1,0 +1,139 @@
+name: macOS
+
+on:
+  workflow_call:
+    inputs:
+      sign:
+        type: boolean
+        default: false
+      version:
+        type: string
+        default: ""
+    secrets:
+      MACOS_CERTIFICATE_P12_BASE64:
+        required: false
+      MACOS_CERTIFICATE_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: amd64
+    runs-on: ${{ matrix.runner }}
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+      VOICE_TYPE_VULKAN: "0"
+      BUILD_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Native tools
+        run: |
+          xcodebuild -version
+          brew install cmake pkgconf shellcheck
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Confirm native architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: test "$(go env GOARCH)" = "$EXPECTED_ARCH"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: build/transcribe
+          key: transcribe-${{ runner.os }}-${{ matrix.arch }}-xcode16.4-macos13-static-metal-by-arch-${{ hashFiles('scripts/build-transcribe.sh', 'scripts/generate-transcribe-pkgconfig.go', 'go.mod') }}
+      - name: Native tests and production bundle
+        run: make VERSION="${BUILD_VERSION:-$(cat VERSION)}" check build mac-verify
+      - name: Verify source stamp
+        run: |
+          INFO=$(go version -m 'build/Voice Type.app/Contents/MacOS/voice-type')
+          printf '%s\n' "$INFO" | grep -F "vcs.revision=$GITHUB_SHA"
+          printf '%s\n' "$INFO" | grep -F 'vcs.modified=false'
+      - name: Archive ad-hoc test bundle (not distributable)
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: ditto -c -k --keepParent 'build/Voice Type.app' "$RUNNER_TEMP/voice-type-unsigned-$ARCH.zip"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-unsigned-${{ matrix.arch }}
+          path: ${{ runner.temp }}/voice-type-unsigned-${{ matrix.arch }}.zip
+          if-no-files-found: error
+
+  signed:
+    needs: native
+    if: inputs.sign && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/mac') && github.event_name != 'pull_request'
+    environment: macos-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: amd64
+    runs-on: ${{ matrix.runner }}
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      BUILD_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: macos-unsigned-${{ matrix.arch }}
+          path: ${{ runner.temp }}/unsigned
+      - name: Locate temporary signing keychain
+        run: echo "MACOS_KEYCHAIN=$RUNNER_TEMP/voice-type-signing.keychain-db" >> "$GITHUB_ENV"
+      - name: Import temporary release credentials
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${CERTIFICATE:?Missing self-signed certificate}" "${CERTIFICATE_PASSWORD:?Missing certificate password}"
+          umask 077
+          P12="$RUNNER_TEMP/voice-type-signing.p12"
+          trap 'rm -f "$P12"' EXIT
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$P12"
+          PASSWORD=$(openssl rand -hex 32)
+          security create-keychain -p "$PASSWORD" "$MACOS_KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$MACOS_KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$MACOS_KEYCHAIN"
+          security import "$P12" -P "$CERTIFICATE_PASSWORD" -k "$MACOS_KEYCHAIN" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PASSWORD" "$MACOS_KEYCHAIN"
+          security add-trusted-cert -r trustRoot -p codeSign -k "$MACOS_KEYCHAIN" packaging/macos/signing-cert.pem
+          security find-identity -v -p codesigning "$MACOS_KEYCHAIN"
+      - name: Self-sign and verify unnotarized DMG
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          ditto -x -k "$RUNNER_TEMP/unsigned/voice-type-unsigned-$ARCH.zip" "$RUNNER_TEMP/signing"
+          python3 scripts/macos-release.py package --app "$RUNNER_TEMP/signing/Voice Type.app" --arch "$ARCH" --version "${BUILD_VERSION:-$(cat VERSION)}"
+      - name: Remove temporary credentials
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/voice-type-signing.p12"
+          if [ -n "${MACOS_KEYCHAIN:-}" ] && [ -f "$MACOS_KEYCHAIN" ]; then security delete-keychain "$MACOS_KEYCHAIN"; fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: voice-type-macos-${{ matrix.arch }}
+          path: |
+            build/macos-release/*.dmg
+            build/macos-release/*.sha256
+          if-no-files-found: error
