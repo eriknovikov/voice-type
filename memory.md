@@ -6,14 +6,18 @@
 - Work queue and definitions of done: [todos.md](todos.md).
 - Branch: `feat/mac`, created from clean `dev` at
   `37a00bad072c807dd3fd56f276f092127554c986`.
-- State: MAC-010 DONE. Mac implementation has Linux evidence only; native CI and
-  downloadable preview delivery are now authorized and in progress. VERSION is 6.4.0.
+- State: both native Mac check/build/mac-verify jobs PASS in run 44141118702.
+  Signing/public download delivery is in progress. VERSION remains 6.4.0.
 - Current policy: user rejected Apple fees and chose persistent self-signing.
   D10 now supersedes all historical Developer ID/notarization requirements below.
   The user approved end-to-end implementation, feat/mac commit/push, hosted CI and
   public preview downloads. No main merge, stable publication or VERSION bump.
-- Next: push Mach-O verification parser correction and retry native/signing CI.
-  Run 44138018299 passed both native check/build suites but failed mac-verify.
+- Next: push headless signing trust fix and retry CI. Run 44141118702 passed BOTH
+  native jobs, including minimum-OS/runtime-dependency/source-stamp checks, but
+  signing stalled in non-sudo security add-trusted-cert; cancelled at user's status
+  check. Use sudo -n with administrative trust on the disposable CI runner only,
+  plus 2/3/5-minute step timeouts. No user Mac root certificate install is required.
+  Need signature/DMG/download evidence next; no installed/hardware/notarization claim.
   Intel native Cgo compilation/vet now pass. Apple Silicon macos-15 could not
   acquire a runner twice, so use free macos-26 with Xcode 26.6 for arm64 instead;
   Intel keeps macos-15-intel/Xcode 16.4. Both still enforce a 13.0 deployment target.
@@ -225,6 +229,15 @@ publish unless I explicitly authorize it.
 
 ## Progress log
 
+- Run 44141118702: BOTH native jobs PASS, including native check/build/mac-verify,
+  version/arch/13.0/system-dependency checks, clean source stamp and bundle archives.
+  Signing import succeeded (1 identity imported), then trust setup hung for ~58m.
+  Cancelled run, inspected its logs and matched the documented headless trust
+  prompt problem (actions/runner-images#12116). Split trust from private-key import,
+  use noninteractive sudo only on ephemeral CI and bound all signing steps.
+  No release/DMG yet. actionlint PASS for the correction.
+- Current run: https://github.com/eriknovikov/voice-type/actions/runs/44141118702,
+  commit a6cb492. Watcher sh_1eaa0bf17001uwyfBRGvSDpRrj notifies on completion.
 - Run 44138018299: BOTH architectures passed native compilation/vet, full Go race
   suite, malgo null-backend race tests, 103 UI tests and production bundle assembly.
   Python: 17 tests OK, 3 correctly skipped Linux-only checks. Native mac-verify

@@ -121,6 +121,7 @@ jobs:
       - name: Locate temporary signing keychain
         run: echo "MACOS_KEYCHAIN=$RUNNER_TEMP/voice-type-signing.keychain-db" >> "$GITHUB_ENV"
       - name: Import temporary release credentials
+        timeout-minutes: 3
         env:
           CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -137,9 +138,14 @@ jobs:
           security unlock-keychain -p "$PASSWORD" "$MACOS_KEYCHAIN"
           security import "$P12" -P "$CERTIFICATE_PASSWORD" -k "$MACOS_KEYCHAIN" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PASSWORD" "$MACOS_KEYCHAIN"
-          security add-trusted-cert -r trustRoot -p codeSign -k "$MACOS_KEYCHAIN" packaging/macos/signing-cert.pem
+      - name: Trust signing certificate on this disposable runner only
+        timeout-minutes: 2
+        run: |
+          sudo -n security add-trusted-cert -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain packaging/macos/signing-cert.pem
           security find-identity -v -p codesigning "$MACOS_KEYCHAIN"
       - name: Self-sign and verify unnotarized DMG
+        timeout-minutes: 5
         env:
           ARCH: ${{ matrix.arch }}
         run: |
@@ -147,6 +153,7 @@ jobs:
           python3 scripts/macos-release.py package --app "$RUNNER_TEMP/signing/Voice Type.app" --arch "$ARCH" --version "${BUILD_VERSION:-$(cat VERSION)}"
       - name: Remove temporary credentials
         if: always()
+        timeout-minutes: 2
         run: |
           rm -f "$RUNNER_TEMP/voice-type-signing.p12"
           if [ -n "${MACOS_KEYCHAIN:-}" ] && [ -f "$MACOS_KEYCHAIN" ]; then security delete-keychain "$MACOS_KEYCHAIN"; fi

@@ -53,7 +53,7 @@ Findings and session handoff: [memory.md](memory.md).
 
 ## MAC-020: Native Mac build and development bundle
 
-- Status: BLOCKED
+- Status: DONE
 - Depends: MAC-010
 - Decisions: D02, D09, D10
 - Scope: Make build/dev recipes platform-aware; consume Apple link-manifest
@@ -75,10 +75,13 @@ Findings and session handoff: [memory.md](memory.md).
   (synthetic bundles and platform dispatch, not native compile/sign evidence).
   MAC-050 capture source is now present; native compilation awaits Mac access. User action:
   supply spare Mac OS/architecture and user-run or explicitly approved remote access.
+  Superseding native evidence: run 44141118702 PASS on arm64 macOS 26/Xcode 26.6
+  and amd64 macOS 15/Xcode 16.4: check/build/mac-verify, static backends, system-only
+  dependencies, 13.0 deployment target, bundle metadata/version and source stamp.
 
 ## MAC-030: Private paths, engine lock and dev isolation
 
-- Status: BLOCKED
+- Status: DONE
 - Depends: MAC-020
 - Decisions: D08
 - Scope: Add Mac Application Support/log paths; preserve Linux paths; complete
@@ -97,10 +100,12 @@ Findings and session handoff: [memory.md](memory.md).
   `go test -race ./...` PASS, including migration concurrency and secure Unix
   lock process/crash tests. Native Mac runtime/Keychain verification is still open;
   needs Mac access, not production credentials. No real Keychain test was run.
+  Native evidence: full path/migration/lock race suite PASS on both architectures
+  in run 44141118702. Real Keychain remains opt-in and untested, not a CI claim.
 
 ## MAC-040: Permissions and recording preflight
 
-- Status: BLOCKED
+- Status: DONE
 - Depends: MAC-020, MAC-030
 - Decisions: D04
 - Scope: Public Objective-C/Cgo permission bridge, microphone purpose string/audio
@@ -120,10 +125,12 @@ Findings and session handoff: [memory.md](memory.md).
   mocked native responses: no initial request, visible failure/retry, granted and
   revoked status, explicit Settings action, and no Mac panel on Linux.
   Objective-C compilation, real TCC prompts and native bundle flows need Mac access.
+  Native evidence: Objective-C compilation and unit/UI tests PASS on both
+  architectures in run 44141118702. Actual TCC prompts remain MAC-130.
 
 ## MAC-050: Core Audio recorder
 
-- Status: BLOCKED
+- Status: DONE
 - Depends: MAC-010, MAC-040
 - Decisions: D03
 - Scope: Add malgo v0.11.28 Core Audio backend while retaining shared buffering,
@@ -144,10 +151,12 @@ Findings and session handoff: [memory.md](memory.md).
   production. Darwin source selection includes the adapter and excludes Pulse.
   Core Audio compilation/execution, device loss and hardware remain unverified.
   Native completion requires Mac access and MAC-040; hardware acceptance is MAC-130.
+  Native evidence: Core Audio adapter compilation, recorder contracts and malgo
+  null-backend race tests PASS on both architectures in run 44141118702.
 
 ## MAC-060: Clipboard-free direct insertion
 
-- Status: BLOCKED
+- Status: DONE
 - Depends: MAC-010, MAC-040
 - Decisions: D05
 - Scope: Mac TextInserter using writable AX selected text, otherwise Unicode
@@ -173,10 +182,12 @@ Findings and session handoff: [memory.md](memory.md).
   Unicode/fallback/resource checks). Linux Cgo generation PASS; a Darwin probe
   cannot compile here (`gcc` rejects `-arch`). These are NOT Apple SDK/native app
   evidence. Mac build/runtime verification remains blocked on user-supplied access.
+  Native evidence: real Apple SDK adapter build and native/shared unit/race tests
+  PASS on both architectures in run 44141118702. Application acceptance is MAC-130.
 
 ## MAC-070: Explicit paste compatibility
 
-- Status: BLOCKED
+- Status: DONE
 - Depends: MAC-060
 - Decisions: D06
 - Scope: Mac desktop preference and serialized pasteboard transaction: snapshot
@@ -199,10 +210,12 @@ Findings and session handoff: [memory.md](memory.md).
   Public pasteboard APIs have no cross-process atomic compare-and-write; ownership
   checks reduce but cannot eliminate concurrent-copy races. Data-provider requests
   are advisory and may be cached, not proof the target consumed every read.
+  Native evidence: Objective-C adapter build and shared paste/unit/UI tests PASS
+  on both architectures in run 44141118702. Real clipboard checks remain MAC-130.
 
 ## MAC-080: Menu bar, shortcuts and safe lifecycle
 
-- Status: BLOCKED
+- Status: DONE
 - Depends: MAC-030, MAC-040
 - Decisions: D07
 - Scope: Accessory/menu-bar configuration, native menu clicks without focus theft,
@@ -223,10 +236,12 @@ Findings and session handoff: [memory.md](memory.md).
   of sleep/quit/login cases. Chromium mock login failure/retry and shortcut reset
   flow PASS. `make check` PASS (101 UI tests, Go vet/race and 6 script tests).
   Native menu/reopen/Command-Q/login/sleep execution remains blocked on Mac access.
+  Native evidence: lifecycle/preference unit/race tests and native production
+  builds PASS on both architectures in run 44141118702. Installed flows are MAC-130.
 
 ## MAC-090: Platform-aware frontend and help
 
-- Status: BLOCKED
+- Status: DONE
 - Depends: MAC-040, MAC-050, MAC-060, MAC-070, MAC-080
 - Decisions: D04-D07
 - Scope: Align Go DTOs and handwritten `frontend/src/api.ts`; render permission
@@ -243,10 +258,12 @@ Findings and session handoff: [memory.md](memory.md).
   copy-failure/retry flows PASS; own harness/tab/server removed. UI/bridge tests
   from MAC-040/070/080 remain passing. Native prerequisite tickets remain open;
   this is not native Mac UI or installed-app acceptance evidence.
+  Native evidence: prerequisite native suites and all 103 frontend tests PASS
+  on both architectures in run 44141118702. Installed Mac UI remains MAC-130.
 
 ## MAC-100: Mac diagnostics, updates and uninstall
 
-- Status: BLOCKED
+- Status: DONE
 - Depends: MAC-030, MAC-080, MAC-090
 - Decisions: D08, D11
 - Scope: Read-only Mac doctor/report for OS/arch, bundle, permissions, audio devices,
@@ -267,6 +284,8 @@ Findings and session handoff: [memory.md](memory.md).
   Linux arm64 focused race tests, full make check/build and native Linux smoke PASS.
   Both Darwin architectures select the correct sources and omit install.sh embedding
   (go list only). Native Objective-C/doctor/update execution still requires Mac access.
+  Native evidence: doctor/update compilation and full native/shared test suites
+  PASS on both architectures in run 44141118702. Real installed flow is MAC-130.
 
 ## MAC-110: Final signed DMG packaging
 
@@ -305,6 +324,9 @@ Findings and session handoff: [memory.md](memory.md).
   Run 44138018299: BOTH native check/build suites PASS (Go race, malgo, 103 UI
   tests, production bundles). mac-verify parser confuses linker-tool version with
   minimum OS; realistic fixture reproduces it. Fix keeps strict 13.0 validation.
+  Run 44141118702: native bundle gates PASS on both architectures. Signing imports
+  identity, then hangs in user-domain trust setup. Cancelled and corrected to
+  noninteractive administrative trust on disposable runners, with bounded steps.
 
 ## MAC-120: Native CI and release gates
 
