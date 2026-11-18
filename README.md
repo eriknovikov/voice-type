@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="icon.png" alt="Voice Type logo" width="128" height="128">
+</p>
+
 # Voice Type
 
 System-wide speech to text app. Press a hotkey, speak, press it again, then what you said lands instantly where your cursor is. Free, fast, accurate, private, and cool.
